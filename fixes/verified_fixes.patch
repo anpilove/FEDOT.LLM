@@ -1,0 +1,45 @@
+diff --git a/fedot/core/operations/evaluation/operation_implementations/data_operations/sklearn_filters.py b/fedot/core/operations/evaluation/operation_implementations/data_operations/sklearn_filters.py
+index 67fa0f8..2eaad1c 100644
+--- a/fedot/core/operations/evaluation/operation_implementations/data_operations/sklearn_filters.py
++++ b/fedot/core/operations/evaluation/operation_implementations/data_operations/sklearn_filters.py
+@@ -71,6 +71,10 @@ class RegRANSACImplementation(FilterImplementation):
+         super().__init__(params)
+         self.max_iter = 10
+         self.min_inliers_ratio = 0.4
++        # Threshold the retry loop settled on. `self.params` keeps what the
++        # caller declared, because it is part of `PipelineNode.descriptive_id`
++        # and therefore of the operations-cache key.
++        self.effective_residual_threshold = None
+ 
+     def fit(self, input_data: InputData):
+         iter_ = 0
+@@ -80,7 +84,7 @@ class RegRANSACImplementation(FilterImplementation):
+         while iter_ < self.max_iter:
+             try:
+                 self.operation.inlier_mask_ = None
+-                self.params.update(residual_threshold=residual_threshold)
++                self.effective_residual_threshold = residual_threshold
+                 self.operation.residual_threshold = residual_threshold
+ 
+                 self.operation.fit(input_data.features, input_data.target.squeeze())
+diff --git a/fedot/core/operations/evaluation/operation_implementations/models/ts_implementations/poly.py b/fedot/core/operations/evaluation/operation_implementations/models/ts_implementations/poly.py
+index dde99c8..2e2c8a4 100644
+--- a/fedot/core/operations/evaluation/operation_implementations/models/ts_implementations/poly.py
++++ b/fedot/core/operations/evaluation/operation_implementations/models/ts_implementations/poly.py
+@@ -25,11 +25,14 @@ class PolyfitImplementation(ModelImplementation):
+             # default value
+             self.log.debug(f"Change invalid parameter degree ({degree}) on default value (3)")
+             degree = self.default_degree
+-            self.params.update(degree=degree)
++        # The corrected degree is what this operation works with; `self.params`
++        # keeps what the caller declared, because it is part of
++        # `PipelineNode.descriptive_id` and therefore of the operations-cache key.
++        self._effective_degree = degree
+ 
+     @property
+     def degree(self):
+-        return int(self.params.get('degree'))
++        return int(self._effective_degree)
+ 
+     def fit(self, input_data):
+         f_x = input_data.idx

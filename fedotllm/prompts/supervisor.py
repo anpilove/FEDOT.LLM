@@ -1,5 +1,23 @@
-def choose_next_prompt() -> str:
-    return """
+def choose_next_prompt(has_evolve: bool = False) -> str:
+    evolve_block = (
+        """
+Choose 'evolve' when:
+- The user asks to evolve / improve / patch / actualize the aimclub/FEDOT library itself
+- Background repo-level code evolution of FEDOT (not a user DS-task AutoML run)
+- Requests to find a small safe fix in FEDOT source and validate with pytest
+"""
+        if has_evolve
+        else ""
+    )
+    allowed = (
+        "automl, researcher, evolve or finish" if has_evolve else "automl, researcher or finish"
+    )
+    regex = (
+        "^(automl|researcher|evolve|finish)$"
+        if has_evolve
+        else "^(automl|researcher|finish)$"
+    )
+    return f"""
 I want you to act as a conversation flow supervisor analyzing dialogues between users and AI agents. Your task is to evaluate each conversation turn and determine the next appropriate action by following these rules:
 
 Choose 'automl' when:
@@ -15,15 +33,16 @@ Choose 'researcher' when:
 - The user needs clarification on Fedot's architecture or components
 - Technical details about Fedot's functionality are requested
 
+{evolve_block}
 Choose 'finish' when:
 - The user's request has been fully addressed
 
-You should output only the next action without explanation or additional commentary. The possible outputs are strictly limited to: 'automl', 'researcher', or 'finish'.
+You should output only the next action without explanation or additional commentary. The possible outputs are strictly limited to: {allowed}.
 
 Who should act next?
-The output must be a one of the following: automl, researcher or finish
+The output must be a one of the following: {allowed}
 =====
 Important:
 1. Return only valid value. No extra explanations, text, or comments.
-2. Ensure that the output is parsable by a regex pattern: ^(automl|researcher|finish)$
+2. Ensure that the output is parsable by a regex pattern: {regex}
 """

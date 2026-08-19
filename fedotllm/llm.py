@@ -1,11 +1,14 @@
 import os
+import queue
+import threading
+from numbers import Real
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import litellm
 import tiktoken
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from pydantic import BaseModel, ValidationError
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from fedotllm import prompts
 from fedotllm.configs.schema import EmbeddingsConfig, LLMConfig
@@ -13,6 +16,8 @@ from fedotllm.log import logger
 from fedotllm.utils.parsers import parse_json
 
 T = TypeVar("T", bound=BaseModel)
+LLM_TIMEOUT_SECONDS = float(os.getenv("FEDOTLLM_LLM_TIMEOUT", "120"))
+LLM_RETRY_ATTEMPTS = int(os.getenv("FEDOTLLM_LLM_RETRY_ATTEMPTS", "2"))
 
 litellm._logging._disable_debugging()
 
@@ -24,9 +29,42 @@ if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
     litellm.failure_callback = ["langfuse"]
 
 
+class LLMRequestTimeout(TimeoutError):
+    """A provider exceeded the total wall-clock budget for one request."""
+
+
+def completion_with_timeout(messages: list[dict[str, Any]], params: dict[str, Any]):
+    """Run LiteLLM in a daemon thread so streaming heartbeats cannot hang the agent."""
+    timeout = float(params.get("timeout", LLM_TIMEOUT_SECONDS))
+    result: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def call() -> None:
+        try:
+            result.put(("response", litellm.completion(messages=messages, **params)))
+        except BaseException as exc:
+            result.put(("error", exc))
+
+    worker = threading.Thread(target=call, name="fedotllm-completion", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise LLMRequestTimeout(f"LLM request exceeded {timeout:g}s wall-clock timeout")
+    kind, value = result.get_nowait()
+    if kind == "error":
+        raise value
+    return value
+
+
 class AIInference:
     def __init__(self, config: LLMConfig, session_id: Optional[str] = None):
         self.config = config
+        self.usage = {
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "cost_usd": 0.0,
+        }
 
         if not self.config.api_key:
             raise ValueError(
@@ -39,8 +77,11 @@ class AIInference:
             "base_url": self.config.base_url,
             "extra_headers": self.config.extra_headers,
             "metadata": {"session_id": session_id},
+            "timeout": LLM_TIMEOUT_SECONDS,
             **self.config.completion_params,
         }
+        if "FEDOTLLM_LLM_TIMEOUT" in os.environ:
+            self.completion_params["timeout"] = LLM_TIMEOUT_SECONDS
 
         if config.caching.enabled:
             litellm.cache = Cache(
@@ -48,8 +89,9 @@ class AIInference:
             )
 
     @retry(
-        stop=stop_after_attempt(5),
+        stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_not_exception_type(LLMRequestTimeout),
         reraise=True,
     )
     def create(self, messages: str, response_model: Type[T]) -> T:
@@ -65,8 +107,9 @@ class AIInference:
             return response_model.model_validate(json_obj)
 
     @retry(
-        stop=stop_after_attempt(5),
+        stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
         wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_not_exception_type(LLMRequestTimeout),
         reraise=True,
     )
     def query(self, messages: str | List[Dict[str, Any]]) -> str | None:
@@ -76,10 +119,33 @@ class AIInference:
             else messages
         )
         logger.debug("Sending messages to LLM: %s", messages)
-        response = litellm.completion(
-            messages=messages,
-            **self.completion_params,
+        response = completion_with_timeout(messages, self.completion_params)
+        usage = getattr(response, "usage", None)
+
+        def number(source: Any, key: str) -> float:
+            value = (
+                source.get(key, 0)
+                if isinstance(source, dict)
+                else getattr(source, key, 0)
+                if source is not None
+                else 0
+            )
+            return float(value) if isinstance(value, Real) else 0.0
+
+        details = (
+            usage.get("prompt_tokens_details")
+            if isinstance(usage, dict)
+            else getattr(usage, "prompt_tokens_details", None)
+            if usage is not None
+            else None
         )
+        hidden = getattr(response, "_hidden_params", None)
+        cost = number(usage, "cost") or number(hidden, "response_cost")
+        self.usage["requests"] += 1
+        self.usage["prompt_tokens"] += int(number(usage, "prompt_tokens"))
+        self.usage["completion_tokens"] += int(number(usage, "completion_tokens"))
+        self.usage["cached_tokens"] += int(number(details, "cached_tokens"))
+        self.usage["cost_usd"] += cost
         logger.debug(
             "Received response from LLM: %s", response.choices[0].message.content
         )

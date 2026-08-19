@@ -1,3 +1,5 @@
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -5,7 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 from tenacity import wait_none
 
 from fedotllm.configs.schema import LLMConfig
-from fedotllm.llm import AIInference
+from fedotllm.llm import AIInference, LLMRequestTimeout
 
 
 class UserModel(BaseModel):
@@ -40,6 +42,48 @@ def test_query(mock_litellm, llm_config):
     inference = AIInference(llm_config)
     response = inference.query("Say hello")
     assert response == "Hello, world!"
+    assert inference.completion_params["timeout"] > 0
+
+
+@patch("fedotllm.llm.litellm")
+def test_query_accumulates_provider_usage(mock_litellm, llm_config):
+    mock_litellm.completion.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+        usage={
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "prompt_tokens_details": {"cached_tokens": 80},
+            "cost": 0.0042,
+        },
+        _hidden_params={},
+    )
+    inference = AIInference(llm_config)
+
+    inference.query("first")
+    inference.query("second")
+
+    assert inference.usage == {
+        "requests": 2,
+        "prompt_tokens": 240,
+        "completion_tokens": 60,
+        "cached_tokens": 160,
+        "cost_usd": pytest.approx(0.0084),
+    }
+
+
+@patch("fedotllm.llm.litellm")
+def test_query_has_a_wall_clock_timeout(mock_litellm, llm_config):
+    llm_config.completion_params["timeout"] = 0.01
+
+    def hangs(**_kwargs):
+        time.sleep(0.1)
+
+    mock_litellm.completion.side_effect = hangs
+    inference = AIInference(llm_config)
+
+    with pytest.raises(LLMRequestTimeout, match="wall-clock"):
+        inference.query("never finishes")
+    assert mock_litellm.completion.call_count == 1
 
 
 def test_create_structured_object(llm_config):

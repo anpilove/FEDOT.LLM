@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables.schema import StreamEvent
 
 from fedotllm.agents.automl import AutoMLAgent
+from fedotllm.agents.evolve import EvolveAgent
 from fedotllm.agents.researcher.researcher import ResearcherAgent
 from fedotllm.agents.supervisor import SupervisorAgent
 from fedotllm.agents.translator import TranslatorAgent
@@ -76,11 +77,15 @@ class FedotAI:
             config=self.config, dataset_path=self.task_path, workspace=self.workspace
         ).create_graph()
         researcher_agent = ResearcherAgent(config=self.config).create_graph()
+        evolve_agent = EvolveAgent(
+            config=self.config, workspace=str(self.workspace)
+        ).create_graph()
 
         entry_point = SupervisorAgent(
             config=self.config,
             automl_agent=automl_agent,
             researcher_agent=researcher_agent,
+            evolve_agent=evolve_agent,
         ).create_graph()
 
         raw_response = await entry_point.ainvoke(
@@ -177,10 +182,14 @@ class FedotAI:
             config=self.config, dataset_path=self.task_path, workspace=self.workspace
         ).create_graph()
         researcher_agent = ResearcherAgent(config=self.config).create_graph()
+        evolve_agent = EvolveAgent(
+            config=self.config, workspace=str(self.workspace)
+        ).create_graph()
         entry_point = SupervisorAgent(
             config=self.config,
             automl_agent=automl_agent,
             researcher_agent=researcher_agent,
+            evolve_agent=evolve_agent,
         ).create_graph()
 
         translator_handler = TranslatorHandler(translator_agent)
