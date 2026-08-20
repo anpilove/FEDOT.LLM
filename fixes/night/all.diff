@@ -1,0 +1,69 @@
+diff --git a/fedot/api/api_utils/params.py b/fedot/api/api_utils/params.py
+index 5107963..f47acbe 100644
+--- a/fedot/api/api_utils/params.py
++++ b/fedot/api/api_utils/params.py
+@@ -92,10 +92,11 @@ class ApiParams(UserDict):
+                      'classification': Task(TaskTypesEnum.classification, task_params=task_params),
+                      'ts_forecasting': Task(TaskTypesEnum.ts_forecasting, task_params=task_params)
+                      }
+-        try:
+-            return task_dict[problem]
+-        except ValueError:
+-            ValueError('Wrong type name of the given task')
++        if problem not in task_dict:
++            available_problems = ', '.join(task_dict.keys())
++            raise ValueError(f'Wrong type name of the given task: {problem!r}. '
++                             f'Expected one of: {available_problems}.')
++        return task_dict[problem]
+ 
+     def _check_timeout_vs_generations(self):
+         num_of_generations = self.get('num_of_generations')
+diff --git a/fedot/api/main.py b/fedot/api/main.py
+index f9a998f..f115561 100644
+--- a/fedot/api/main.py
++++ b/fedot/api/main.py
+@@ -447,6 +447,9 @@ class Fedot:
+         if self.current_pipeline is None:
+             raise ValueError(NOT_FITTED_ERR_MSG)
+ 
++        if self.prediction is None:
++            raise ValueError('Prediction is not available. Call predict() before get_metrics().')
++
+         if target is not None:
+             if self.test_data is None:
+                 self.test_data = InputData(idx=np.arange(len(self.prediction.predict)),
+diff --git a/fedot/core/data/supplementary_data.py b/fedot/core/data/supplementary_data.py
+index 77943a2..eef6156 100644
+--- a/fedot/core/data/supplementary_data.py
++++ b/fedot/core/data/supplementary_data.py
+@@ -44,7 +44,9 @@ class SupplementaryData:
+         return comp_list
+ 
+     @property
+-    def flow_mask(self) -> list:
++    def flow_mask(self) -> Optional[list]:
++        if self.features_mask is None:
++            return None
+         return self.features_mask.get('flow_lens')
+ 
+     def define_parents(self, unique_features_masks: np.array, task: TaskTypesEnum):
+diff --git a/fedot/core/pipelines/pipeline.py b/fedot/core/pipelines/pipeline.py
+index 9612252..6ae1298 100644
+--- a/fedot/core/pipelines/pipeline.py
++++ b/fedot/core/pipelines/pipeline.py
+@@ -113,9 +113,13 @@ class Pipeline(GraphDelegate, Serializable):
+             in case of the time controlled call
+         """
+ 
++        root_node = self.root_node
++        if root_node is None:
++            raise ValueError(f'{ERROR_PREFIX} Pipeline must contain at least one root node to be fitted')
++
+         with Timer() as t:
+-            computation_time_update = not self.root_node.fitted_operation or self.computation_time is None
+-            train_predicted = self.root_node.fit(
++            computation_time_update = not root_node.fitted_operation or self.computation_time is None
++            train_predicted = root_node.fit(
+                 input_data=input_data, predictions_cache=predictions_cache, fold_id=fold_id)
+             if computation_time_update:
+                 self.computation_time = round(t.minutes_from_start, 3)

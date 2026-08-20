@@ -1,0 +1,116 @@
+[
+  {
+    "file": "fedot/api/main.py",
+    "line": 452,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "live | `get_metrics` accesses `self.prediction.predict` without checking if `self.prediction` is None, causing AttributeError when called before `predict`.",
+    "passes": [
+      0
+    ],
+    "agreed": false,
+    "status": "confirmed",
+    "expect": "AttributeError",
+    "got": "AttributeError",
+    "script": "from fedot.api.main import Fedot\n\nmodel = Fedot(problem='classification', timeout=1, seed=42)\nmodel.fit(features=train_data.features, target=train_data.target)\nmodel.get_metrics(target=train_data.target)\n",
+    "detail": "xgboost - {'n_jobs': 10, 'verbosity': 0, 'booster': 'gbtree', 'tree_method': 'auto', 'enable_categorical': True, 'use_eval_set': True, 'early_stopping_rounds': 30}",
+    "route": "public interface"
+  },
+  {
+    "file": "fedot/core/data/multi_modal.py",
+    "line": 200,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "live | If `index_col` is `None` (default), line 201 computes `{index_col} = {None}`, which can never match any column name, so `set(df.columns) - {None}` is just `set(df.columns)`. More critically, if `index_col` is a string, it might still be presen",
+    "passes": [
+      1
+    ],
+    "agreed": false,
+    "status": "confirmed",
+    "expect": "ValueError",
+    "got": "ValueError",
+    "script": "import tempfile, os\nfrom fedot.core.data.multi_modal import MultiModalData\n\ncsv_content = \"date,val1,val2\\n2021-01-01,1,2\\n2021-01-02,3,4\"\ntmp = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)\ntmp.write(csv_content)\ntmp.close()\nMultiModalData.from_csv_time_series(tmp.name, index_col=0)\nos.unlink(tmp.name)\n",
+    "detail": "ValueError: 'usecols' must either be list-like of all strings, all unicode, all integers or a callable.",
+    "route": "public interface"
+  },
+  {
+    "file": "fedot/core/data/supplementary_data.py",
+    "line": 48,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "live | AttributeError when `features_mask` is None, because `.get()` is called on None",
+    "passes": [
+      0
+    ],
+    "agreed": false,
+    "status": "confirmed",
+    "expect": "AttributeError",
+    "got": "AttributeError",
+    "script": "_ = train_data.supplementary_data.flow_mask\n",
+    "detail": "AttributeError: 'NoneType' object has no attribute 'get'",
+    "route": "public interface (rewritten)"
+  },
+  {
+    "file": "fedot/core/pipelines/pipeline.py",
+    "line": 117,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "live | `self.root_node` can be `None` for empty pipeline; accessing `.fitted_operation` raises `AttributeError` if `_fit` is called on an empty pipeline.",
+    "passes": [
+      1
+    ],
+    "agreed": false,
+    "status": "confirmed",
+    "expect": "AttributeError",
+    "got": "AttributeError",
+    "script": "from fedot.core.pipelines.pipeline import Pipeline\np = Pipeline()\np.fit(train_data)\n",
+    "detail": "2026-08-20 02:19:26,771 - TableTypesCorrector - Preprocessing was unable to define the categorical columns",
+    "route": "public interface"
+  },
+  {
+    "file": "fedot/api/api_utils/params.py",
+    "line": 95,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "except ValueError never triggers because dict access raises KeyError; wrong exception type and missing raise cause uninformative error for invalid problem.",
+    "status": "confirmed",
+    "expect": "KeyError",
+    "got": "KeyError",
+    "script": "from fedot import Fedot\n\nmodel = Fedot(problem='invalid_problem')\n",
+    "detail": "KeyError: 'invalid_problem'",
+    "route": "public interface (rewritten)"
+  },
+  {
+    "file": "fedot/api/main.py",
+    "line": 360,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "live | forecast() accesses self.train_data.task without checking if self.train_data is None; after load() train_data is None, causing AttributeError",
+    "status": "confirmed",
+    "expect": "AttributeError",
+    "got": "AttributeError",
+    "script": "import tempfile\nfrom fedot.api.main import Fedot\n\n# Fit a simple time‑series pipeline and save it\nmodel = Fedot(problem='ts_forecasting', timeout=1, logging_level=40)\nmodel.fit(features=ts_data, target=ts_data, predefined_model='ar')\nwith tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:\n    path = f.name\n    model.current_pipeline.save(path)\n\n# Load the saved pipeline into a new instance (train_data remains None)\nmodel2 = Fedot(problem='ts_forecasting', logging_level=40)\nmodel2.load(path)\nmodel2.forecast()  # self.train_data is None -> AttributeError on .task\n",
+    "detail": "ar - {'lag_1': 7, 'lag_2': 12}",
+    "route": "public interface"
+  },
+  {
+    "file": "fedot/api/main.py",
+    "line": 397,
+    "rule": "EXTRA",
+    "message": "found by reading, not by the linter",
+    "verdict": "extra",
+    "why": "live | plot_pareto() accesses self.history.archive_history[-1] without checking if self.history is None or archive_history empty; after load() history is None, causing AttributeError",
+    "status": "confirmed",
+    "expect": "AttributeError",
+    "got": "AttributeError",
+    "script": "from fedot.api.main import Fedot\nmodel = Fedot(problem='classification')\nmodel.plot_pareto()\n",
+    "detail": "AttributeError: 'NoneType' object has no attribute 'archive_history'",
+    "route": "public interface"
+  }
+]
