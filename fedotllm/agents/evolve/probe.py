@@ -203,7 +203,20 @@ def run_probe_cached(repo: Path, python: str) -> list[Finding]:
     entries = blob.setdefault("entries", {})
     if state in entries:
         logger.info("probe: reusing cached result for %s", state)
-        return [Finding(**f) for f in entries[state]]
+        payload = entries[state]
+        # A cache hit used to return here without touching the baseline slot,
+        # so a baseline recorded for a different checkout stayed in place and
+        # the acceptance gate reported "no pristine baseline" on every single
+        # run. Measured: seven repair rounds rejected in a row, none of them
+        # for anything wrong with the patch.
+        if state.endswith(":clean") and (blob.get("baseline") or {}).get("head") != state.split(":")[0]:
+            blob["baseline"] = {"head": state.split(":")[0], "findings": payload}
+            try:
+                _cache_path().write_text(json.dumps(blob), encoding="utf-8")
+            except OSError as exc:
+                logger.warning("probe: could not adopt baseline (%s)", exc)
+            logger.info("probe: baseline adopted for %s", state.split(":")[0])
+        return [Finding(**f) for f in payload]
 
     findings = run_probe(repo, python)
     payload = [asdict(f) for f in findings]

@@ -13,12 +13,14 @@ import json
 import os
 import re
 import subprocess
+from functools import lru_cache
 import sys
 import textwrap
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from fedotllm.agents.evolve.fixtures import as_pytest
 from fedotllm.llm import AIInference
 from fedotllm.log import logger
 
@@ -69,6 +71,38 @@ TUNING_GATE = os.environ.get("FEDOTLLM_EVOLVE_TUNING_GATE", "1") not in {"0", "f
 # invariant violation measured on the running library), or if it demonstrably
 # removed a runtime defect the agent never saw. Everything else abstains.
 VALUE_GATE = os.environ.get("FEDOTLLM_EVOLVE_VALUE_GATE", "1") not in {"0", "false", "no"}
+# Lint-derived targets, off by default. They were the first grounding mechanism,
+# back when nothing else could tell the agent where to look, and they solved the
+# problem of the day: without them the scout picked the same file 30 runs out of
+# 30. The runtime scan now does that job strictly better, and the measurement is
+# not close — 34 successful patches from runtime evidence, 32 of them class 1,
+# against 10 from lint evidence, 6 of which are class 3.
+#
+# Worse, the class they can prove is the one measured to be dormant: of 40
+# `RUF012` findings in FEDOT, 39 are never mutated, and the project has no commit
+# about that class in six years. Meanwhile the lint classes that would matter —
+# `S113` (a request that hangs forever), `S608` (SQL by concatenation), `B904`
+# (a swallowed exception chain), 37 findings in total — cannot be turned into a
+# failing test by introspection at all, so they never become targets.
+#
+# So the branch as it stands proves the useless half and cannot reach the useful
+# half. Set FEDOTLLM_EVOLVE_TEMPLATES=1 to bring it back; making it worth having
+# needs a triage step (is this finding live or dormant?), not more rules.
+TEMPLATES_DEFAULT = "0"
+# Triage: let the agent take a lint finding that nothing has proved yet, on the
+# condition that it proves it itself. The abstention gate exists to stop invented
+# work, but it also forbade the one thing only a model can do here — look at a
+# warning and judge whether it is live or dormant. I checked those 40 `RUF012`
+# findings by hand to learn that 39 are dormant; that is exactly the judgement
+# call worth delegating.
+#
+# Nothing is taken on trust: the reproduce gate already demands a test that fails
+# on the untouched tree, so a claim of "this one is live" has to be demonstrated
+# before any patch is considered. Measured risk: on `gpt-4o-mini` this path
+# produced 138 tests that did not fail, which is why it was closed. It is worth
+# reopening because the model that failed at it is the same one that scored 0/12
+# at repair while `gpt-5.4` scores 4/5.
+TRIAGE_LINT = os.environ.get("FEDOTLLM_EVOLVE_TRIAGE", "0") not in {"0", "false", "no"}
 # While a defect measured at runtime is available, restrict the scout to those
 # files. Set to 0 to let lint-template defects compete on equal terms.
 INVARIANTS_FIRST = os.environ.get("FEDOTLLM_EVOLVE_INVARIANTS_FIRST", "1") not in {"0", "false", "no"}
@@ -91,7 +125,19 @@ MAX_HOTSPOTS = int(os.environ.get("FEDOTLLM_EVOLVE_MAX_HOTSPOTS", "40"))
 # Static-analysis grounding: real, located findings instead of free-form guessing.
 MAX_LINT_FINDINGS = int(os.environ.get("FEDOTLLM_EVOLVE_MAX_LINT", "40"))
 # Rules that map to genuine correctness/robustness smells (not formatting noise).
-LINT_RULES = os.environ.get("FEDOTLLM_EVOLVE_LINT_RULES", "B,SIM,RET,C4,F")
+# Only rules whose warning can have a consequence at runtime. Measured on this
+# repository: ruff reports 572 findings under the broad selection, and 481 of
+# them are `RET*`/`SIM*`/`C4*` — an extra variable before a `return`, `dict()`
+# instead of `{}`. Those cannot bite by the definition of the rule, and feeding
+# them to the agent is paying a model to reformat someone else's library.
+#
+# The old default was "B,SIM,RET,C4,F", which had the opposite problem too: it
+# excluded `RUF` and `S`, so the agent never once saw `RUF012`, `S113` (a request
+# that can hang forever) or `S608` (SQL by concatenation) — the classes actually
+# worth triaging.
+LINT_RULES = os.environ.get(
+    "FEDOTLLM_EVOLVE_LINT_RULES",
+    "B006,B007,B008,B020,B904,B905,F821,F841,S113,S608,RUF012")
 LINT_CMD = (
     os.environ.get("FEDOTLLM_EVOLVE_LINT_CMD", "").split()
     or None
@@ -437,11 +483,139 @@ def exhausted_files(journal: list[dict[str, Any]] | None) -> set[str]:
     return fixed | {f for f, n in failures.items() if n >= MAX_FAILED_ATTEMPTS}
 
 
+@lru_cache(maxsize=4)
+def _all_lint_findings(repo: str) -> tuple[str, ...]:
+    """Ruff output for the whole tree, once per process rather than once per call."""
+    return tuple(scan_lint_findings(Path(repo), limit=400))
+
+
+# Rules whose warning can only matter if something actually writes to the
+# flagged object. Everything else in ruff's output for this repository is shape,
+# not behaviour: of 572 findings, 481 are `RET*`/`SIM*`/`C4*` and cannot have a
+# consequence by the definition of the rule.
+MUTATION_RULES = ("RUF012",)
+
+
+def _attribute_at(repo: Path, file_rel: str, line: int) -> tuple[str, str] | None:
+    """(class, attribute) named by a mutable-class-attribute warning."""
+    path = repo / file_rel
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, SyntaxError):
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or not getattr(node, "end_lineno", None):
+            continue
+        if not (node.lineno <= line <= node.end_lineno):
+            continue
+        for sub in node.body:
+            if getattr(sub, "lineno", None) != line:
+                continue
+            targets = (sub.targets if isinstance(sub, ast.Assign)
+                       else [sub.target] if isinstance(sub, ast.AnnAssign) else [])
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    return node.name, t.id
+    return None
+
+
+def is_dormant(repo: Path, attribute: str) -> bool:
+    """True when nothing in the repository ever writes to `attribute`.
+
+    A mutable class attribute is only a defect if it is mutated: shared state
+    that everybody reads and nobody changes behaves exactly like a constant.
+    Measured on FEDOT: of 40 `RUF012` findings, 39 are dormant and the fortieth
+    is a cache, mutated on purpose. Six years of history contain no commit about
+    this class — patching them costs a maintainer a review and changes nothing.
+
+    Written by hand first, which is what showed the class was worthless; this is
+    the same check, done in seconds instead of an evening.
+    """
+    writes = (
+        re.compile(rf"\bself\.{re.escape(attribute)}\s*(=[^=]|[+\-*/|&]=)"),
+        re.compile(rf"\.{re.escape(attribute)}\s*(=[^=]|[+\-*/|&]=)"),
+        re.compile(rf"\.{re.escape(attribute)}\.(append|extend|update|add|pop|"
+                   r"remove|clear|insert|setdefault|sort)\("),
+        re.compile(rf"\.{re.escape(attribute)}\s*\[[^\]]*\]\s*="),
+    )
+    for path in repo.glob("fedot/**/*.py"):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if attribute not in text:
+            continue
+        for pattern in writes:
+            if pattern.search(text):
+                return False
+    return True
+
+
+def drop_dormant(repo: Path, findings: list[str]) -> tuple[list[str], list[str]]:
+    """Split lint findings into ones worth a look and ones provably inert.
+
+    Deterministic, no model involved: asking an LLM whether an attribute is ever
+    assigned is paying for something `ast` answers exactly.
+    """
+    live, dormant = [], []
+    for line in findings:
+        try:
+            location, rest = line.split(": ", 1)
+            file_rel, line_no, _ = location.split(":")[:3]
+            rule = rest.split(" ", 1)[0]
+        except (ValueError, IndexError):
+            live.append(line)
+            continue
+        if rule not in MUTATION_RULES:
+            live.append(line)
+            continue
+        found = _attribute_at(repo, file_rel, int(line_no))
+        if found is None:
+            live.append(line)
+            continue
+        (dormant if is_dormant(repo, found[1]) else live).append(line)
+    return live, dormant
+
+
+def lint_findings_for(repo: Path, file_rel: str, limit: int = 12) -> list[str]:
+    """Lint warnings sitting in one file, as leads for triage."""
+    here = [ln for ln in _all_lint_findings(str(repo))
+            if ln.startswith(file_rel + ":")]
+    live, _ = drop_dormant(repo, here)
+    return live[:limit]
+
+
+def triage_section(leads: list[str]) -> str:
+    """Task text when the only thing available is an unproven warning.
+
+    The agent is being asked the question a linter cannot answer: does this
+    warning describe something that actually goes wrong? Most do not — of 40
+    `RUF012` findings in this repository, 39 are dormant, the flagged object is
+    only ever read. A patch for a dormant warning costs a maintainer a review and
+    changes nothing, which is how projects end up drowning in automated noise.
+    """
+    listed = "\n".join(f"  - {ln}" for ln in leads)
+    return (
+        "\n\n## Unproven warnings in this file — decide whether any is real\n"
+        f"{listed}\n\n"
+        "Nothing here is proven. A linter reports a *shape* in the source; "
+        "whether it causes anything is a separate question, and most of the time "
+        "the answer is no — in this repository 39 of 40 findings of one rule turn "
+        "out to be dormant, the flagged object is never mutated.\n\n"
+        "So: pick at most one of these, and only if you can demonstrate it. Your "
+        "TEST must FAIL on the current code — not because the shape is present, "
+        "but because behaviour is wrong. Reading the source and asserting that a "
+        "line looks a certain way proves nothing and will be rejected.\n"
+        "If none of them is demonstrably live, say so and change nothing: reply "
+        "with PROBLEM: dormant, and leave the OLD/NEW blocks empty."
+    )
+
+
 def proven_defects_section(
     repo: Path, py: str, journal: list[dict[str, Any]] | None = None
 ) -> str:
     """Defects that already have a failing test, offered as the preferred targets."""
-    if os.environ.get("FEDOTLLM_EVOLVE_TEMPLATES", "1") == "0":
+    if os.environ.get("FEDOTLLM_EVOLVE_TEMPLATES", TEMPLATES_DEFAULT) == "0":
         return ""
     try:
         from fedotllm.agents.evolve.templates import module_path, proven_defects_cached
@@ -517,6 +691,83 @@ def invariant_defects(repo: Path) -> list[dict[str, Any]]:
     return [i for i in items if (repo / i.get("file", "")).is_file()]
 
 
+def verified_defects(repo: Path) -> list[dict[str, Any]]:
+    """Defects the verifier reproduced through the library's public interface.
+
+    The strongest evidence the pipeline produces, and until now the fixer could
+    not see it at all: the evidence sources were `template`, `invariant` and
+    `triage`, so a defect with a script that fails on the untouched tree had no
+    way of reaching a patch except by hand.
+
+    Written by `examples/verify_leads.py`. Only rows it marked `confirmed` count
+    — `internal only` means the code path exists but no caller can walk it, and
+    that is not a defect a user will ever meet.
+    """
+    path = Path(os.environ.get("FEDOTLLM_VERIFIED",
+                               "/tmp/fedotllm_verified.json"))
+    if not path.is_file():
+        return []
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("verified findings unreadable (%s)", exc)
+        return []
+    items = []
+    for row in rows:
+        if row.get("status") != "confirmed" or not row.get("script"):
+            continue
+        if not (repo / row.get("file", "")).is_file():
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "_", f"{row['file']}_{row['line']}".lower()).strip("_")
+        items.append({**row,
+                      "test_name": f"test_verified_{slug}"[:80],
+                      "test_code": as_pytest(row["script"], f"test_verified_{slug}"[:80],
+                                             row.get("why", ""), row.get("got", ""))})
+    return items
+
+
+def verified_defect_for(repo: Path, file_rel: str) -> dict[str, Any] | None:
+    """The verified defect belonging to a file, if there is one."""
+    for item in verified_defects(repo):
+        if item.get("file") == file_rel:
+            return item
+    return None
+
+
+def verified_defects_section(repo: Path) -> str:
+    """Above everything else, and the rank is earned by how it was established."""
+    items = verified_defects(repo)
+    if not items:
+        return ""
+    lines = [
+        f"## Defects reproduced through the public API — {len(items)}, each with a FAILING test",
+        "The strongest targets in the repository. For each of these a short script "
+        "was run against this checkout and raised, using only `Fedot`, "
+        "`FedotBuilder` or `Pipeline` — so a user can reach it. The failing test "
+        "already exists; your job is the patch, not the proof.",
+    ]
+    for i in items[:12]:
+        lines.append(f"  - {i['file']}:{i['line']} — {i.get('got', 'raises')} — "
+                     f"{(i.get('why') or '').strip()[:160]}")
+    return "\n".join(lines)
+
+
+def verified_section(repo: Path, item: dict[str, Any]) -> str:
+    """Task text for a verified defect: here is what breaks, and how it was shown."""
+    return (
+        "## Your target\n"
+        f"`{item['file']}` line {item['line']} — {item.get('why', '').strip()}\n\n"
+        f"This was not inferred from reading. The script below was run against "
+        f"this checkout and raised `{item.get('got', 'an exception')}`:\n\n"
+        f"```python\n{item.get('script', '').strip()}\n```\n\n"
+        f"Last line of the failure:\n```\n{(item.get('detail') or '').strip()}\n```\n\n"
+        f"Route: {item.get('route', 'public interface')}.\n\n"
+        "Patch the library so this script completes. Do not make the script pass "
+        "by weakening what it asks for — if the call is legal, it must work or "
+        "fail with a message that names what is wrong and what was expected.\n"
+    )
+
+
 def invariant_defects_section(repo: Path) -> str:
     """Ranked above lint and above template defects, and the ranking is earned:
     these are the only findings measured on the library while it runs."""
@@ -555,9 +806,16 @@ def bind_evidence_test(
     proposal: Proposal,
     ready: Any = None,
     invariant: dict[str, Any] | None = None,
+    verified: dict[str, Any] | None = None,
 ) -> Proposal:
     """Keep the pre-patch proof outside the model's control."""
-    if ready is not None:
+    if verified is not None:
+        # The proof is the script the verifier already ran against this
+        # checkout, wrapped into a test by code. The model never gets to
+        # restate what counts as broken.
+        proposal.test_name = verified["test_name"]
+        proposal.test_code = verified["test_code"]
+    elif ready is not None:
         proposal.test_name = ready.test_name
         proposal.test_code = ready.test_code
     elif invariant is not None:
@@ -639,11 +897,16 @@ def proven_defect_files(
     repo: Path, py: str, journal: list[dict[str, Any]] | None = None
 ) -> set[str]:
     """Repo-relative files that still hold an unfixed proven defect."""
-    if os.environ.get("FEDOTLLM_EVOLVE_TEMPLATES", "1") == "0":
+    skip_now = exhausted_files(journal)
+    # Reproduced through the public interface: the strongest class there is, and
+    # it must be reachable whatever else is switched on.
+    reproduced = {i["file"] for i in verified_defects(repo) if i["file"] not in skip_now}
+    if reproduced:
+        return reproduced
+    if os.environ.get("FEDOTLLM_EVOLVE_TEMPLATES", TEMPLATES_DEFAULT) == "0":
         # Invariants are a separate source and must survive templates being off,
         # otherwise the two cannot be measured apart.
-        return {i["file"] for i in invariant_defects(repo)
-                if i["file"] not in exhausted_files(journal)}
+        return {i["file"] for i in invariant_defects(repo) if i["file"] not in skip_now}
     try:
         from fedotllm.agents.evolve.templates import proven_defects_cached
 
@@ -662,8 +925,13 @@ def proven_defect_files(
         # default argument, because the system prompt ranks that class first and
         # a request is not a mechanism. While a defect measured on the running
         # library is available, that is the only allowed target.
-        if measured and INVARIANTS_FIRST:
-            return measured
+        # Ranking, not truncation. Returning only `measured` left the scout with
+        # 8 files out of 207 and made every other class unreachable, verified
+        # defects included. The rank is still enforced here in code — strongest
+        # non-empty class wins — and never left to the prompt.
+        for tier in (measured, files):
+            if tier and INVARIANTS_FIRST:
+                return tier
         return files | measured
     except Exception as exc:
         logger.warning("could not list proven-defect files (%s)", exc)
@@ -672,7 +940,7 @@ def proven_defect_files(
 
 def proven_defect_for(repo: Path, py: str, file_rel: str):
     """The proven defect belonging to a file, if there is one."""
-    if os.environ.get("FEDOTLLM_EVOLVE_TEMPLATES", "1") == "0":
+    if os.environ.get("FEDOTLLM_EVOLVE_TEMPLATES", TEMPLATES_DEFAULT) == "0":
         return None
     try:
         from fedotllm.agents.evolve.templates import module_path, proven_defects_cached
@@ -832,6 +1100,8 @@ def build_repo_inventory(
     # and 0 real fixes; this section is what makes the target worth fixing.
     # Proven defects come first: a real defect with a ready proof beats any
     # candidate the agent would have to demonstrate itself.
+    if verified_text := verified_defects_section(repo):
+        sections += [verified_text, ""]
     if invariant_text := invariant_defects_section(repo):
         sections += [invariant_text, ""]
     if proven_text := proven_defects_section(repo, py or resolve_repo_python(repo), journal):
@@ -1659,8 +1929,18 @@ def classify_accepted_severity(
     invariant: dict[str, Any] | None,
     probe_resolved: list[str],
     proposal_text: str,
+    verified: dict[str, Any] | None = None,
 ) -> tuple[int, str]:
     """Prefer deterministic evidence over the model's description of its patch."""
+    if verified is not None:
+        # The verifier currently proves public-API crashes. They are ordinary
+        # user-visible defects, not cosmetic work and not silent corruption.
+        # Future verifier rows may carry one of the mechanically established
+        # critical kinds below; do not infer criticality from model prose.
+        critical_kinds = {"declared_not_used", "nondeterministic", "timeout"}
+        if verified.get("kind") in critical_kinds:
+            return 1, "critical behavioural defect"
+        return 2, "ordinary public-API defect"
     if ready is not None:
         severity = SEVERITY_BY_RULE.get(ready.rule, 3)
         return severity, SEVERITY_NAMES[severity]
@@ -2112,6 +2392,7 @@ def _run_evolution_loop(
     # Symbol-level view rather than the first N characters: see `source_view`
     # for why truncation is the wrong compression here. The focus symbol comes
     # from whichever evidence selected this file.
+    verified = verified_defect_for(repo, pick)
     invariant = invariant_defect_for(repo, py, pick)
     # When the target already has a proven failing test, the agent's job shrinks to
     # writing the patch — which is the one step it was never the bottleneck on.
@@ -2124,18 +2405,27 @@ def _run_evolution_loop(
              or (ready.target.split("(")[0].split(".")[-1] if ready else "")
              or "")
     source = source_view(repo, pick, focus) if SYMBOL_VIEW else read_source_file(repo, pick)
-    result_evidence = "template" if ready else ("invariant" if invariant else "")
+    result_evidence = ("verified" if verified else "template" if ready
+                       else "invariant" if invariant else "")
 
     def request_proposal(current_messages: list[dict[str, Any]]) -> Proposal:
         return bind_evidence_test(
             ask_proposal(inference, current_messages),
             ready=ready,
             invariant=invariant,
+            verified=verified,
         )
 
     # Abstention gate. Before spending a single token on a patch: is there
     # evidence that this file holds a defect? If not, the honest answer is
     # "nothing to fix here" — see VALUE_GATE for why this is code and not prompt.
+    # A lint finding in the picked file is not evidence, but it is a lead the
+    # agent may follow — provided it produces the proof itself and the reproduce
+    # gate agrees.
+    lint_leads = lint_findings_for(repo, pick) if TRIAGE_LINT else []
+    if lint_leads:
+        result_evidence = result_evidence or "triage"
+
     if VALUE_GATE and not result_evidence:
         empty = Proposal(file_path=pick, test_file="", test_name="", problem="",
                          rationale="", old_code="", new_code="", test_code="")
@@ -2170,8 +2460,10 @@ def _run_evolution_loop(
                 f"{dependency_context(repo, pick, focus) if SYMBOL_VIEW else ''}"
                 f"{usage_context(repo, pick, focus) if SYMBOL_VIEW else ''}"
                 f"{module_usage_section(repo, pick)}"
-                + (ready_section(repo, pick, ready) if ready
-                   else invariant_section(repo, invariant) if invariant else "")
+                + (verified_section(repo, verified) if verified
+                   else ready_section(repo, pick, ready) if ready
+                   else invariant_section(repo, invariant) if invariant
+                   else triage_section(lint_leads) if lint_leads else "")
                 + "\n\n"
                 "Propose ONE improvement in the delimiter format from the system prompt "
                 "(NOT JSON). FILE must stay the scout-selected path unless you must "
@@ -2428,6 +2720,11 @@ def _run_evolution_loop(
     if VALUE_GATE and result.success:
         anchored = bool(result.evidence) and bool(
             (
+                verified
+                and result.proposal.test_name == verified["test_name"]
+                and result.proposal.test_code == verified["test_code"]
+            )
+            or (
                 ready
                 and result.proposal.test_name == ready.test_name
                 and result.proposal.test_code == ready.test_code
@@ -2438,6 +2735,15 @@ def _run_evolution_loop(
                 and result.proposal.test_code == invariant["test_code"]
             )
         )
+        # A triage run has no ready-made test by construction: the whole point is
+        # that the agent had to prove the warning was live. Its proof is the
+        # reproduce gate — the test had to fail on the untouched tree before the
+        # patch was even considered — so that is what anchors it here. Without
+        # this branch the path was open and immediately sealed from the other
+        # side: every triage patch would clear six gates and then be discarded.
+        if result.evidence == "triage":
+            anchored = bool(result.reproduce and result.reproduce.exit_code != 0)
+
         if not anchored and not result.probe_resolved:
             result.success = False
             result.abstained = True
@@ -2459,6 +2765,7 @@ def _run_evolution_loop(
         invariant,
         result.probe_resolved,
         f"{result.proposal.problem} {result.proposal.rationale}",
+        verified=verified,
     )
     workspace.mkdir(parents=True, exist_ok=True)
     audit_md = build_audit(repo, result, model)
