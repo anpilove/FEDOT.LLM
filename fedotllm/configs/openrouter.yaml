@@ -11,7 +11,11 @@ llm:
     X-Title: FEDOT.LLM-EvolveAgent
   completion_params:
     # Abort a provider that stops producing a response; AIInference retries once.
-    timeout: 120
+    # Generous on purpose: this bounds a hung request, not a slow answer. At 120
+    # a reasoning model lost half the reader's files to LLMRequestTimeout — the
+    # model was working, the clock was not. Measured on 10 FEDOT files:
+    # `stealth/ox-alpha` went from 5 failures to 0 when this moved to 600.
+    timeout: 600
     # `temperature` is not among this model family's supported parameters, so
     # runs are pinned with `seed` instead — same purpose (comparable arms), the
     # one the provider actually honours.
@@ -32,3 +36,13 @@ langfuse:
   host: https://cloud.langfuse.com
   public_key: null
   secret_key: null
+evolve:
+  reader_model: deepseek/deepseek-v4-flash
+  # One pass per model. The two disagree far more than one model run twice —
+  # on ten FEDOT files they shared 3 of 16 suspicions — so the second model buys
+  # recall, and `stealth/ox-alpha` is free, which is the scarce resource here.
+  # It is a reasoning model and roughly seven times slower; the passes run
+  # concurrently, so the cost is wall time, not money. Set
+  # FEDOTLLM_EVOLVE_READER_MODELS to one name to go back to a single pass.
+  reader_models: deepseek/deepseek-v4-flash,stealth/ox-alpha
+  verifier_model: deepseek/deepseek-v4-flash
