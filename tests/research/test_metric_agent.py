@@ -434,6 +434,35 @@ def test_repo_map_prefers_fit_inside_package(tmp_path: Path):
     assert mapped[0].name == "fit"
 
 
+def test_repo_map_skips_abstract_stubs(tmp_path: Path):
+    from research.evolve.metric_agent.repo_map import repo_map
+
+    iface = (
+        tmp_path
+        / "fedot"
+        / "core"
+        / "operations"
+        / "evaluation"
+        / "operation_implementations"
+        / "implementation_interfaces.py"
+    )
+    knn = tmp_path / "fedot" / "core" / "operations" / "evaluation" / "operation_implementations" / "models" / "knn.py"
+    iface.parent.mkdir(parents=True)
+    knn.parent.mkdir(parents=True)
+    iface.write_text(
+        "from abc import abstractmethod\n"
+        "class Base:\n"
+        "    @abstractmethod\n"
+        "    def fit(self, data):\n"
+        "        raise NotImplementedError\n",
+        encoding="utf-8",
+    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
+    mapped = repo_map(tmp_path, (), limit=8)
+    assert any(item.name == "fit" and item.file_path.endswith("knn.py") for item in mapped)
+    assert not any(item.name == "fit" and item.file_path.endswith("implementation_interfaces.py") for item in mapped)
+
+
 def test_discover_walks_whole_core_not_one_field(tmp_path: Path):
     from research.evolve.metric_agent.discover import discover_leads
 
@@ -693,3 +722,211 @@ def test_replay_reads_cmd_log_and_diff(tmp_path: Path):
     assert row["diff"] == "--- a\n+++ b"
     assert row["stock"]["t"]["cmd"] == "python -m worker"
     assert row["patched"]["t"]["log_tail"] == "still boom"
+
+
+def test_discover_skips_pipeline_and_helpers_for_max_leads(tmp_path: Path):
+    from research.evolve.metric_agent.discover import discover_leads
+
+    knn = (
+        tmp_path
+        / "fedot"
+        / "core"
+        / "operations"
+        / "evaluation"
+        / "operation_implementations"
+        / "models"
+        / "knn.py"
+    )
+    scale = (
+        tmp_path
+        / "fedot"
+        / "core"
+        / "operations"
+        / "evaluation"
+        / "operation_implementations"
+        / "data_operations"
+        / "scale.py"
+    )
+    node = tmp_path / "fedot" / "core" / "pipelines" / "node.py"
+    helper = tmp_path / "fedot" / "core" / "data" / "array_utilities.py"
+    for path in (knn, scale, node, helper):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
+    scale.write_text(
+        "class Scale:\n    def transform(self, data):\n        return data\n",
+        encoding="utf-8",
+    )
+    node.write_text(
+        "class PipelineNode:\n    def fit(self, data):\n        return data\n",
+        encoding="utf-8",
+    )
+    helper.write_text("def find_common_elements(arrays):\n    return arrays\n", encoding="utf-8")
+    leads = discover_leads(tmp_path, limit=2)
+    paths = [lead.file_path for lead in leads]
+    assert len(leads) == 2
+    assert all("/operation_implementations/" in path for path in paths)
+    assert not any("array_utilities" in path for path in paths)
+    assert not any("/pipelines/" in path for path in paths)
+    names = {_lead_why_name(lead) for lead in leads}
+    assert names <= {"fit", "transform"}
+
+
+def _lead_why_name(lead: Lead) -> str:
+    return lead.why.strip().split()[-1].rsplit(".", 1)[-1]
+
+
+def test_skip_tried_sites_from_scoreboard(tmp_path: Path):
+    from research.evolve.metric_agent.journal import append_journal
+    from research.evolve.metric_agent.replay import skip_tried
+
+    append_journal(
+        tmp_path / "scoreboard.jsonl",
+        {
+            "event": "attempt",
+            "keep": False,
+            "lead": {"channel": "repo_map", "file_path": "fedot/core/pipelines/node.py", "line": 185},
+        },
+    )
+    leads = [
+        Lead(
+            channel="repo_map",
+            file_path="fedot/core/pipelines/node.py",
+            line=185,
+            why="method PipelineNode.fit",
+        ),
+        Lead(
+            channel="repo_map",
+            file_path="fedot/core/operations/knn.py",
+            line=53,
+            why="method Knn.fit",
+        ),
+    ]
+    kept = skip_tried(leads, tmp_path)
+    assert [lead.file_path for lead in kept] == ["fedot/core/operations/knn.py"]
+
+
+def test_apply_patch_strips_line_gutter_and_rejects_noop(tmp_path: Path):
+    from research.evolve.metric_agent.patch import apply_patch, same_runtime
+
+    target = tmp_path / "fedot" / "foo.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("def f(x):\n    return x\n", encoding="utf-8")
+    ok = apply_patch(
+        tmp_path,
+        PatchCandidate(
+            candidate_id="gutter",
+            file_path="fedot/foo.py",
+            old_code="     2|    return x\n",
+            new_code="     2|    return x + 1\n",
+        ),
+    )
+    assert ok is True
+    assert "return x + 1" in target.read_text(encoding="utf-8")
+    assert same_runtime("    return x  # a\n", "    return x  # b\n")
+    blocked = apply_patch(
+        tmp_path,
+        PatchCandidate(
+            candidate_id="noop",
+            file_path="fedot/foo.py",
+            old_code="    return x + 1\n",
+            new_code="    return x + 1  # same\n",
+        ),
+    )
+    assert blocked is False
+
+
+def test_propose_rejects_noop_and_strips_gutter():
+    from research.evolve.metric_agent.propose import PatchProposal, propose_patch
+
+    class _Inf:
+        def __init__(self, proposal: PatchProposal):
+            self.proposal = proposal
+
+        def create(self, _prompt, _model):
+            return self.proposal
+
+    noop = propose_patch(
+        inference=_Inf(PatchProposal(file_path="fedot/core/x.py", old_code="return x", new_code="return x")),
+        context="# fedot/core/x.py\n    return x",
+    )
+    assert noop is None
+    cand = propose_patch(
+        inference=_Inf(
+            PatchProposal(
+                file_path="fedot/core/x.py",
+                old_code="     2|    return x\n",
+                new_code="     2|    return x + 1\n",
+            )
+        ),
+        context="# fedot/core/x.py\n    return x",
+    )
+    assert cand is not None
+    assert cand.old_code == "    return x"
+    assert cand.new_code == "    return x + 1"
+    assert "|" not in cand.old_code
+
+
+def test_context_includes_sibling_runtime_methods(tmp_path: Path):
+    knn = tmp_path / "fedot" / "core" / "operations" / "knn.py"
+    knn.parent.mkdir(parents=True)
+    knn.write_text(
+        "class Knn:\n"
+        "    def fit(self, data):\n"
+        "        return data\n"
+        "    def predict(self, data):\n"
+        "        return data.features\n",
+        encoding="utf-8",
+    )
+    ctx = context_from_lead(
+        Lead(channel="repo_map", file_path="fedot/core/operations/knn.py", line=2, why="method Knn.fit"),
+        tmp_path,
+    )
+    assert "def fit" in ctx
+    assert "def predict" in ctx
+
+
+def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from research.evolve.metric_agent.journal import append_journal
+    from research.evolve.metric_agent.loop import run_once
+    from research.evolve.metric_agent.types import Decision as Dec
+    from research.evolve.metric_agent.types import PatchCandidate
+
+    checkout = tmp_path / "fedot-src"
+    checkout.mkdir()
+    append_journal(
+        tmp_path / "scoreboard.jsonl",
+        {
+            "event": "attempt",
+            "keep": False,
+            "lead": {"channel": "repo_map", "file_path": "fedot/a.py", "line": 1},
+        },
+    )
+    leads = [
+        Lead(channel="repo_map", file_path="fedot/a.py", line=1, why="method A.fit"),
+        Lead(channel="repo_map", file_path="fedot/b.py", line=2, why="method B.fit"),
+    ]
+    seen: list[str] = []
+
+    def fake_fix(_checkout, lead, **_k):
+        seen.append(lead.file_path)
+        return PatchCandidate("c1", lead.file_path, "old", "new")
+
+    monkeypatch.setattr("research.evolve.metric_agent.loop.scout", lambda *_a, **_k: leads)
+    monkeypatch.setattr("research.evolve.metric_agent.loop.fix_lead", fake_fix)
+    monkeypatch.setattr(
+        "research.evolve.metric_agent.loop.measure_stock",
+        lambda *_a, **_k: {"t": _score("t", "crash", 0.5)},
+    )
+    monkeypatch.setattr("research.evolve.metric_agent.loop.measure_fedot_tests", lambda *_a, **_k: ("", [], set()))
+    monkeypatch.setattr(
+        "research.evolve.metric_agent.loop.measure_patched",
+        lambda *_a, **_k: {"t": _score("t", "crash", 0.5)},
+    )
+    monkeypatch.setattr(
+        "research.evolve.metric_agent.loop.verdict",
+        lambda *_a, **_k: Dec(keep=False, reason="target_delta 0.0000 < 0.01", target_delta=0.0, regression_deltas={}),
+    )
+    monkeypatch.setattr("research.evolve.metric_agent.loop.revert_checkout", lambda *_a, **_k: None)
+    monkeypatch.setattr("research.evolve.metric_agent.loop.snapshot_diff", lambda *_a, **_k: "diff")
+    run_once(checkout=checkout, workspace=tmp_path, max_leads=2, inference=object())
+    assert seen == ["fedot/b.py"]

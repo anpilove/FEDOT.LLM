@@ -8,6 +8,33 @@ from pathlib import Path
 from research.evolve.metric_agent.guard import deny_write
 from research.evolve.metric_agent.types import PatchCandidate
 
+_GUTTER = re.compile(r"^\s*\d+\|")
+
+
+def strip_gutter(text: str) -> str:
+    """Drop `  123|` prefixes if the model copied numbered context."""
+
+    lines = (text or "").splitlines()
+    nonempty = [line for line in lines if line.strip()]
+    if nonempty and all(_GUTTER.match(line) for line in nonempty):
+        return "\n".join(_GUTTER.sub("", line) for line in lines)
+    return text or ""
+
+
+def same_runtime(old: str, new: str) -> bool:
+    """True when SEARCH/REPLACE would not change runtime behavior."""
+
+    return _norm_code(old) == _norm_code(new)
+
+
+def _norm_code(text: str) -> str:
+    lines: list[str] = []
+    for line in strip_gutter(text).splitlines():
+        code = line.split("#", 1)[0].rstrip()
+        if code.strip():
+            lines.append(" ".join(code.split()))
+    return "\n".join(lines)
+
 
 def apply_patch(checkout: Path, candidate: PatchCandidate) -> bool:
     target = (checkout / candidate.file_path).resolve()
@@ -19,6 +46,9 @@ def apply_patch(checkout: Path, candidate: PatchCandidate) -> bool:
     text = target.read_text(encoding="utf-8")
     hunks = candidate.hunks or ([(candidate.old_code, candidate.new_code)] if candidate.old_code else [])
     if not hunks:
+        return False
+    hunks = [(strip_gutter(old), strip_gutter(new)) for old, new in hunks]
+    if any(same_runtime(old, new) for old, new in hunks):
         return False
     for _, new in hunks:
         if any(ln.strip() == "..." for ln in new.splitlines()):

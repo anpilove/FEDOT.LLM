@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from research.evolve.metric_agent.context import inspect_trace, show_source
 from research.evolve.metric_agent.guard import deny_write
-from research.evolve.metric_agent.repo_map import _FIT_NAMES, leads_from_map, repo_map
+from research.evolve.metric_agent.repo_map import _FIT_NAMES, _area, leads_from_map, repo_map
 from research.evolve.metric_agent.types import Lead, ScoreResult
 
 EXCLUDED_DIR_PARTS = {".git", "__pycache__", ".pytest_cache", "docs", "examples", "jupyter_notebooks", "caching", "visualisation"}
@@ -125,10 +125,29 @@ def core_py_files(checkout: Path, *, limit: int = _FILE_LIMIT) -> list[str]:
     return [item.file_path for item in _spread(fake, limit)]
 
 
+def _lead_name(lead: Lead) -> str:
+    token = (lead.why or "").strip().split()[-1] if (lead.why or "").strip() else ""
+    return token.rsplit(".", 1)[-1] if token else ""
+
+
 def _runtime_lead(lead: Lead) -> bool:
-    token = lead.why.strip().split()[-1]
-    name = token.rsplit(".", 1)[-1]
-    return name in _FIT_NAMES
+    return _lead_name(lead) in _FIT_NAMES
+
+
+def _pkg_rank(path: str) -> int:
+    """Prefer operator implementations over pipeline orchestration and helpers."""
+
+    if "/operation_implementations/" in path:
+        return 0
+    if "/operations/" in path:
+        return 1
+    if path.startswith("fedot/core/data"):
+        return 2
+    if path.startswith("fedot/core/repository"):
+        return 3
+    if path.startswith("fedot/core/pipelines"):
+        return 4
+    return 5
 
 
 def _fit_path(path: str) -> bool:
@@ -145,9 +164,45 @@ def _fit_path(path: str) -> bool:
 
 
 def _rank_leads(leads: list[Lead]) -> list[Lead]:
-    core = [lead for lead in leads if lead.file_path.startswith("fedot/core/")]
-    rest = [lead for lead in leads if not lead.file_path.startswith("fedot/core/")]
-    return core + rest
+    def key(lead: Lead) -> tuple:
+        runtime = 0 if _runtime_lead(lead) else 1
+        core = 0 if lead.file_path.startswith("fedot/core/") else 1
+        private = 1 if _lead_name(lead).startswith("_") else 0
+        return (runtime, core, _pkg_rank(lead.file_path), private, lead.file_path, lead.line)
+
+    return sorted(leads, key=key)
+
+
+def _spread_leads(leads: list[Lead], *, limit: int | None = None) -> list[Lead]:
+    buckets: dict[str, list[Lead]] = {}
+    for lead in leads:
+        buckets.setdefault(_area(lead.file_path), []).append(lead)
+    out: list[Lead] = []
+    cap = len(leads) if limit is None else max(1, limit)
+    while len(out) < cap:
+        progressed = False
+        for key in list(buckets):
+            group = buckets[key]
+            if not group:
+                continue
+            out.append(group.pop(0))
+            progressed = True
+            if len(out) >= cap:
+                return out
+        if not progressed:
+            break
+    return out
+
+
+def _order_leads(leads: list[Lead]) -> list[Lead]:
+    tiers: dict[tuple[int, int], list[Lead]] = {}
+    for lead in leads:
+        runtime = 0 if _runtime_lead(lead) else 1
+        tiers.setdefault((runtime, _pkg_rank(lead.file_path)), []).append(lead)
+    ordered: list[Lead] = []
+    for key in sorted(tiers):
+        ordered.extend(_spread_leads(tiers[key]))
+    return ordered
 
 
 def format_lint_for_llm(leads: list[Lead]) -> str:
@@ -290,13 +345,21 @@ def discover_leads(
     inference=None,
     limit: int = _LINT_LIMIT,
 ) -> list[Lead]:
-    pooled = _unique(lead for lead in leads_from_map(repo_map(checkout, (), limit=_FILE_LIMIT)) if _fit_path(lead.file_path))
-    runtime = [lead for lead in pooled if _runtime_lead(lead)]
-    rest = [lead for lead in pooled if not _runtime_lead(lead)]
-    pooled = _rank_leads(runtime) + _rank_leads(rest)
+    pooled = _unique(
+        lead
+        for lead in leads_from_map(repo_map(checkout, (), limit=_FILE_LIMIT))
+        if _fit_path(lead.file_path) and not _lead_name(lead).startswith("_")
+    )
+    pooled = _order_leads(pooled)
     if inference is not None:
         picked = _llm_pick(inference, checkout, pooled)
-        if picked is not None and _fit_path(picked.file_path):
+        if (
+            picked is not None
+            and _fit_path(picked.file_path)
+            and _runtime_lead(picked)
+            and _pkg_rank(picked.file_path) <= 3
+            and not _lead_name(picked).startswith("_")
+        ):
             pooled = _unique([picked] + pooled)
     return pooled[: max(1, limit)]
 

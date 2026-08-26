@@ -11,7 +11,9 @@ from research.evolve.metric_agent.types import Lead
 
 EXCLUDED_DIR_PARTS = {".git", "__pycache__", ".pytest_cache", "docs", "examples", "jupyter_notebooks", "caching", "visualisation"}
 _MAP_LIMIT = 24
-_FIT_NAMES = frozenset({"fit", "transform", "predict", "fit_transform", "inverse_transform"})
+_FIT_NAMES = frozenset(
+    {"fit", "transform", "predict", "fit_transform", "inverse_transform", "predict_proba", "fit_predict"}
+)
 
 
 @dataclass(frozen=True)
@@ -43,8 +45,12 @@ def iter_symbols(checkout: Path, *, root: str = "fedot") -> list[Symbol]:
                 out.append(Symbol(rel, node.name, "class", node.lineno))
                 for item in node.body:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if _stub_method(item):
+                            continue
                         out.append(Symbol(rel, item.name, "method", item.lineno, parent=node.name))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _stub_method(node):
+                    continue
                 out.append(Symbol(rel, node.name, "function", node.lineno))
     return out
 
@@ -66,7 +72,12 @@ def repo_map(
     if tokens:
         ranked = [row for row in ranked if row[0] < 0]
         return [row[2] for row in ranked[: max(1, limit)]]
-    return _spread([row[2] for row in ranked], limit)
+    visible = [
+        row[2]
+        for row in ranked
+        if not row[2].name.startswith("_") or row[2].name in _FIT_NAMES
+    ]
+    return _spread(visible, limit)
 
 
 def search_callers(checkout: Path, name: str, *, limit: int = 12) -> list[Symbol]:
@@ -190,7 +201,14 @@ def _spread(symbols: list[Symbol], limit: int) -> list[Symbol]:
     for symbol in symbols:
         buckets.setdefault(_area(symbol.file_path), []).append(symbol)
     for group in buckets.values():
-        group.sort(key=lambda item: (0 if item.name in _FIT_NAMES else 1, item.file_path, item.line))
+        group.sort(
+            key=lambda item: (
+                0 if item.name in _FIT_NAMES else 1,
+                1 if item.name.startswith("_") else 0,
+                item.file_path,
+                item.line,
+            )
+        )
     out: list[Symbol] = []
     seen: set[tuple[str, int]] = set()
     while len(out) < max(1, limit):
@@ -213,11 +231,39 @@ def _spread(symbols: list[Symbol], limit: int) -> list[Symbol]:
     return out
 
 
+def _stub_method(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Skip abstract/empty methods so hunt does not spend leads on interfaces."""
+
+    for dec in node.decorator_list:
+        name = dec.id if isinstance(dec, ast.Name) else getattr(dec, "attr", "")
+        if name in {"abstractmethod", "abstractclassmethod", "abstractproperty"}:
+            return True
+    stmts = [
+        item
+        for item in node.body
+        if not (
+            isinstance(item, ast.Expr)
+            and isinstance(getattr(item, "value", None), ast.Constant)
+            and isinstance(item.value.value, str)
+        )
+    ]
+    if not stmts:
+        return True
+    if len(stmts) == 1 and isinstance(stmts[0], (ast.Pass, ast.Raise)):
+        return True
+    return False
+
+
 def _area(path: str) -> str:
-    parts = path.split("/")
-    if len(parts) >= 3 and parts[0] == "fedot":
-        return parts[2]
-    return path
+    """Leaf package of the file so implementations spread (models vs data_operations), not one `operations/` bucket."""
+
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return path
+    parent = parts[-2]
+    if parent in {"fedot", "core"}:
+        return parts[-1].removesuffix(".py")
+    return parent
 
 
 def _py_files(checkout: Path) -> list[Path]:

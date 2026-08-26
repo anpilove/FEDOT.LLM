@@ -21,6 +21,7 @@ from research.evolve.metric_agent.judge import (
     tests_regressed,
     verdict,
 )
+from research.evolve.metric_agent.replay import skip_tried
 from research.evolve.metric_agent.scoreboard import append_attempt
 from research.evolve.metric_agent.scout import scout
 from research.evolve.metric_agent.smoke import import_error
@@ -49,8 +50,13 @@ def run_once(
     journal = workspace / "journal.jsonl"
 
     exam_ids = tuple(dict.fromkeys((*lift_ids, *protect_ids)))
-    leads = scout(checkout, inference=inference, max_leads=cap)
-    append_journal(journal, {"event": "scout", "leads": [asdict(lead) for lead in leads]})
+    pool_n = max(cap * 5, 15)
+    pool = scout(checkout, inference=inference, max_leads=pool_n)
+    leads = skip_tried(pool, workspace)[:cap]
+    append_journal(
+        journal,
+        {"event": "scout", "leads": [asdict(lead) for lead in leads], "pool": len(pool)},
+    )
     stock = measure_stock(exam_ids, checkout=checkout)
     if not leads:
         decision = Decision(keep=False, reason="no_lead", target_delta=None, regression_deltas={})

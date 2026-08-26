@@ -97,6 +97,9 @@ def context_from_lead(lead: Lead, checkout: Path, *, max_chars: int = 24_000) ->
         parts.append(f"Note: {lead.why}")
     if source:
         parts.append(source)
+    siblings = _runtime_siblings(checkout, lead)
+    if siblings:
+        parts.append("Same class:\n" + siblings)
     from research.evolve.metric_agent.repo_map import (
         format_map,
         search_callers,
@@ -116,7 +119,29 @@ def context_from_lead(lead: Lead, checkout: Path, *, max_chars: int = 24_000) ->
 
 
 _SKIP_ATTRS = frozenset(
-    {"shape", "dtype", "size", "ndim", "T", "name", "value", "real", "imag"}
+    {
+        "shape",
+        "dtype",
+        "size",
+        "ndim",
+        "T",
+        "name",
+        "value",
+        "real",
+        "imag",
+        "log",
+        "logger",
+        "cache",
+        "nodes",
+        "content",
+        "parameters",
+        "metadata",
+        "tags",
+        "parent",
+        "copy",
+        "update",
+        "append",
+    }
 )
 
 
@@ -140,6 +165,45 @@ def _attrs_in_source(source: str, *, limit: int = 4) -> list[str]:
         if len(seen) >= limit:
             break
     return seen
+
+
+def _runtime_siblings(checkout: Path, lead: Lead, *, limit: int = 2) -> str:
+    """Other fit/transform/predict methods on the same class — not the whole file."""
+
+    from research.evolve.metric_agent.repo_map import _FIT_NAMES
+
+    target = checkout / lead.file_path
+    if deny_write(target, checkout=checkout) or not target.is_file():
+        return ""
+    try:
+        tree = ast.parse(target.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, SyntaxError, ValueError):
+        return ""
+    owner: ast.ClassDef | None = None
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        end = getattr(node, "end_lineno", node.lineno) or node.lineno
+        if node.lineno <= lead.line <= end:
+            owner = node
+            break
+    if owner is None:
+        return ""
+    parts: list[str] = []
+    for item in owner.body:
+        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if item.name not in _FIT_NAMES:
+            continue
+        end = getattr(item, "end_lineno", item.lineno) or item.lineno
+        if item.lineno <= lead.line <= end:
+            continue
+        snippet = show_source(target, checkout=checkout, around=item.lineno)
+        if snippet:
+            parts.append(snippet)
+        if len(parts) >= limit:
+            break
+    return "\n\n".join(parts)
 
 
 def _window(lines: list[str], around: int, *, radius: int) -> tuple[int, int]:
