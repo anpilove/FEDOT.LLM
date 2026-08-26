@@ -1,0 +1,13 @@
+---
+description: Metric-agent hunt is the whole FEDOT library, never one substring or tests
+alwaysApply: true
+---
+
+# Metric-agent: hunt
+
+Агент **не подчиняется** одной подстроке и **не стартует с тестов/экзамена**.
+
+- Hunt = walk исходников `fedot/core` (AST repo map): operations, models, preprocessing, data, defaults — любой silent quality-баг.
+- Нельзя зашивать в hunt/prompt список полей, одно имя, один файл, один граф, `leftover-idx`, `cases.json`, gym, FEDOT tests, traceback holdout.
+- Pytest и holdout — только harness **после** патча. Успех = Δ holdout, не «нашли поле X», не fail→pass.
+- LLM видит checkout + repo map + snippet выбранного места. Не видит exam ids и наши каталоги багов.
