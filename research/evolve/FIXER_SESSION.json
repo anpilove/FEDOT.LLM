@@ -1,0 +1,10 @@
+{
+  "head": "713217f702c8a349c6796cf119fd923668e0ac63",
+  "short": "713217f",
+  "message": "Improve metric-agent lead ranking and reject no-op patches.",
+  "base_branch": "research/metric-agent-cloud",
+  "work_branch": "cursor/fixer-oracle-bench-b5e0",
+  "dirty": false,
+  "cloud": true,
+  "note": "Freeze before fixer oracle session. Working tree was clean at 713217f on research/metric-agent-cloud. Cloud agent; files written on cursor/fixer-oracle-bench-b5e0 for review."
+}

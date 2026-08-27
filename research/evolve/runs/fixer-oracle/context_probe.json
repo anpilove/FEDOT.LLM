@@ -1,0 +1,128 @@
+{
+  "pca": {
+    "line": 112,
+    "why": "method PCAImplementation",
+    "arms": {
+      "auto": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": true,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 4323
+      },
+      "slice": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": true,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 906
+      },
+      "whole": {
+        "pca_fit_call": true,
+        "pca_transform_call": true,
+        "knn_parent_predict": false,
+        "init": true,
+        "scaler_hint": true,
+        "numerical_idx": true,
+        "chars": 20254
+      },
+      "dep": {
+        "pca_fit_call": true,
+        "pca_transform_call": true,
+        "knn_parent_predict": false,
+        "init": true,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 7495
+      }
+    }
+  },
+  "knn": {
+    "line": 53,
+    "why": "method FedotKnnClassImplementation.fit",
+    "arms": {
+      "auto": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": false,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 3909
+      },
+      "slice": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": false,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 675
+      },
+      "whole": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": true,
+        "init": true,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 4422
+      },
+      "dep": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": true,
+        "init": true,
+        "scaler_hint": false,
+        "numerical_idx": false,
+        "chars": 5139
+      }
+    }
+  },
+  "imputation": {
+    "line": 274,
+    "why": "method ImputationImplementation.fit",
+    "arms": {
+      "auto": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": false,
+        "scaler_hint": false,
+        "numerical_idx": true,
+        "chars": 9072
+      },
+      "slice": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": false,
+        "scaler_hint": false,
+        "numerical_idx": true,
+        "chars": 2215
+      },
+      "whole": {
+        "pca_fit_call": true,
+        "pca_transform_call": true,
+        "knn_parent_predict": false,
+        "init": true,
+        "scaler_hint": true,
+        "numerical_idx": true,
+        "chars": 20265
+      },
+      "dep": {
+        "pca_fit_call": false,
+        "pca_transform_call": false,
+        "knn_parent_predict": false,
+        "init": true,
+        "scaler_hint": false,
+        "numerical_idx": true,
+        "chars": 10146
+      }
+    }
+  }
+}

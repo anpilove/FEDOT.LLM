@@ -309,6 +309,9 @@ def test_scout_stack_source_has_no_cases_catalog():
         text = (folder / name).read_text(encoding="utf-8")
         assert "from research.evolve.metric_agent.tasks" not in text
         assert "pca->catboost" not in text
+        assert "leftover" not in text.lower()
+        assert "oracle_bench" not in text
+        assert "import recall" not in text
 
 
 def test_leads_from_scores_uses_trace_not_task_id(tmp_path: Path):
@@ -930,3 +933,182 @@ def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr("research.evolve.metric_agent.loop.snapshot_diff", lambda *_a, **_k: "diff")
     run_once(checkout=checkout, workspace=tmp_path, max_leads=2, inference=object())
     assert seen == ["fedot/b.py"]
+
+
+def test_apply_patch_multi_hunk(tmp_path: Path):
+    target = tmp_path / "fedot" / "pca.py"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "class PCA:\n"
+        "    def fit(self, x):\n"
+        "        self.m.fit(x.features)\n"
+        "    def transform(self, x):\n"
+        "        return self.m.transform(x.features)\n",
+        encoding="utf-8",
+    )
+    ok = apply_patch(
+        tmp_path,
+        PatchCandidate(
+            candidate_id="mh",
+            file_path="fedot/pca.py",
+            old_code="        self.m.fit(x.features)\n",
+            new_code="        self.m.fit(x.features[:, x.numerical_idx])\n",
+            hunks=[
+                ("        self.m.fit(x.features)\n", "        self.m.fit(x.features[:, x.numerical_idx])\n"),
+                (
+                    "        return self.m.transform(x.features)\n",
+                    "        return self.m.transform(x.features[:, x.numerical_idx])\n",
+                ),
+            ],
+        ),
+    )
+    assert ok is True
+    text = target.read_text(encoding="utf-8")
+    assert text.count("numerical_idx") == 2
+    assert "self.m.fit(x.features)\n" not in text
+
+
+def test_context_modes_slice_whole_dep(tmp_path: Path):
+    src = tmp_path / "fedot" / "core" / "pca.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(
+        "class Base:\n"
+        "    def __init__(self):\n"
+        "        self.pca = None\n"
+        "    def fit(self, data):\n"
+        "        self.pca.fit(data.features)\n"
+        "    def transform(self, data):\n"
+        "        return self.pca.transform(data.features)\n"
+        "class Child(Base):\n"
+        "    def __init__(self):\n"
+        "        super().__init__()\n"
+        "        self.pca = object()\n"
+        "    def predict(self, data):\n"
+        "        return self._helper(data)\n"
+        "    def _helper(self, data):\n"
+        "        return data\n",
+        encoding="utf-8",
+    )
+    lead = Lead(channel="oracle", file_path="fedot/core/pca.py", line=9, why="method Child")
+    slice_ctx = context_from_lead(lead, tmp_path, mode="slice")
+    whole_ctx = context_from_lead(lead, tmp_path, mode="whole")
+    dep_ctx = context_from_lead(lead, tmp_path, mode="dep")
+    auto_ctx = context_from_lead(lead, tmp_path, mode="auto")
+    assert "def __init__" in slice_ctx
+    assert "self.pca.fit" not in slice_ctx
+    assert "class Base" in whole_ctx
+    assert "def fit" in whole_ctx
+    assert "self.pca.fit" in dep_ctx
+    assert "self.pca.transform" in dep_ctx
+    assert "self.pca.fit" not in auto_ctx
+    assert len(whole_ctx) >= len(slice_ctx)
+
+
+def test_propose_max_edits_fills_hunks():
+    from research.evolve.metric_agent.propose import MultiPatchProposal, PatchEdit, propose_patch
+
+    class _Inf:
+        def create(self, _prompt, model):
+            assert model is MultiPatchProposal
+            return MultiPatchProposal(
+                file_path="fedot/core/x.py",
+                edits=[
+                    PatchEdit(old_code="    return x\n", new_code="    return x + 1\n"),
+                    PatchEdit(old_code="    return y\n", new_code="    return y + 1\n"),
+                ],
+                rationale="two sites",
+            )
+
+    cand = propose_patch(inference=_Inf(), context="# fedot/core/x.py\n    return x", max_edits=3)
+    assert cand is not None
+    assert len(cand.hunks) == 2
+    assert "return x" in cand.old_code
+    assert "return x + 1" in cand.new_code
+
+
+def test_oracle_semantic_checkers_do_not_accept_shallow_edits():
+    from research.evolve.metric_agent.oracle_bench import (
+        imputation_ast_gold_like,
+        knn_ast_gold_like,
+        pca_ast_gold_like,
+    )
+
+    pca_stock = (
+        "class ComponentAnalysisImplementation:\n"
+        "    def fit(self, input_data):\n"
+        "        self.pca.fit(input_data.features)\n"
+        "    def transform(self, input_data):\n"
+        "        return self.pca.transform(input_data.features)\n"
+        "class PCAImplementation(ComponentAnalysisImplementation):\n"
+        "    def __init__(self):\n"
+        "        self.pca = None\n"
+    )
+    pca_gold = (
+        "class ComponentAnalysisImplementation:\n"
+        "    def fit(self, input_data):\n"
+        "        cols = input_data.numerical_idx\n"
+        "        self.pca.fit(input_data.features[:, cols])\n"
+        "    def transform(self, input_data):\n"
+        "        cols = input_data.numerical_idx\n"
+        "        return self.pca.transform(input_data.features[:, cols])\n"
+        "class PCAImplementation(ComponentAnalysisImplementation):\n"
+        "    def __init__(self):\n"
+        "        self.pca = None\n"
+    )
+    assert pca_ast_gold_like(pca_stock) is False
+    assert pca_ast_gold_like(pca_gold) is True
+
+    knn_shallow = (
+        "class KNeighborsImplementation:\n"
+        "    def predict(self, input_data):\n"
+        "        return self.model.predict(input_data.features)\n"
+        "class FedotKnnClassImplementation(KNeighborsImplementation):\n"
+        "    def fit(self, train_data):\n"
+        "        self.classes = train_data.target\n"
+        "        self.classes_ = self.classes\n"
+        "        self.model.fit(train_data.features, train_data.target)\n"
+        "        return self.model\n"
+        "    def predict_proba(self, input_data):\n"
+        "        return self.model.predict_proba(input_data.features)\n"
+    )
+    knn_gold = (
+        "class KNeighborsImplementation:\n"
+        "    def predict(self, input_data):\n"
+        "        feats = self.scaler.transform(input_data.features)\n"
+        "        return self.model.predict(feats)\n"
+        "class FedotKnnClassImplementation(KNeighborsImplementation):\n"
+        "    def fit(self, train_data):\n"
+        "        from sklearn.preprocessing import StandardScaler\n"
+        "        self.scaler = StandardScaler()\n"
+        "        feats = self.scaler.fit_transform(train_data.features)\n"
+        "        self.model.fit(feats, train_data.target)\n"
+        "        return self.model\n"
+        "    def predict_proba(self, input_data):\n"
+        "        feats = self.scaler.transform(input_data.features)\n"
+        "        return self.model.predict_proba(feats)\n"
+    )
+    assert knn_ast_gold_like(knn_shallow) is False
+    assert knn_ast_gold_like(knn_gold) is True
+
+    imp_stock = (
+        "class ImputationImplementation:\n"
+        "    def fit(self, input_data):\n"
+        "        self.non_categorical_ids = input_data.numerical_idx\n"
+        "        self.imputer_num.fit(input_data.features)\n"
+        "    def transform(self, input_data):\n"
+        "        return self.imputer_num.transform(input_data.features)\n"
+    )
+    imp_gold = (
+        "class ImputationImplementation:\n"
+        "    def fit(self, input_data):\n"
+        "        n_features = input_data.features.shape[1]\n"
+        "        self.non_categorical_ids = [i for i in input_data.numerical_idx if i < n_features]\n"
+        "        self.imputer_num.fit(input_data.features)\n"
+        "    def transform(self, input_data):\n"
+        "        n_features = input_data.features.shape[1]\n"
+        "        ids = [i for i in self.non_categorical_ids if i < n_features]\n"
+        "        return self.imputer_num.transform(input_data.features[:, ids])\n"
+    )
+    assert imputation_ast_gold_like(imp_stock) is False
+    assert imputation_ast_gold_like(imp_gold) is True
+
