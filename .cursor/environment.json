@@ -1,0 +1,11 @@
+{
+  "name": "FEDOT.LLM",
+  "install": "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync --dev",
+  "terminals": [
+    {
+      "name": "streamlit",
+      "command": "export PATH=\"$HOME/.local/bin:$PATH\"; export FEDOTLLM_LLM_API_KEY=\"${FEDOTLLM_LLM_API_KEY:-set-your-key-in-the-ui}\"; export FEDOTLLM_EMBEDDINGS_API_KEY=\"${FEDOTLLM_EMBEDDINGS_API_KEY:-set-your-key-in-the-ui}\"; export LANGFUSE_HOST=\"${LANGFUSE_HOST:-https://cloud.langfuse.com}\"; export LANGFUSE_PUBLIC_KEY=\"${LANGFUSE_PUBLIC_KEY:-}\"; export LANGFUSE_SECRET_KEY=\"${LANGFUSE_SECRET_KEY:-}\"; uv run python -m streamlit run fedotllm/web/app.py --server.port=8080 --server.address=0.0.0.0 --server.headless=true"
+    }
+  ],
+  "ports": [{ "name": "streamlit", "port": 8080 }]
+}
