@@ -47,8 +47,21 @@ dev = [
     "ty>=0.0.1a14",
 ]
 
-[tool.setuptools]
-packages = ["fedotllm", "examples"]
+[tool.setuptools.packages.find]
+include = ["fedotllm*", "examples*"]
+exclude = ["fedotllm.cache*", "*.__pycache__*"]
+
+[tool.setuptools.package-data]
+fedotllm = [
+    "configs/*.yaml",
+    "agents/evolve/*.json",
+    "agents/evolve/benchmark/*.json",
+    "agents/evolve/evaluation/*.json",
+    "web/**/*.css",
+    "web/**/*.html",
+    "web/**/*.js",
+    "web/**/*.png",
+]
 
 [tool.ty.environment]
 python = "./.venv"

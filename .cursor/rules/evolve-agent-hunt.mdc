@@ -1,0 +1,81 @@
+---
+description: EvolveAgent searches the FEDOT runtime codebase broadly; hunt is not tied to known bug patterns, tests, or evaluation cases
+alwaysApply: true
+---
+
+# EvolveAgent: hunt
+
+EvolveAgent ищет потенциальные quality-improving изменения по runtime-коду FEDOT, а не конкретный заранее известный баг.
+
+## Hunt
+
+- Hunt начинается с `fedot/` и runtime reachability / repository structure.
+- Архитектуру и prompts улучшают на фиксированной модели
+  `z-ai/glm-5.3-flash`. Нельзя менять модель, fallback-модель или повышать класс
+  модели ради улучшения benchmark/run результата. Один и тот же model preset
+  используется до и после изменения агента.
+- Candidate pool не должен зависеть от списка заранее известных полей, имён багов, файлов, тестов или benchmark cases.
+- Приоритет — код, способный причинно влиять на обучение, преобразование данных, построение модели или prediction.
+- Не считать static call graph ground truth: dynamic dispatch может быть не виден; соседние runtime implementations могут оставаться кандидатами.
+- `_private` методы не исключать только из-за имени.
+- Plots / visualization / logging / remote / explainability / cache-only код можно исключать, если он не участвует в runtime semantics.
+
+## Detectors
+
+- Static detectors могут помечать lead дополнительным `signal` / `why`.
+- Detector не должен автоматически становиться определением hunt.
+- Known-pattern detectors (например metadata/index consistency) по умолчанию **не меняют ranking**.
+- Их влияние на ranking разрешать только как явно включённую ablation/experimental configuration.
+
+## Forbidden leakage
+
+Нельзя зашивать в hunt, ranking или prompts:
+
+- конкретные known-bug поля;
+- одно имя/substring как цель поиска;
+- заранее известный buggy file/symbol;
+- `leftover-idx` или другую известную формулировку дефекта;
+- `cases.json`, gym/catalog bug cases;
+- DEV/FINAL graph ids;
+- holdout traceback;
+- expected/gold patch;
+- FEDOT tests как источник localization.
+
+## Tests and evaluation
+
+- Pytest и DEV evaluation используются только после предложенного patch как harness/gate.
+- DEV evaluation не используется для генерации lead или source context.
+- DEV — validation signal, не FINAL evidence.
+- FINAL не используется для steering, ranking, prompt tuning или выбора detectors.
+
+## Success
+
+Для search loop:
+- patch applies;
+- regression gate не ухудшен;
+- DEV quality удовлетворяет заранее заданному verdict.
+
+Отдельно сохранять `maintenance keep`, если Verifier обосновал общий runtime/API
+инвариант, causal probe подтверждает изменение поведения, сравнительный pytest
+не получил новых падений, а полный DEV protect не получил регрессий. Такой patch
+не выдавать за metric improvement и не открывать для него FINAL.
+
+Не считать успехом:
+- совпадение с known field/file;
+- красивый `why`;
+- fail→pass само по себе;
+- попадание в заранее известную bug family.
+
+Если claim = `silent bug fixed`, дополнительно требуется semantic evidence, что patch исправляет нарушение поведения/API/invariant, а не просто улучшает DEV metric.
+
+## LLM context
+
+LLM получает только source context, доступный из FEDOT checkout/repo structure:
+
+- на pick — файлы из pool по одному; LLM может skip / run snippet / pick (не поиск по всей библиотеке сразу);
+- на repair — выбранный symbol/file и релевантный dependency context;
+- run snippet — `fedotllm.agents.evolve.execution.run_code.run_fedot_snippet` в checkout, не holdout и не evaluator.
+
+Не требовать всегда whole-file context: стратегия context должна быть независимой и измеряемой.
+
+LLM не получает DEV/FINAL case definitions, scores, bug catalog или gold patch.

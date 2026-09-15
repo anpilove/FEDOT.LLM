@@ -1,260 +1,129 @@
-# FEDOT.LLM
+# FEDOT.LLM — EvolveAgent
 
-<p align="center">
-  <img src="./docs/fedot-llm.png" width="600" title="Fedot.LLM logo">
-</p>
+Личный форк [aimclub/FEDOT.LLM](https://github.com/aimclub/FEDOT.LLM): агент ищет правки исходников [FEDOT](https://github.com/aimclub/FEDOT) и ставит их в очередь на часовой `Fedot(best_quality)`. Продуктовый LLM-AutoML API (Supervisor / Streamlit) здесь не точка входа.
 
-[![Acknowledgement ITMO](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/ITMO_badge.svg)](https://itmo.ru/)
-[![Acknowledgement NCCR](https://raw.githubusercontent.com/aimclub/open-source-ops/43bb283758b43d75ec1df0a6bb4ae3eb20066323/badges/NCCR_badge.svg)](https://actcognitive.org/)
-[![Mirror](https://img.shields.io/badge/mirror-GitLab-orange)](https://gitlab.actcognitive.org/itmo-nccr-code/fedot-llm)
-![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/aimclub/FEDOT.LLM)
+Модель фиксирована: `z-ai/glm-5.3-flash` на Scout, Verifier и Fixer. Fallback и апгрейд класса модели запрещены — тот же preset до и после изменения агента.
 
-FEDOT.LLM is an LLM-based prototype for next-generation AutoML. It combines the power of Large Language Models with automated machine learning techniques to enhance data analysis and pipeline building processes.
+## Два контура
 
-## ⚙️ Installation and Setup
+```text
+hunt (LLM)                         controller / server
+─────────                          ───────────────────
+FEDOT source → lead → patch        stock Fedot(1h) → cache
+cheap probe / toy screen           quality-job читает очередь
+     │                             stock из кэша vs patch
+     ▼                             KEEP только по часовым δ
+enqueue, hunt качество не судит
+```
 
+**Hunt** (`python -m fedotllm.agents.evolve run`) читает checkout FEDOT, предлагает патч, гоняет дешёвый технический экран и кладёт валидный кандидат в `<workspace>/quality_queue/<id>.json` + `.patch`. Статус hunt: `queued_for_fedot_quality`. Часовой Fedot hunt не запускает.
 
-### 📦 Basic Installation
+**Controller / `quality-job`** — единственный судья качества. Сначала (или заранее) считает stock `Fedot(preset=best_quality, timeout=3600s, with_tuning)` на полных OpenML-задачах и пишет кэш `EVOLVE_QUALITY_STOCK_CACHE`. Потом сравнивает патч с этим кэшем. Composing, который не стартовал (`search_ran=false`), — инфраструктурная ошибка, не DROP по метрике.
 
-We offer two installation methods to suit your preferences:
+### Дешёвый экран не veto
 
+Toy / frozen PipelineBuilder / behavior-probe `no_change` (δ=0) **не отклоняет** кандидата. Это только приоритет очереди:
 
-#### 🚀 Method 1: Using uv (Recommended)
+| probe / toy                         | priority | эффект          |
+|-------------------------------------|----------|-----------------|
+| `changed` или toy `early_gain`      | `high`   | раньше в drain  |
+| `no_change`, toy δ=0                | `normal` | всё равно в очередь |
 
-<details>
-<summary><b>📋 Step-by-step installation with uv</b></summary>
+Блокирует только технический брак: патч не применился, patched crash, невалидный probe. См. `queue_priority` и `compare_behavior_probe`.
 
-**Step 1: Install uv**
+### Реестр качества
+
+`fedotllm/agents/evolve/evaluation/quality_registry.json`:
+
+| task id                         | OpenML | метрика |
+|---------------------------------|--------|---------|
+| `openml-31-credit-g`            | 31     | roc_auc |
+| `openml-10101-blood-transfusion`| 10101  | roc_auc |
+| `openml-37-diabetes`            | 37     | roc_auc |
+| `openml-3917-kc1`               | 3917   | roc_auc |
+
+Стартовый набор — первые три. KEEP: хотя бы одна задача с δ ≥ `min_delta` (0.01) и ни одной регрессии сильнее порога.
+
+## Research vs prod
+
+| Prod (точка входа) | Research (не вход) |
+|---|---|
+| `python -m fedotllm.agents.evolve …` | `research/`, `docs/evolve/` notes, `evolve-artifacts/` |
+| `fedotllm/agents/evolve/` | ночные брифы, campaign dumps, live_run |
+| `tests/unit/agents/test_evolve_*.py` | `tests/research/` |
+
+`research/` не импортируется как пакет агента. Скрипты кампании и клон FEDOT внутри research не коммитятся.
+
+## Запуск
+
+Нужны checkout FEDOT и ключ `FEDOTLLM_LLM_API_KEY` (OpenRouter). Секреты только в `.env`, не в репозитории.
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# среда и контракт модели / FEDOT
+.venv/bin/python -m fedotllm.agents.evolve doctor --fedot /path/to/FEDOT
+
+# hunt: патчи в очередь, без часового Fedot
+.venv/bin/python -m fedotllm.agents.evolve run \
+  --fedot /path/to/FEDOT \
+  --workspace /tmp/evolve-agent-run \
+  --presets fedotllm:openrouter
+
+# сервер: один раз прогреть stock-кэш (~1 ч на задачу, параллельно по cpu-quota)
+export EVOLVE_QUALITY_STOCK_CACHE=/path/to/stock_cache
+.venv/bin/python -m fedotllm.agents.evolve quality-job \
+  --stock-only \
+  --fedot /path/to/FEDOT \
+  --workspace /path/to/quality_run \
+  --tasks openml-31-credit-g,openml-10101-blood-transfusion,openml-37-diabetes \
+  --n-jobs 10 --cpu-quota 32
+
+# сервер: сравнить конкретный checkout патча с кэшем
+.venv/bin/python -m fedotllm.agents.evolve quality-job \
+  --fedot /path/to/FEDOT \
+  --patch-checkout /path/to/patched-fedot \
+  --workspace /path/to/quality_run
 ```
 
-**Step 2: Clone the repository**
-```bash
-git clone https://github.com/aimclub/FEDOT.LLM.git
-cd FEDOT.LLM
-```
+`run` пишет `<workspace>/runs/<timestamp>-<id>/` и `latest_run.json`. Очередь: `<workspace>/quality_queue/`.
 
-**Step 3: Create and activate virtual environment**
-```bash
-uv venv --python 3.11
-source .venv/bin/activate  # On Unix/macOS
-# Or on Windows:
-# .venv\Scripts\activate
-```
+## Перед релизом
 
-**Step 4: Install dependencies**
-```bash
-uv sync
-```
-
-</details>
-
-#### 🐍 Method 2: Using conda
-
-<details>
-<summary><b>📋 Step-by-step installation with conda</b></summary>
-
-**Step 1: Create conda environment**
-```bash
-conda create -n FedotLLM python=3.11
-conda activate FedotLLM
-```
-
-**Step 2: Clone the repository**
-```bash
-git clone https://github.com/aimclub/FEDOT.LLM.git
-cd FEDOT.LLM
-```
-
-**Step 3: Install dependencies**
-```bash
-pip install -e .
-```
-
-</details>
-
-### 🐳 Quick Start with Docker
-
-For the fastest setup experience, use Docker with our comprehensive Makefile commands:
-
-#### Prerequisites
-- [Docker](https://docs.docker.com/get-docker/) (version 20.10 or later)
-- [Docker Compose](https://docs.docker.com/compose/install/) (version 2.0 or later)
-- [Make](https://www.gnu.org/software/make/) (usually pre-installed on Unix systems)
-
-#### Quick Launch
-```bash
-# Clone the repository
-git clone https://github.com/aimclub/FEDOT.LLM.git
-cd FEDOT.LLM
-
-# Create your .env file with API keys (see Environment Configuration below)
-cp .env.example .env  # Edit with your API keys
-
-# Build and start all services with development features
-make docker-dev-build
-```
-
-The application will be available at:
-- **🌐 Streamlit Web Interface**: [http://localhost:8080](http://localhost:8080)
-
-#### Docker Commands
-
-| Command | Description | Use Case |
-|---------|-------------|----------|
-| `make docker-build` | Build Docker images | 🔨 Manual builds |
-| `make docker-run` | Start services with docker-compose | 🚀 Standard startup |
-| `make docker-dev` | Start development environment with watch mode | 🔄 Active development |
-| `make docker-dev-build` | Build and start development environment | 🆕 First-time setup |
-| `make docker-stop` | Stop all containers | ⏹️ Clean shutdown |
-| `make docker-logs` | View container logs | 🔍 Debugging |
-| `make docker-shell` | Access app container shell | 🐚 Interactive debugging |
-| `make docker-clean` | Clean up containers and images | 🧹 Regular cleanup |
-
-### 🔧 Environment Configuration
-
-FEDOT.LLM requires API keys to access external services. Configure them through environment variables for seamless operation.
-
-#### Option 1: Create `.env` file (Recommended)
-
-Create a `.env` file in the project root:
+Без LLM и без часового Fedot:
 
 ```bash
-# Required API Keys
-FEDOTLLM_LLM_API_KEY=your_llm_api_key_here
-FEDOTLLM_EMBEDDINGS_API_KEY=your_embeddings_api_key_here
+.venv/bin/python -m pytest -q tests/unit/agents/test_evolve_fedot_quality.py \
+  tests/unit/agents/test_evolve_model_contract.py \
+  tests/unit/agents/test_evolve_review_regressions.py
 
-# Optional: For tracing LLM calls with Langfuse
-LANGFUSE_SECRET_KEY=your_langfuse_secret_key_here
-LANGFUSE_PUBLIC_KEY=your_langfuse_public_key_here
+.venv/bin/python -m fedotllm.agents.evolve doctor --fedot /path/to/FEDOT
 ```
 
-#### Option 2: Export directly
+Проверить вручную:
+
+1. `fedotllm/configs/openrouter.yaml` и `model_contract.py`: везде `z-ai/glm-5.3-flash`, `fallback_models: ""`.
+2. Hunt после валидного патча оставляет `quality_queue/*.json` со `status=queued`, а не вызывает `quality-job` inline.
+3. Повторный `quality-job` на том же registry/n_jobs читает stock из `EVOLVE_QUALITY_STOCK_CACHE`, не пересчитывает час.
+4. `queue_priority(no_change, toy_metric_moved=False) == "normal"` — кандидат не отброшен.
+
+Полный pytest продукта: `.venv/bin/python -m pytest -q`.
+
+## CLI (остальное)
+
+| команда | зачем |
+|---|---|
+| `doctor` | checkout, импорт, smoke evaluator |
+| `run` | hunt + очередь |
+| `quality-job` | stock-кэш или stock vs patch |
+| `continue` | продолжить ветку из старого workspace |
+| `leads` | обход repo map, без тестов |
+| `findings` / `scoreboard` / `replay` | журнал, не вход охоты |
+| `benchmark` | компонентные регрессии; LLM только с `--allow-llm` |
+
+## Установка (продукт)
 
 ```bash
-export FEDOTLLM_LLM_API_KEY=your_llm_api_key_here
-export FEDOTLLM_EMBEDDINGS_API_KEY=your_embeddings_api_key_here
-
-# Optional: For tracing LLM calls with Langfuse
-export LANGFUSE_SECRET_KEY=your_langfuse_secret_key_here
-export LANGFUSE_PUBLIC_KEY=your_langfuse_public_key_here
+uv venv --python 3.11 && source .venv/bin/activate && uv sync
+# ключи: FEDOTLLM_LLM_API_KEY в .env (файл не коммитить)
 ```
 
-<div align="center">
-
-**🎉 Congratulations! You're ready to explore FEDOT.LLM**
-
-</div>
-
-### 🛠️ Development with Makefile
-
-Our Makefile provides comprehensive automation for development workflows:
-
-#### Essential Commands
-
-| Category | Command | Description |
-|----------|---------|-------------|
-| **🐳 Docker** | `make docker-dev` | Start development environment |
-| | `make docker-build` | Build Docker images |
-| | `make docker-clean` | Clean containers and images |
-| **🧪 Testing** | `make test` | Run tests |
-| | `make test-coverage` | Run tests with coverage |
-| | `make test-watch` | Run tests in watch mode |
-| **🔍 Quality** | `make lint` | Run linting |
-| | `make format` | Format code |
-| | `make quality` | Run all quality checks |
-| **🚀 Apps** | `make streamlit` | Run Streamlit app locally |
-| | `make jupyter` | Start Jupyter notebook |
-| **🛠️ Utils** | `make install` | Install dependencies |
-| | `make clean` | Clean temporary files |
-| | `make help` | Show all commands |
-
-#### Quick Development Setup
-```bash
-# Install dependencies and start development environment
-make dev
-
-# Run quality checks before committing
-make quick-test
-
-# Full project validation
-make full-check
-
-# Reset everything and reinstall
-make reset
-```
-
-## How to Use
-
-FEDOT.LLM provides a high-level API with simple interface through FedotAI class. It can be used to start the whole pipeline of LLM-powered dataset analysis and making predictions using FEDOT.
-
-To use the API, follow these steps:
-
-1. Import FedotAI class
-   ```
-   from fedotllm.main import FedotAI
-   ```
-
-2. Initialize the FedotAI object. The following parameters are required:
-
-* The `task_path` parameter specifies the directory path where the competition files are located.
-* The `inference` parameter chat model to be utilized. A comprehensive list of supported models and providers can be accessed via the litellm official documentation at [https://docs.litellm.ai/docs/providers](https://docs.litellm.ai/docs/providers).
-* The `handlers` parameter is a list of output handlers to be utilized. It is possible to develop custom output handlers or utilize existing ones. For example, `JupyterOutput` includes handlers specifically designed for Jupyter notebooks. To subscribe to all available handlers, use the `subscribe` attribute.
-
-To acquire predictions, use the `ask` method with a string description of the dataset and associated task in an arbitrary form.
-
-```python
-# Import necessary modules and classes
-import os
-from pathlib import Path
-
-from fedotllm.data.loaders import PathDatasetLoader
-from fedotllm.llm.inference import AIInference
-from fedotllm.main import FedotAI
-from fedotllm.output.jupyter import JupyterOutput
-
-# Initialize the LLM model
-inference = AIInference(model="openai/gpt-4o", api_key=os.getenv('FEDOTLLM_LLM_API_KEY'))
-
-# Set the path to the dataset
-# Load the dataset using PathDatasetLoader
-dataset_path = Path('datasets') / 'Health_Insurance'
-
-# Define the task description for the model
-msg="""Create a model that perform this task:
-Our client is an insurance company that has provided health insurance to its customers.
-They are interested in whether the policyholders (customers) from last year
-will also be interested in the car insurance provided by the company."""
-
-# Initialize FedotAI with the dataset, language model, and output handlers
-fedot_ai = FedotAI(
-        task_path=dataset_path,
-        inference=inference,
-        workspace=output_path,
-        handlers=JupyterOutput().subscribe
-    )
-
-# Asynchronously process the task using FedotAI
-# The loop continues until the task is completed
-async for _ in fedot_ai.ask(message=msg):
-    continue
-```
-
-## Examples and demo
-
-You can also use the Streamlit web interface for a more interactive experience. To run it:
-
-```zsh
-uv run python -m streamlit run fedotllm/web/streamlit-app.py
-```
-
-Funding
-=======
-
-This research is financially supported by the Foundation for
-National Technology Initiative's Projects Support as a part of the roadmap
-implementation for the development of the high-tech field of
-Artificial Intelligence for the period up to 2030 (agreement 70-2021-00187)
+Docker / Streamlit / `FedotAI` — как в upstream. Этот README про evolve-контур.

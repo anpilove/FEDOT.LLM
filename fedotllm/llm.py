@@ -1,3 +1,5 @@
+import json
+import math
 import os
 import queue
 import threading
@@ -8,7 +10,8 @@ import litellm
 import tiktoken
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from pydantic import BaseModel, ValidationError
-from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
+from openai import OpenAIError
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from fedotllm import prompts
 from fedotllm.configs.schema import EmbeddingsConfig, LLMConfig
@@ -17,7 +20,11 @@ from fedotllm.utils.parsers import parse_json
 
 T = TypeVar("T", bound=BaseModel)
 LLM_TIMEOUT_SECONDS = float(os.getenv("FEDOTLLM_LLM_TIMEOUT", "120"))
-LLM_RETRY_ATTEMPTS = int(os.getenv("FEDOTLLM_LLM_RETRY_ATTEMPTS", "2"))
+# One initial provider request plus at most one transient retry. Clamp the
+# legacy environment override so higher layers cannot multiply requests.
+LLM_RETRY_ATTEMPTS = min(
+    2, max(1, int(os.getenv("FEDOTLLM_LLM_RETRY_ATTEMPTS", "2")))
+)
 
 litellm._logging._disable_debugging()
 
@@ -31,6 +38,61 @@ if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
 
 class LLMRequestTimeout(TimeoutError):
     """A provider exceeded the total wall-clock budget for one request."""
+
+
+class EmptyLLMResponse(RuntimeError):
+    """A provider completed a request without emitting user-visible content."""
+
+
+_NON_RETRYABLE_PROVIDER_MARKERS = (
+    "access denied by security policy",
+    "content policy",
+    "policy violation",
+    "request was blocked",
+    "moderation",
+)
+
+
+def _retryable_provider_error(exc: BaseException) -> bool:
+    """Retry one transient provider failure, never policy or run-budget stops."""
+
+    if type(exc).__name__ == "EvolveBudgetExhausted":
+        return False
+    if any(marker in str(exc).lower() for marker in _NON_RETRYABLE_PROVIDER_MARKERS):
+        return False
+    return isinstance(exc, (LLMRequestTimeout, OpenAIError, ConnectionError))
+
+
+def _provider_retry_wait(retry_state) -> float:
+    """Respect numeric Retry-After, including OpenRouter's wrapped error body."""
+    fallback = wait_exponential(multiplier=1, min=4, max=10)(retry_state)
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if exc is None:
+        return fallback
+    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+    delay = headers.get("retry-after") or headers.get("Retry-After")
+    if delay is None:
+        # LiteLLM APIError drops the response/body but retains the JSON message.
+        message = str(getattr(exc, "message", ""))
+        start = message.find("{")
+        try:
+            body, _ = json.JSONDecoder().raw_decode(message[start:]) if start >= 0 else ({}, 0)
+            metadata = body.get("error", {}).get("metadata", {})
+            nested_headers = metadata.get("headers", {})
+            delay = nested_headers.get("Retry-After") or nested_headers.get("retry-after")
+        except (ValueError, AttributeError, TypeError):
+            delay = None
+    try:
+        seconds = float(delay)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(seconds) or seconds < 0:
+        return fallback
+    # Keep the existing retry count bounded; do not resend before the provider's
+    # requested delay. Logging exposes the pause without printing the error body.
+    wait = max(fallback, seconds)
+    logger.info("LLM provider requested retry after %gs", wait)
+    return wait
 
 
 def completion_with_timeout(messages: list[dict[str, Any]], params: dict[str, Any]):
@@ -88,16 +150,42 @@ class AIInference:
                 type=LiteLLMCacheType.DISK, disk_cache_dir=config.caching.dir_path
             )
 
+    def _primary_model(self) -> str:
+        return f"{self.config.provider}/{self.config.model_name}"
+
+    def _model_chain(self) -> list[str]:
+        primary = self._primary_model()
+        raw = os.environ.get("FEDOTLLM_LLM_FALLBACK") or self.config.fallback_models or ""
+        prefix = f"{self.config.provider}/"
+        chain = [primary]
+        for item in raw.split(","):
+            name = item.strip()
+            if not name:
+                continue
+            model = name if "/" in name and name.startswith(prefix) else f"{prefix}{name}"
+            if model not in chain:
+                chain.append(model)
+        return chain
+
     @retry(
-        stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_not_exception_type(LLMRequestTimeout),
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=2),
+        retry=retry_if_exception(lambda exc: isinstance(exc, EmptyLLMResponse)),
         reraise=True,
     )
     def create(self, messages: str, response_model: Type[T]) -> T:
+        """Create one typed response with at most one JSON-correction query.
+
+        Transport retries belong exclusively to :meth:`query`.  Retrying this
+        whole method used to multiply provider calls after transport errors.
+        An empty completed response gets one fresh request; schema correction
+        remains bounded to one query inside the same structured call.
+        """
         messages = f"{messages}\n{prompts.utils.structured_response(response_model)}"
         response = self.query(messages)
-        json_obj = parse_json(response) if response else None
+        if not response or not response.strip():
+            raise EmptyLLMResponse("LLM returned no structured response")
+        json_obj = parse_json(response)
         try:
             return response_model.model_validate(json_obj)
         except ValidationError as exc_info:
@@ -108,8 +196,8 @@ class AIInference:
 
     @retry(
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_not_exception_type(LLMRequestTimeout),
+        wait=_provider_retry_wait,
+        retry=retry_if_exception(_retryable_provider_error),
         reraise=True,
     )
     def query(self, messages: str | List[Dict[str, Any]]) -> str | None:
@@ -118,7 +206,28 @@ class AIInference:
             if isinstance(messages, str)
             else messages
         )
-        logger.debug("Sending messages to LLM: %s", messages)
+        last: LLMRequestTimeout | None = None
+        try:
+            for model in self._model_chain():
+                self.completion_params["model"] = model
+                logger.debug(
+                    "LLM request %s: %s messages, %s chars",
+                    model,
+                    len(messages),
+                    sum(len(str(item.get("content", ""))) for item in messages),
+                )
+                try:
+                    return self._complete(messages)
+                except LLMRequestTimeout as exc:
+                    last = exc
+                    logger.warning("LLM timeout on %s, trying fallback", model)
+                    continue
+        finally:
+            self.completion_params["model"] = self._primary_model()
+        assert last is not None
+        raise last
+
+    def _complete(self, messages: list[dict[str, Any]]) -> str:
         response = completion_with_timeout(messages, self.completion_params)
         usage = getattr(response, "usage", None)
 
@@ -146,10 +255,9 @@ class AIInference:
         self.usage["completion_tokens"] += int(number(usage, "completion_tokens"))
         self.usage["cached_tokens"] += int(number(details, "cached_tokens"))
         self.usage["cost_usd"] += cost
-        logger.debug(
-            "Received response from LLM: %s", response.choices[0].message.content
-        )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content or ""
+        logger.debug("LLM response %s: %s chars", self.completion_params["model"], len(content))
+        return content
 
 
 class LiteLLMEmbeddings:

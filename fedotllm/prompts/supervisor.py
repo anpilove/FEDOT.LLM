@@ -1,22 +1,6 @@
-def choose_next_prompt(has_evolve: bool = False) -> str:
-    evolve_block = (
-        """
-Choose 'evolve' when:
-- The user asks to evolve / improve / patch / actualize the aimclub/FEDOT library itself
-- Background repo-level code evolution of FEDOT (not a user DS-task AutoML run)
-- Requests to find a small safe fix in FEDOT source and validate with pytest
-"""
-        if has_evolve
-        else ""
-    )
-    allowed = (
-        "automl, researcher, evolve or finish" if has_evolve else "automl, researcher or finish"
-    )
-    regex = (
-        "^(automl|researcher|evolve|finish)$"
-        if has_evolve
-        else "^(automl|researcher|finish)$"
-    )
+def choose_next_prompt() -> str:
+    allowed = "automl, researcher or finish"
+    regex = "^(automl|researcher|finish)$"
     return f"""
 I want you to act as a conversation flow supervisor analyzing dialogues between users and AI agents. Your task is to evaluate each conversation turn and determine the next appropriate action by following these rules:
 
@@ -33,7 +17,6 @@ Choose 'researcher' when:
 - The user needs clarification on Fedot's architecture or components
 - Technical details about Fedot's functionality are requested
 
-{evolve_block}
 Choose 'finish' when:
 - The user's request has been fully addressed
 

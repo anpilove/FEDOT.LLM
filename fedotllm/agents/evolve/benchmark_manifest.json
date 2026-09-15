@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "fedot_commit": "8990f28b0664c99f7eb2fddcee3931151fe16e79",
+  "data_root": "examples/real_cases/data",
+  "files": {
+    "scoring/scoring_train.csv": "e8a242a5f9fb2cef41d189ff8a998791973062ccdec8ccd3e53d274220dcb9cb",
+    "scoring/scoring_test.csv": "b8090a663216bc2a5bc48c756a7a4f8a7b3c66fe46009102dec92b48c648a940",
+    "cancer/cancer_train.csv": "169affbb869c805ab3a8bed74eee5a0660d019f2826a84a3ac1223c0ba513ce1",
+    "cancer/cancer_test.csv": "6f1e934d865e1a6a4917f986907235cf52235f049e0db025320baf4a407ae406",
+    "kc2/kc2.csv": "989639561c644eb4d3621bd7f26271eadd43758a57aee61c1bad3cfab6f9f7c8",
+    "cholesterol/cholesterol.csv": "bff79c7448b291f460052ca1f1da6fe7aee8ddb9c2858f264601ffa1481e0647",
+    "river_levels/station_levels.csv": "07a7c3fa59fb87922f5c929b52e7efb881776d9ff1f41999f7f335ce5e3a585a",
+    "metocean/metocean_data_train.csv": "dd0eeedc7ff26d4f4388896f434a2770b5008e213c7b72be17f29936f4357443",
+    "time_series/temperature.csv": "cee2fa66f87286c6595c89ff275a4e16400c5a91a1b3715afeda7f6286b344a1",
+    "time_series/traffic.csv": "e2662462792e32a657e647ad56230670c4fa93f42ec0b591e88fc1165ccbb0a6",
+    "time_series/economic_data.csv": "cf3758a3542894e7a8021b75aa8e056c27aca835573684665c5178d65a42c6d2",
+    "arctic/topaz_multi_ts.csv": "79140033ac6d55f3e6f02283a6c9800517363a8e62ec7393d359438cffefc574",
+    "nemo/sea_surface_height.csv": "9d01ab581f7664f55530dfe1638891369c99e54f35622bc6f94d5a1aed883c64"
+  },
+  "split": {
+    "seed": 42,
+    "single_csv": [0.6, 0.2, 0.2],
+    "separate_test_csv": [0.5, 0.5],
+    "confirmation_seeds": [42, 43, 44]
+  }
+}
+

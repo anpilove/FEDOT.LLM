@@ -1,13 +1,58 @@
+import json
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+import litellm
 from pydantic import BaseModel, Field, ValidationError
 from tenacity import wait_none
 
 from fedotllm.configs.schema import LLMConfig
-from fedotllm.llm import AIInference, LLMRequestTimeout
+from fedotllm.llm import AIInference, EmptyLLMResponse, LLMRequestTimeout, _provider_retry_wait
+
+
+def _inflight_error():
+    return litellm.APIError(
+        status_code=402,
+        message='APIError: OpenrouterException - ' + json.dumps({
+            'error': {'metadata': {'reason': 'in_flight_budget_exhausted',
+                                  'headers': {'Retry-After': '120'}}}
+        }),
+        llm_provider='openrouter', model='test-model',
+    )
+
+
+def test_query_honors_inflight_retry_delay(llm_config, monkeypatch):
+    inference = AIInference(llm_config)
+    inference._complete = MagicMock(side_effect=[_inflight_error(), 'ok'])
+    pauses = []
+    monkeypatch.setattr(inference.query.retry, 'sleep', pauses.append)
+    monkeypatch.setattr(inference.query.retry, 'wait', _provider_retry_wait)
+    assert inference.query('same request') == 'ok'
+    assert pauses == [120.0]
+    assert inference._complete.call_count == 2
+    assert inference._complete.call_args_list[0] == inference._complete.call_args_list[1]
+
+
+def test_structured_call_does_not_multiply_transport_retries(llm_config, monkeypatch):
+    inference = AIInference(llm_config)
+    inference._complete = MagicMock(side_effect=_inflight_error())
+    pauses = []
+    monkeypatch.setattr(inference.query.retry, 'sleep', pauses.append)
+    monkeypatch.setattr(inference.query.retry, 'wait', _provider_retry_wait)
+    monkeypatch.setattr(inference.create.retry, 'sleep', lambda _: None)
+    with pytest.raises(litellm.APIError):
+        inference.create('request', response_model=UserModel)
+    assert inference._complete.call_count == 2
+    assert pauses == [120.0]
+
+
+@pytest.mark.parametrize('delay,expected', [('27', 27), ('nan', 4), ('-1', 4), ('invalid', 4)])
+def test_provider_retry_http_headers(delay, expected):
+    exc = SimpleNamespace(response=SimpleNamespace(headers={'retry-after': delay}))
+    state = SimpleNamespace(outcome=SimpleNamespace(exception=lambda: exc), attempt_number=1)
+    assert _provider_retry_wait(state) == expected
 
 
 class UserModel(BaseModel):
@@ -72,7 +117,7 @@ def test_query_accumulates_provider_usage(mock_litellm, llm_config):
 
 
 @patch("fedotllm.llm.litellm")
-def test_query_has_a_wall_clock_timeout(mock_litellm, llm_config):
+def test_query_has_a_wall_clock_timeout(mock_litellm, llm_config, monkeypatch):
     llm_config.completion_params["timeout"] = 0.01
 
     def hangs(**_kwargs):
@@ -80,10 +125,52 @@ def test_query_has_a_wall_clock_timeout(mock_litellm, llm_config):
 
     mock_litellm.completion.side_effect = hangs
     inference = AIInference(llm_config)
+    monkeypatch.setattr(inference.query.retry, "wait", wait_none())
 
     with pytest.raises(LLMRequestTimeout, match="wall-clock"):
         inference.query("never finishes")
-    assert mock_litellm.completion.call_count == 1
+    assert mock_litellm.completion.call_count == 2
+
+
+@patch("fedotllm.llm.litellm")
+def test_query_falls_back_after_timeout(mock_litellm, llm_config):
+    llm_config.completion_params["timeout"] = 0.01
+    llm_config.fallback_models = "small-model"
+
+    def hang_then_ok(**kwargs):
+        if kwargs["model"].endswith("small-model"):
+            return MagicMock(choices=[MagicMock(message=MagicMock(content="ok"))])
+        time.sleep(0.1)
+        raise AssertionError("primary should have been timed out")
+
+    mock_litellm.completion.side_effect = hang_then_ok
+    inference = AIInference(llm_config)
+    assert inference.query("hello") == "ok"
+    models = [call.kwargs["model"] for call in mock_litellm.completion.call_args_list]
+    assert models[0].endswith("test-model")
+    assert models[-1].endswith("small-model")
+    assert inference.completion_params["model"].endswith("test-model")
+
+
+@patch("fedotllm.llm.litellm")
+def test_query_does_not_stick_on_fallback(mock_litellm, llm_config):
+    llm_config.completion_params["timeout"] = 0.01
+    llm_config.fallback_models = "small-model"
+    n = {"i": 0}
+
+    def hang_once_then_primary(**kwargs):
+        n["i"] += 1
+        if n["i"] == 1:
+            time.sleep(0.1)
+            raise AssertionError("primary should have been timed out")
+        return MagicMock(choices=[MagicMock(message=MagicMock(content="ok"))])
+
+    mock_litellm.completion.side_effect = hang_once_then_primary
+    inference = AIInference(llm_config)
+    inference.query("first")
+    assert inference.query("second") == "ok"
+    models = [call.kwargs["model"] for call in mock_litellm.completion.call_args_list]
+    assert models[-1].endswith("test-model")
 
 
 def test_create_structured_object(llm_config):
@@ -130,8 +217,6 @@ def test_create_structured_object_missing_field(llm_config):
             'name: "John Doe", "age": 30, "email": "john@example.com", "active": true',
             r".*valid dictionary.*",
         ),
-        ("", r".*valid dictionary.*"),
-        (None, r".*valid dictionary.*"),
     ],
 )
 def test_create_structured_object_invalid_format(response, expected_error, llm_config):
@@ -142,6 +227,18 @@ def test_create_structured_object_invalid_format(response, expected_error, llm_c
     inference.create.retry.wait = wait_none()  # Disable retry for this test
     with pytest.raises(ValidationError, match=expected_error):
         inference.create(messages="", response_model=UserModel)
+
+
+@pytest.mark.parametrize("response", ["", None])
+def test_create_retries_empty_provider_response(response, llm_config):
+    inference = AIInference(llm_config)
+    inference.query = MagicMock(return_value=response)
+    inference.create.retry.wait = wait_none()
+
+    with pytest.raises(EmptyLLMResponse, match="no structured response"):
+        inference.create(messages="", response_model=UserModel)
+
+    assert inference.query.call_count == 2
 
 
 @pytest.mark.parametrize(

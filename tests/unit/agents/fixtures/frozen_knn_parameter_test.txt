@@ -1,0 +1,22 @@
+def test_pipeline_with_custom_params_for_model(data_setup):
+    data = data_setup
+    custom_params = dict(n_neighbors=1,
+                         weights='uniform',
+                         p=1)
+
+    first = PipelineNode(operation_type='logit')
+    second = PipelineNode(operation_type='lda')
+    final = PipelineNode(operation_type='knn', nodes_from=[first, second])
+
+    pipeline = Pipeline(final)
+    pipeline_default_params = deepcopy(pipeline)
+
+    pipeline.root_node.parameters = custom_params
+
+    pipeline_default_params.fit(data)
+    pipeline.fit(data)
+
+    custom_params_prediction = pipeline.predict(data).predict
+    default_params_prediction = pipeline_default_params.predict(data).predict
+
+    assert not np.array_equal(custom_params_prediction, default_params_prediction)

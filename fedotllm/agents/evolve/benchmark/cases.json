@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "pca_numeric_projection",
+      "status": "confirmed",
+      "base_commit": "8990f28b0664c99f7eb2fddcee3931151fe16e79",
+      "file_path": "fedot/core/operations/evaluation/operation_implementations/data_operations/sklearn_transformations.py",
+      "symbol": "PCAImplementation.fit/transform",
+      "operation": "pca->catboost",
+      "expected_outcome": "stock crash is recovered and DEV/FINAL quality exceeds the sentinel without protect regressions",
+      "provenance": "docs/evolve/NIGHT_RESEARCH_REPORT.md and /tmp/metric-agent-judge-ceiling/ceiling.json"
+    },
+    {
+      "case_id": "rf_default_min_samples_leaf_2",
+      "status": "confirmed",
+      "base_commit": "8990f28b0664c99f7eb2fddcee3931151fe16e79",
+      "file_path": "fedot/core/repository/data/default_operation_params.json",
+      "symbol": "rf default parameters",
+      "operation": "rf",
+      "expected_outcome": "DEV and FINAL improve on at least two of seeds 42/43/44 without threshold-level regressions across rf, cancer and kc2",
+      "provenance": "docs/evolve/RF_LEAF2_CALIBRATION.md and /tmp/evolve-manual-rf-leaf2-final/journal.jsonl"
+    }
+  ],
+  "provisional_historical_files": [
+    "fedot/core/data/data.py",
+    "fedot/core/data/merge/data_merger.py",
+    "fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py",
+    "fedot/core/operations/evaluation/operation_implementations/models/knn.py"
+  ],
+  "policy": "A provisional case becomes confirmed only after its canonical patch changes the frozen DEV and FINAL metric in the expected direction."
+}

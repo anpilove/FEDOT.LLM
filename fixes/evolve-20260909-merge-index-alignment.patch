@@ -1,0 +1,33 @@
+--- a/fedot/core/data/merge/data_merger.py
++++ b/fedot/core/data/merge/data_merger.py
+@@ -110,6 +110,30 @@
+             common_predicts = [self.select_common(output.idx, output.predict) for output in self.outputs]
+             if not are_same_length(common_predicts):
+                 raise ValueError('Indices of merged data are not equal and not unique. Check validity of the pipeline.')
++            # Align every parent's rows to the canonical index order of the main output
++            # so rows from different parents are joined by index value, not by position.
++            # Reorder only when it is unambiguous (unique indices on both sides);
++            # otherwise keep the legacy per-parent order.
++            canonical_idx = self.select_common(self.main_output.idx)
++            canonical_is_unique = len(np.unique(canonical_idx)) == len(canonical_idx)
++            aligned_predicts = []
++            for output, predict in zip(self.outputs, common_predicts):
++                output_idx = self.select_common(output.idx)
++                if np.array_equal(output_idx, canonical_idx) or not canonical_is_unique:
++                    aligned_predicts.append(predict)
++                    continue
++                if len(np.unique(output_idx)) != len(output_idx):
++                    aligned_predicts.append(predict)
++                    continue
++                # O(n): one index-to-position mapping instead of a scan per row
++                position_of_index = {index: position for position, index in enumerate(output_idx.tolist())}
++                try:
++                    rows = [position_of_index[index] for index in canonical_idx.tolist()]
++                except KeyError:
++                    aligned_predicts.append(predict)
++                    continue
++                aligned_predicts.append(predict[rows])
++            common_predicts = aligned_predicts
+         return common_predicts
+ 
+     def preprocess_predicts(self, predicts: List[np.array]) -> List[np.array]:

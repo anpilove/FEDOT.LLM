@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "mechanisms": [
+    {
+      "case_id": "partial_poly_params",
+      "contract_id": "partial_operation_parameters",
+      "file_path": "fedot/core/operations/evaluation/operation_implementations/data_operations/sklearn_transformations.py",
+      "mechanism": "PolyFeaturesImplementation forwards absent optional degree or interaction_only parameters as None, overriding sklearn PolynomialFeatures defaults and making a valid partially specified public operation fail.",
+      "proposed_change": "Forward only explicitly supplied polynomial parameters so omitted values retain estimator defaults."
+    },
+    {
+      "case_id": "lda_effective_solver",
+      "contract_id": "lda_shrinkage_solver_compatibility",
+      "file_path": "fedot/core/operations/evaluation/operation_implementations/models/discriminant_analysis.py",
+      "mechanism": "LDA accepts shrinkage while retaining the incompatible default svd solver, so a valid public parameter combination reaches sklearn and raises NotImplementedError.",
+      "proposed_change": "Select a shrinkage-compatible effective solver when shrinkage is supplied and no compatible solver was explicitly chosen."
+    },
+    {
+      "case_id": "lagged_reproducibility",
+      "contract_id": "lagged_window_reproducibility",
+      "file_path": "fedot/core/operations/evaluation/operation_implementations/data_operations/ts_transformations.py",
+      "mechanism": "Oversized lagged windows are corrected with a random draw, so identical fits on identical time-series data choose different effective windows and fitted behavior.",
+      "proposed_change": "Use one deterministic, legal correction derived from the input series and forecast horizon."
+    },
+    {
+      "case_id": "polyfit_parameter_identity",
+      "contract_id": "parameter_identity_after_fit",
+      "file_path": "fedot/core/operations/evaluation/operation_implementations/models/ts_implementations/poly.py",
+      "mechanism": "Polyfit writes a fit-time corrected degree back into public OperationParameters, changing PipelineNode.descriptive_id and cache identity during fit.",
+      "proposed_change": "Keep the corrected degree in fitted implementation state without mutating public node parameters."
+    },
+    {
+      "case_id": "nonfinite_target_preprocessing",
+      "contract_id": "finite_numeric_target",
+      "file_path": "fedot/preprocessing/preprocessing.py",
+      "mechanism": "Fit-time preprocessing normalizes non-finite features but lets positive or negative infinity in a numeric target reach downstream estimators instead of handling it consistently with missing targets.",
+      "proposed_change": "Normalize non-finite numeric target values before the ordinary missing-target policy is applied."
+    },
+    {
+      "case_id": "merge_parent_index_alignment",
+      "contract_id": "merge_row_identity",
+      "file_path": "fedot/core/data/merge/data_merger.py",
+      "mechanism": "DataMerger filters each parent by index membership while preserving each parent's local row order, then concatenates by position and mixes sample identities when unique parent indices have different orders.",
+      "proposed_change": "Align unique parent rows to the main output's canonical index order before concatenation while preserving ambiguous duplicate-index behavior."
+    },
+    {
+      "case_id": "single_column_multits_lagged",
+      "contract_id": "single_column_multits_shape",
+      "file_path": "fedot/core/operations/evaluation/operation_implementations/data_operations/ts_transformations.py",
+      "mechanism": "The lagged transformation mistakes one time-series column for one-dimensional input, leaves a valid shape (n, 1) array two-dimensional, and constructs an invalid three-dimensional lag tensor.",
+      "proposed_change": "Choose flattening from input dimensionality and ravel every column of a two-dimensional input, including a single-column input."
+    }
+  ]
+}

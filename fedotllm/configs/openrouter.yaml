@@ -1,7 +1,12 @@
 # OpenRouter preset — FEDOTLLM_LLM_API_KEY=sk-or-v1-...
 llm:
   provider: openrouter
-  model_name: openai/gpt-5.4-mini
+  # The only generative model used by the research loop. Improve retrieval,
+  # runtime evidence and feedback instead of escalating to expensive models.
+  model_name: z-ai/glm-5.3-flash
+  # Keep campaigns comparable: a provider failure is an infrastructure result,
+  # not an implicit model change halfway through the experiment.
+  fallback_models: ""
   base_url: https://openrouter.ai/api/v1
   api_key: ${oc.env:FEDOTLLM_LLM_API_KEY}
   caching:
@@ -10,20 +15,20 @@ llm:
     HTTP-Referer: https://github.com/aimclub/FEDOT.LLM
     X-Title: FEDOT.LLM-EvolveAgent
   completion_params:
-    # Abort a provider that stops producing a response; AIInference retries once.
-    # Generous on purpose: this bounds a hung request, not a slow answer. At 120
-    # a reasoning model lost half the reader's files to LLMRequestTimeout — the
-    # model was working, the clock was not. Measured on 10 FEDOT files:
-    # `stealth/ox-alpha` went from 5 failures to 0 when this moved to 600.
-    timeout: 600
-    # `temperature` is not among this model family's supported parameters, so
-    # runs are pinned with `seed` instead — same purpose (comparable arms), the
-    # one the provider actually honours.
+    # The cheap reasoning model produced valid high-context Fixer answers at
+    # 109s and repeatedly lost the next repair at the old 120s boundary.  Keep
+    # a finite ceiling, but leave enough wall-clock for the same model rather
+    # than escalating to a more expensive fallback.
+    timeout: 180
     seed: 42
-    # A multi-hunk proposal (two OLD/NEW pairs plus a full pytest function) does
-    # not fit in 2048: the tail was cut and the test was lost. Billing is per
-    # token generated, so a larger ceiling costs nothing when answers are short.
-    max_tokens: 6144
+    # GLM is a reasoning model. Low effort is sufficient for bounded Scout/Fixer
+    # tool decisions and prevents hidden reasoning from consuming the whole
+    # completion budget before a structured answer is emitted.
+    reasoning:
+      effort: low
+    # Includes reasoning tokens on OpenRouter. Both stage clients honor this
+    # explicit budget so reasoning cannot exhaust a hidden smaller Scout cap.
+    max_tokens: 8000
 embeddings:
   provider: openrouter
   model_name: openai/text-embedding-3-small
@@ -37,12 +42,5 @@ langfuse:
   public_key: null
   secret_key: null
 evolve:
-  reader_model: deepseek/deepseek-v4-flash
-  # One pass per model. The two disagree far more than one model run twice —
-  # on ten FEDOT files they shared 3 of 16 suspicions — so the second model buys
-  # recall, and `stealth/ox-alpha` is free, which is the scarce resource here.
-  # It is a reasoning model and roughly seven times slower; the passes run
-  # concurrently, so the cost is wall time, not money. Set
-  # FEDOTLLM_EVOLVE_READER_MODELS to one name to go back to a single pass.
-  reader_models: deepseek/deepseek-v4-flash,stealth/ox-alpha
-  verifier_model: deepseek/deepseek-v4-flash
+  reader_model: z-ai/glm-5.3-flash
+  fixer_model: z-ai/glm-5.3-flash

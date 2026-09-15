@@ -1,0 +1,18 @@
+--- a/test/unit/pipelines/test_pipeline.py
++++ b/test/unit/pipelines/test_pipeline.py
+@@ -231,7 +231,14 @@
+     custom_params_prediction = pipeline.predict(data).predict
+     default_params_prediction = pipeline_default_params.predict(data).predict
+ 
+-    assert not np.array_equal(custom_params_prediction, default_params_prediction)
++    actual_params = pipeline.root_node.fitted_operation.model.get_params()
++    assert {key: actual_params[key] for key in custom_params} == custom_params
++    # Different settings may legitimately produce identical predictions,
++    # especially on training rows (e.g. distance-weighted KNN and one neighbor).
++    assert custom_params_prediction.shape == default_params_prediction.shape
++    assert custom_params_prediction.shape[0] == len(data.idx)
++    assert np.isfinite(custom_params_prediction).all()
++    assert np.isfinite(default_params_prediction).all()
+ 
+ 
+ def test_pipeline_with_wrong_data():

@@ -1,3 +1,4 @@
-from fedotllm.agents.evolve.agent import EvolveAgent
+"""EvolveAgent: patch FEDOT source, keep iff frozen holdout metric rises.
 
-__all__ = ["EvolveAgent"]
+The LLM never reads this package's scorer or harness graph ids.
+"""
