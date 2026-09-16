@@ -33,16 +33,9 @@ Toy / frozen PipelineBuilder / behavior-probe `no_change` (δ=0) **не откл
 
 ### Реестр качества
 
-`fedotllm/agents/evolve/evaluation/quality_registry.json`:
+`fedotllm/agents/evolve/evaluation/quality_registry.json`: 24 полные classification-задачи, official OpenML fold 0 (`repeat=0`), плюс 3 полные public TS-серии FEDOT (`fedot-ts-beer`, `fedot-ts-australia`, `fedot-ts-salaries`). OpenML-правило зафиксировано до скоров: первые 20 task_id из OpenML-CC18 (study 99) плюс уже зарегистрированные AMLB/CC18 вне этого префикса (`10101`, `3917`, `9952`, `146818`). Не toy CSV и не весь 72-набор.
 
-| task id                         | OpenML | метрика |
-|---------------------------------|--------|---------|
-| `openml-31-credit-g`            | 31     | roc_auc |
-| `openml-10101-blood-transfusion`| 10101  | roc_auc |
-| `openml-37-diabetes`            | 37     | roc_auc |
-| `openml-3917-kc1`               | 3917   | roc_auc |
-
-Стартовый набор — первые три. KEEP: хотя бы одна задача с δ ≥ `min_delta` (0.01) и ни одной регрессии сильнее порога.
+Стартовый набор — весь реестр. Default `quality-drain` гоняет 24 OpenML на табличные патчи и TS-задачи на TS-патчи; неподходящие task_id пропускаются и не становятся verdict. KEEP: хотя бы одна применимая задача с δ ≥ `min_delta` и ни одной регрессии сильнее порога.
 
 ## Research vs prod
 
@@ -74,7 +67,6 @@ export EVOLVE_QUALITY_STOCK_CACHE=/path/to/stock_cache
   --stock-only \
   --fedot /path/to/FEDOT \
   --workspace /path/to/quality_run \
-  --tasks openml-31-credit-g,openml-10101-blood-transfusion,openml-37-diabetes \
   --n-jobs 10 --cpu-quota 32
 
 # сервер: сравнить конкретный checkout патча с кэшем
@@ -114,6 +106,7 @@ export EVOLVE_QUALITY_STOCK_CACHE=/path/to/stock_cache
 | `doctor` | checkout, импорт, smoke evaluator |
 | `run` | hunt + очередь |
 | `quality-job` | stock-кэш или stock vs patch |
+| `quality-drain` | stock всего реестра, затем очередь патчей |
 | `continue` | продолжить ветку из старого workspace |
 | `leads` | обход repo map, без тестов |
 | `findings` / `scoreboard` / `replay` | журнал, не вход охоты |

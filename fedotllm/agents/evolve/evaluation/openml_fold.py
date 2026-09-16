@@ -1,4 +1,4 @@
-"""Load a pre-registered OpenML task fold. Not used by hunt."""
+"""Load a pre-registered OpenML fold or public FEDOT TS series. Not used by hunt."""
 
 from __future__ import annotations
 
@@ -11,6 +11,12 @@ from fedotllm.agents.evolve.evaluation.quality_registry import QualityDataset
 
 _OPENML_JSON = "https://www.openml.org/api/v1/json"
 _OPENML_SPLITS = "https://www.openml.org/api_splits/get/{task}/{task}"
+_FEDOT_TS_RAW = "https://raw.githubusercontent.com/aimclub/FEDOT/master/examples/data/ts/{name}.csv"
+_FEDOT_TS_FILES = {
+    "beer": "beer.csv",
+    "australia": "australia.csv",
+    "salaries": "salaries.csv",
+}
 
 
 def cache_root() -> Path:
@@ -18,8 +24,10 @@ def cache_root() -> Path:
 
 
 def load_registered_fold(dataset: QualityDataset) -> dict:
-    """Return train/test frames for the locked official fold."""
+    """Return train/test frames for the locked official fold or TS holdout."""
 
+    if dataset.source == "fedot_public_ts":
+        return load_fedot_public_ts(dataset)
     try:
         import openml
 
@@ -134,6 +142,63 @@ def _parse_split_row(parts: list[str]) -> tuple[str, int, int, int] | None:
     except ValueError:
         return None
     return None
+
+
+def _fedot_checkout_ts_csv(name: str) -> Path | None:
+    rel = Path("examples") / "data" / "ts" / _FEDOT_TS_FILES[name]
+    raw = os.environ.get("FEDOTLLM_REPO_PATH")
+    if raw:
+        local = Path(raw) / rel
+        if local.is_file():
+            return local
+    raw_cache = os.environ.get("FEDOTLLM_REPO_CACHE")
+    if raw_cache:
+        local = Path(raw_cache) / rel
+        if local.is_file():
+            return local
+    return None
+
+
+def load_fedot_public_ts(dataset: QualityDataset) -> dict:
+    """Full public FEDOT example series, last-horizon holdout. Not toy CSV."""
+
+    import numpy as np
+    import pandas as pd
+
+    name = dataset.ts_dataset or dataset.name
+    if name not in _FEDOT_TS_FILES:
+        raise ValueError(f"unsupported public TS dataset: {name}")
+    horizon = int(dataset.forecast_horizon)
+    if horizon <= 0:
+        raise ValueError(f"{dataset.task_id}: forecast_horizon must be positive")
+    cached = cache_root() / f"fedot-ts-{name}.csv"
+    source = _fedot_checkout_ts_csv(name)
+    if source is None:
+        if not cached.is_file():
+            url = _FEDOT_TS_RAW.format(name=name)
+            with urllib.request.urlopen(url, timeout=60) as response:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                cached.write_bytes(response.read())
+        source = cached
+    frame = pd.read_csv(source)
+    if "value" not in frame.columns:
+        raise RuntimeError(f"{name}: public TS CSV has no value column")
+    series = np.asarray(pd.to_numeric(frame["value"], errors="coerce"), dtype=float)
+    series = series[np.isfinite(series)]
+    if series.size <= horizon:
+        raise RuntimeError(f"{name}: series shorter than horizon {horizon}")
+    train = series[:-horizon]
+    test = series[-horizon:]
+    return {
+        "X_train": train,
+        "y_train": train,
+        "X_test": train,
+        "y_test": test,
+        "n_train": int(train.size),
+        "n_test": int(test.size),
+        "forecast_horizon": horizon,
+        "loader": "fedot.examples.data.ts",
+    }
 
 
 def describe_task(task_id: int) -> dict:

@@ -694,7 +694,24 @@ def _probe_only_rejection(row: dict) -> bool:
         str(dev.get("reason") or "").startswith("behavior_probe_")
         and dev.get("patched") is None
         and dev.get("target_delta") is None
-        and probe.get("status") in {"missing", "invalid", "no_change", "patched_error"}
+        and probe.get("status") in {"missing", "invalid", "patched_error"}
+    )
+
+
+def _cheap_screen_not_quality_verdict(row: dict) -> bool:
+    """Historical toy δ=0 / probe no_change must stay hour-queue eligible."""
+
+    from fedotllm.agents.evolve.controller.quality_queue import (
+        cheap_screen_not_quality_verdict,
+    )
+
+    probe = row.get("behavior_probe") if isinstance(row.get("behavior_probe"), dict) else {}
+    dev = row.get("dev") if isinstance(row.get("dev"), dict) else {}
+    return cheap_screen_not_quality_verdict(
+        probe_status=str(probe.get("status") or ""),
+        reason=str(dev.get("reason") or row.get("reason") or ""),
+        target_delta=dev.get("target_delta") if "target_delta" in dev else row.get("target_delta"),
+        stage=str(dev.get("stage") or row.get("stage") or ""),
     )
 
 
@@ -704,7 +721,11 @@ def tried_patch_hashes_from_findings(
     source_hash: str = "",
     evaluation_protocol_hash: str = "",
 ) -> set[str]:
-    """Deduplicate source trials, allowing repair of an uninformative probe."""
+    """Deduplicate source trials, allowing repair of an uninformative probe.
+
+    Cheap 100-tree / bit-identical δ=0 / probe ``no_change`` are not durable
+    quality verdicts, so they do not consume hour-queue eligibility.
+    """
 
     return {
         patch_hash
@@ -713,7 +734,7 @@ def tried_patch_hashes_from_findings(
             source_hash=source_hash,
             evaluation_protocol_hash=evaluation_protocol_hash,
         )
-        if not _probe_only_rejection(row)
+        if not _probe_only_rejection(row) and not _cheap_screen_not_quality_verdict(row)
     }
 
 

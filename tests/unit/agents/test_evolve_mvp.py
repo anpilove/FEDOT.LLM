@@ -6564,11 +6564,11 @@ assert np.isfinite(prediction).all(), 'prediction must be finite'
 @pytest.mark.parametrize(
     "first_status,second_probe,expected_probes,expected_metrics",
     [
-        ("no_change", "print(2)", 2, 1),
+        ("no_change", "print(2)", 1, 1),
         ("invalid", "print(2)", 2, 1),
         ("missing", "print(2)", 2, 1),
         ("patched_error", "print(2)", 2, 1),
-        ("no_change", "print(1) # formatting only", 1, 0),
+        ("no_change", "print(1) # formatting only", 1, 1),
         ("changed", "print(2)", 1, 1),
     ],
 )
@@ -6628,7 +6628,9 @@ def test_probe_repair_does_not_consume_an_unmeasured_patch(
     assert len(probes) == expected_probes
     assert len(metrics) == expected_metrics
     assert not decision.keep  # A better probe must never grant metric acceptance.
-    if expected_probes == 1:
+    if first_status in {"no_change", "changed"}:
+        assert decision.reason == "no_affected_metric_signal"
+    elif expected_probes == 1:
         assert decision.reason.startswith("duplicate_patch")
     else:
         assert not decision.reason.startswith("duplicate_patch")
@@ -6833,9 +6835,9 @@ def test_historical_probe_failure_only_deduplicates_the_patch_probe_pair(tmp_pat
         "source_hash": "source",
         "evaluation_protocol_hash": "protocol",
         "patch_hash": "patch",
-        "behavior_probe": {"status": "no_change", "code": "print(1)"},
+        "behavior_probe": {"status": "invalid", "code": "print(1)"},
         "dev": {
-            "reason": "behavior_probe_no_change",
+            "reason": "behavior_probe_invalid",
             "patched": None,
             "target_delta": None,
         },

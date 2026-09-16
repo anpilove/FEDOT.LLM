@@ -115,8 +115,10 @@ def discard_experiment_checkout(
         if checkout == source or checkout in source.parents or source in checkout.parents:
             raise PermissionError("refuse to remove immutable source or its parent")
     marker = checkout / MARKER
+    if not checkout.exists():
+        return
     if not marker.is_file():
-        raise PermissionError(f"missing EvolveAgent ownership marker: {checkout}")
+        return
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

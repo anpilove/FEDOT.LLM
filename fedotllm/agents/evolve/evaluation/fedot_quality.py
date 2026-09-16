@@ -26,16 +26,124 @@ from fedotllm.agents.evolve.execution.process import (
 from fedotllm.agents.evolve.types import Decision, ScoreResult
 
 WORKER_MODULE = "fedotllm.agents.evolve.evaluation._fedot_quality_worker"
+STOCK_CACHE_ENV = "EVOLVE_QUALITY_STOCK_CACHE"
+DEFAULT_STOCK_CACHE = Path("/tmp/evolve-fedot-quality-stock")
+
+
+def bind_stock_cache(path: Path | str | None) -> Path:
+    """Pin local and cluster jobs to the same cache directory."""
+
+    if path is None:
+        return _stock_cache_root()
+    resolved = Path(path).expanduser().resolve()
+    resolved.mkdir(parents=True, exist_ok=True)
+    os.environ[STOCK_CACHE_ENV] = str(resolved)
+    return resolved
 
 
 def _stock_cache_root() -> Path:
-    return Path(os.environ.get("EVOLVE_QUALITY_STOCK_CACHE", "/tmp/evolve-fedot-quality-stock"))
+    return Path(os.environ.get(STOCK_CACHE_ENV, str(DEFAULT_STOCK_CACHE)))
+
+
+def _safe_cache_name(name: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in name)
+
+
+def stock_cache_identity(
+    dataset: QualityDataset,
+    registry: QualityRegistry,
+    *,
+    fedot_commit: str = "",
+) -> dict:
+    """Skip-warm key: dataset, official fold, seed, timeout, preset, FEDOT commit."""
+
+    return {
+        "task_id": dataset.task_id,
+        "fold": int(dataset.fold),
+        "repeat": int(dataset.repeat),
+        "seed": int(registry.seed),
+        "timeout_seconds": int(registry.timeout_seconds),
+        "preset": str(registry.preset),
+        "registry_identity": str(registry.identity),
+        "fedot_commit": str(fedot_commit or ""),
+    }
+
+
+def _fedot_commit(checkout: Path | None) -> str:
+    if checkout is None:
+        return ""
+    try:
+        from fedotllm.agents.evolve.execution.checkout import source_commit
+
+        return source_commit(checkout) or ""
+    except OSError:
+        return ""
 
 
 def _stock_cache_path(dataset: QualityDataset, registry: QualityRegistry, n_jobs: int) -> Path:
     name = f"{registry.identity}__{dataset.task_id}__n{n_jobs}__s{registry.seed}.json"
-    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in name)
-    return _stock_cache_root() / safe
+    return _stock_cache_root() / _safe_cache_name(name)
+
+
+def _iter_stock_cache_paths(
+    dataset: QualityDataset,
+    registry: QualityRegistry,
+    n_jobs: int,
+) -> list[Path]:
+    """Exact n_jobs first, then leftover files with the same identity and another n_jobs."""
+
+    root = _stock_cache_root()
+    exact = _stock_cache_path(dataset, registry, n_jobs)
+    paths: list[Path] = []
+    if exact.is_file():
+        paths.append(exact)
+    prefix = _safe_cache_name(f"{registry.identity}__{dataset.task_id}__")
+    if root.is_dir():
+        for path in sorted(root.glob(f"{prefix}n*__s{registry.seed}.json")):
+            if path not in paths and path.is_file():
+                paths.append(path)
+    return paths
+
+
+def _field_matches(payload: dict, key: str, expected) -> bool:
+    if key not in payload or payload[key] in (None, ""):
+        return True
+    value = payload[key]
+    if isinstance(expected, int):
+        try:
+            return int(value) == expected
+        except (TypeError, ValueError):
+            return False
+    return value == expected
+
+
+def _identity_matches(payload: dict, expected: dict) -> bool:
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    blob = {**payload, **identity}
+    observations = payload.get("metric_observations") or {}
+    if not _field_matches(blob, "task_id", expected["task_id"]):
+        return False
+    if not _field_matches(blob, "fold", expected["fold"]):
+        return False
+    if not _field_matches(blob, "repeat", expected["repeat"]):
+        return False
+    if not _field_matches(blob, "seed", expected["seed"]):
+        return False
+    if not _field_matches(blob, "timeout_seconds", expected["timeout_seconds"]):
+        return False
+    if not _field_matches(observations, "timeout_seconds", expected["timeout_seconds"]):
+        return False
+    if not _field_matches(blob, "preset", expected["preset"]):
+        return False
+    if not _field_matches(observations, "preset", expected["preset"]):
+        return False
+    if not _field_matches(blob, "registry_identity", expected["registry_identity"]):
+        return False
+    stored_commit = str(blob.get("fedot_commit") or "")
+    expected_commit = str(expected.get("fedot_commit") or "")
+    if stored_commit and expected_commit and stored_commit != expected_commit:
+        return False
+    return True
 
 
 def _load_stock_cache(
@@ -44,23 +152,31 @@ def _load_stock_cache(
     n_jobs: int,
     *,
     env_hash: str,
+    fedot_commit: str = "",
 ) -> ScoreResult | None:
-    path = _stock_cache_path(dataset, registry, n_jobs)
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    observations = payload.get("metric_observations") or {}
-    if payload.get("status") != "ok" or not observations.get("search_ran"):
-        return None
-    return _score_from_payload(
-        dataset.task_id,
-        payload,
-        env_hash=env_hash,
-        cmd=str(payload.get("cmd") or "stock-cache"),
-    )
+    expected = stock_cache_identity(dataset, registry, fedot_commit=fedot_commit)
+    for path in _iter_stock_cache_paths(dataset, registry, n_jobs):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        observations = payload.get("metric_observations") or {}
+        if payload.get("status") != "ok" or not observations.get("search_ran"):
+            continue
+        if not _identity_matches(payload, expected):
+            continue
+        result = _score_from_payload(
+            dataset.task_id,
+            payload,
+            env_hash=env_hash,
+            cmd=str(payload.get("cmd") or "stock-cache"),
+        )
+        observations = dict(result.metric_observations or {})
+        observations["cache_hit"] = True
+        observations["cache_path"] = str(path)
+        result.metric_observations = observations
+        return result
+    return None
 
 
 def _store_stock_cache(
@@ -68,11 +184,14 @@ def _store_stock_cache(
     dataset: QualityDataset,
     registry: QualityRegistry,
     n_jobs: int,
+    *,
+    fedot_commit: str = "",
 ) -> None:
     if result.status != "ok" or not (result.metric_observations or {}).get("search_ran"):
         return
     root = _stock_cache_root()
     root.mkdir(parents=True, exist_ok=True)
+    identity = stock_cache_identity(dataset, registry, fedot_commit=fedot_commit)
     payload = {
         "task_id": result.task_id,
         "status": result.status,
@@ -85,6 +204,13 @@ def _store_stock_cache(
         "cmd": result.cmd,
         "log_tail": result.log_tail,
         "metric_observations": result.metric_observations,
+        "identity": identity,
+        "fold": identity["fold"],
+        "repeat": identity["repeat"],
+        "timeout_seconds": identity["timeout_seconds"],
+        "preset": identity["preset"],
+        "registry_identity": identity["registry_identity"],
+        "fedot_commit": identity["fedot_commit"],
     }
     _stock_cache_path(dataset, registry, n_jobs).write_text(
         json.dumps(payload, default=str),
@@ -127,15 +253,28 @@ def run_quality_side(
     spec = job_spec(dataset, n_jobs=n_jobs, registry=registry)
     spec["side"] = side
     env_hash = f"{registry.identity}|{dataset.task_id}|{side}|{spec['n_jobs']}"
+    fedot_commit = _fedot_commit(checkout)
+    cache_path = (
+        _stock_cache_path(dataset, registry, spec["n_jobs"]) if side == "stock" else None
+    )
     if side == "stock":
-        cached = _load_stock_cache(dataset, registry, spec["n_jobs"], env_hash=env_hash)
+        cached = _load_stock_cache(
+            dataset,
+            registry,
+            spec["n_jobs"],
+            env_hash=env_hash,
+            fedot_commit=fedot_commit,
+        )
         if cached is not None:
+            hit_path = (cached.metric_observations or {}).get("cache_path") or cache_path
+            print(f"quality stock cache-hit {dataset.task_id} {hit_path}", flush=True)
             return cached
     tmp = Path(os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent"))
     tmp.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex[:10]
     spec_path = tmp / f"quality-spec-{dataset.task_id}-{side}-{token}.json"
     out_path = tmp / f"quality-out-{dataset.task_id}-{side}-{token}.json"
+    log_path = tmp / f"quality-log-{dataset.task_id}-{side}-{token}.log"
     spec_path.write_text(json.dumps(spec, sort_keys=True), encoding="utf-8")
     python = fedot_python(checkout)
     cmd = [
@@ -147,21 +286,39 @@ def run_quality_side(
         "--out",
         str(out_path),
     ]
-    env = clean_subprocess_env(checkout, repo_root=repo_root())
+    extra = {
+        key: os.environ[key]
+        for key in (
+            "EVOLVE_QUALITY_STOCK_CACHE",
+            "EVOLVE_QUALITY_DATA_CACHE",
+            "EVOLVE_AGENT_TMP",
+        )
+        if os.environ.get(key)
+    }
+    env = clean_subprocess_env(checkout, repo_root=repo_root(), extra=extra)
     env["OMP_NUM_THREADS"] = "1"
     env["OPENBLAS_NUM_THREADS"] = "1"
     env["MKL_NUM_THREADS"] = "1"
     wall = float(registry.timeout_seconds) + 300.0
+    print(
+        f"quality {side} start {dataset.task_id} "
+        f"timeout_s={spec['timeout_seconds']} n_jobs={spec['n_jobs']} "
+        f"preset={spec['preset']} seed={spec['seed']} "
+        f"cache={cache_path} log={log_path}",
+        flush=True,
+    )
     try:
-        proc = subprocess.run(
-            cmd,
-            env=env,
-            cwd=str(repo_root()),
-            capture_output=True,
-            text=True,
-            timeout=wall,
-            check=False,
-        )
+        with log_path.open("w", encoding="utf-8") as logf:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                cwd=str(repo_root()),
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                timeout=wall,
+                check=False,
+            )
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired:
         return ScoreResult(
             task_id=dataset.task_id,
@@ -179,25 +336,27 @@ def run_quality_side(
             task_id=dataset.task_id,
             status="invalid",
             score=float("nan"),
-            traceback=(proc.stderr or "")[-4000:],
+            traceback=log_text[-4000:],
             detail=f"worker exit {proc.returncode}",
             env_hash=env_hash,
             cmd=" ".join(cmd),
-            log_tail=((proc.stdout or "") + "\n" + (proc.stderr or ""))[-4000:],
+            log_tail=log_text[-4000:],
             seed=registry.seed,
             metric_observations={"search_ran": False},
         )
     payload = json.loads(out_path.read_text(encoding="utf-8"))
-    payload["log_tail"] = (
-        str(payload.get("log_tail") or "")
-        + "\n"
-        + ((proc.stdout or "") + "\n" + (proc.stderr or ""))[-2000:]
-    )
+    payload["log_tail"] = (str(payload.get("log_tail") or "") + "\n" + log_text)[-2000:]
     result = _score_from_payload(
         dataset.task_id, payload, env_hash=env_hash, cmd=" ".join(cmd)
     )
     if side == "stock":
-        _store_stock_cache(result, dataset, registry, spec["n_jobs"])
+        _store_stock_cache(
+            result,
+            dataset,
+            registry,
+            spec["n_jobs"],
+            fedot_commit=fedot_commit,
+        )
     return result
 
 
@@ -264,6 +423,7 @@ def run_quality_stock_jobs(
             "spec": spec,
             "stock": asdict(stock),
             "search_ran": bool((stock.metric_observations or {}).get("search_ran")),
+            "cache_hit": bool((stock.metric_observations or {}).get("cache_hit")),
         }
 
     if parallel <= 1 or len(ids) == 1:
@@ -320,13 +480,19 @@ def run_quality_jobs(
 
 
 def decision_from_quality_jobs(rows: list[dict]) -> Decision:
+    rows = [
+        row
+        for row in rows
+        if str(row.get("status") or "") not in {"skipped", "inapplicable"}
+        and str((row.get("spec") or {}).get("status") or "") != "skipped"
+    ]
     if not rows:
         return Decision(
             keep=False,
-            reason="empty_quality_jobs",
+            reason="no_applicable_quality_tasks",
             target_delta=None,
             stage="quality",
-            infrastructure_error=True,
+            infrastructure_error=False,
         )
     stock = {row["spec"]["source_dataset"]: row["stock_result"] for row in rows}
     patched = {row["spec"]["source_dataset"]: row["patched_result"] for row in rows}

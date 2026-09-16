@@ -1589,13 +1589,6 @@ def run_once(
                             "probe code, exit status, traceback, stdout, stderr, and "
                             "observations from both runs follow."
                         )
-                    elif behavior_status == "no_change":
-                        diagnosis = (
-                            "A valid probe ran successfully on both checkouts and its "
-                            "actual observations were equal. This disproves the claimed "
-                            "runtime effect measured by this hypothesis; revise the "
-                            "source mechanism before trying another probe."
-                        )
                     else:
                         diagnosis = (
                             "Stock completed the diagnostic but the patched checkout "

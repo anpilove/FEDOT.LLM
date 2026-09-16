@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     p_quality.add_argument(
         "--tasks",
         default="",
-        help="Comma-separated quality task ids; default is the full frozen registry",
+        help="Comma-separated quality task ids; default is the registry pool (24 OpenML + public TS)",
     )
     p_quality.add_argument("--n-jobs", type=int, default=None)
     p_quality.add_argument("--cpu-quota", type=int, default=None)
@@ -178,6 +178,36 @@ def main(argv: list[str] | None = None) -> int:
         "--stock-only",
         action="store_true",
         help="Run only stock Fedot(1h) baselines on the registered tasks",
+    )
+    p_quality.add_argument(
+        "--stock-cache",
+        type=Path,
+        default=None,
+        help="Explicit EVOLVE_QUALITY_STOCK_CACHE directory; skip warm when identity matches",
+    )
+
+    p_drain = sub.add_parser(
+        "quality-drain",
+        help="Stock-cache applicable registry tasks, then score every queued patch",
+    )
+    p_drain.add_argument("--fedot", type=Path, default=None)
+    p_drain.add_argument(
+        "--tasks",
+        default="",
+        help="Comma-separated quality task ids; default pool is the full registry, then tabular vs TS per patch",
+    )
+    p_drain.add_argument("--n-jobs", type=int, default=None)
+    p_drain.add_argument("--cpu-quota", type=int, default=None)
+    p_drain.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path("research/evolve/controller_campaign_2026-09-15/live_run"),
+    )
+    p_drain.add_argument(
+        "--stock-cache",
+        type=Path,
+        default=None,
+        help="Explicit stock cache directory so leftover credit-g/blood/diabetes files are reused",
     )
 
     p_final = sub.add_parser("metric-finalize", help="Resume only an already frozen metric FINAL batch; no LLM")
@@ -439,7 +469,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "quality-job":
         from fedotllm.agents.evolve.controller.quality_executor import measure_fedot_quality
-        from fedotllm.agents.evolve.evaluation.fedot_quality import run_quality_stock_jobs
+        from fedotllm.agents.evolve.evaluation.fedot_quality import (
+            bind_stock_cache,
+            run_quality_stock_jobs,
+        )
         from fedotllm.agents.evolve.evaluation.quality_registry import list_quality_task_ids
         from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
         from fedotllm.agents.evolve.storage.journal import append_journal
@@ -447,12 +480,32 @@ def main(argv: list[str] | None = None) -> int:
         source = resolve_fedot_src()
         args.workspace.mkdir(parents=True, exist_ok=True)
         journal = args.workspace / "quality_jobs.jsonl"
+        stock_cache = bind_stock_cache(args.stock_cache)
         task_ids = tuple(
             part.strip()
             for part in args.tasks.split(",")
             if part.strip()
         ) or list_quality_task_ids()
+        print(
+            json.dumps(
+                {
+                    "event": "quality-job-start",
+                    "stock_only": bool(args.stock_only),
+                    "fedot": str(source),
+                    "task_ids": list(task_ids),
+                    "n_jobs": args.n_jobs,
+                    "cpu_quota": args.cpu_quota,
+                    "stock_cache": str(stock_cache),
+                    "data_cache": os.environ.get("EVOLVE_QUALITY_DATA_CACHE"),
+                }
+            ),
+            flush=True,
+        )
         if args.stock_only:
+            print(
+                f"quality-job stock-only writing cache under {stock_cache}",
+                flush=True,
+            )
             rows = run_quality_stock_jobs(
                 stock_checkout=source,
                 task_ids=task_ids,
@@ -514,6 +567,46 @@ def main(argv: list[str] | None = None) -> int:
         if decision.infrastructure_error:
             return 3
         return 0 if decision.keep else 1
+
+    if args.cmd == "quality-drain":
+        from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue
+        from fedotllm.agents.evolve.evaluation.fedot_quality import bind_stock_cache
+        from fedotllm.agents.evolve.evaluation.quality_registry import list_quality_task_ids
+        from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
+
+        args.workspace.mkdir(parents=True, exist_ok=True)
+        stock_cache = bind_stock_cache(args.stock_cache)
+        task_ids = tuple(
+            part.strip()
+            for part in args.tasks.split(",")
+            if part.strip()
+        ) or list_quality_task_ids()
+        print(
+            json.dumps(
+                {
+                    "event": "quality-drain-start",
+                    "task_ids": list(task_ids),
+                    "stock_cache": str(stock_cache),
+                }
+            ),
+            flush=True,
+        )
+        payload = drain_quality_queue(
+            resolve_fedot_src(),
+            args.workspace,
+            journal=args.workspace / "quality_jobs.jsonl",
+            task_ids=task_ids,
+            n_jobs=args.n_jobs,
+            cpu_quota=args.cpu_quota,
+            stock_cache=stock_cache,
+        )
+        print(json.dumps(payload, indent=2, default=str))
+        if not payload["stock_ok"] or any(
+            job.get("status") in {"apply_failed", "infrastructure_error"}
+            for job in payload["jobs"]
+        ):
+            return 3
+        return 0
 
     if args.cmd == "metric-finalize":
         from fedotllm.agents.evolve.controller.metric_study import finalize_batch

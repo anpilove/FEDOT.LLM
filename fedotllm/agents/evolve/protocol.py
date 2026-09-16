@@ -177,6 +177,7 @@ def acceptance_protocol_fingerprint() -> str:
                 "probe-deduplication",
                 "storage/replay.py",
                 ("_matching_patch_findings", "_probe_only_rejection",
+                 "_cheap_screen_not_quality_verdict",
                  "tried_patch_hashes_from_findings", "rejected_probe_hashes_from_findings"),
             ),
             (
@@ -197,7 +198,7 @@ def acceptance_protocol_fingerprint() -> str:
             (
                 "quality-queue",
                 "controller/quality_queue.py",
-                ("enqueue_quality_job", "queue_priority"),
+                ("enqueue_quality_job", "queue_priority", "cheap_screen_not_quality_verdict"),
             ),
             (
                 "controller-final",
