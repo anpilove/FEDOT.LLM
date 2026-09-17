@@ -10,10 +10,69 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class WorkerOutcome:
+    """Result of one worker subprocess; ``timed_out`` implies the tree was killed."""
+
+    returncode: int | None
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
+
+def run_worker(
+    cmd: list[str],
+    *,
+    cwd: Path | str,
+    env: dict[str, str],
+    timeout: float | None,
+    log_path: Path | None = None,
+) -> WorkerOutcome:
+    """Run a worker in its own session and kill the whole tree on timeout.
+
+    ``subprocess.run(timeout=...)`` only kills the direct child; FEDOT workers
+    fork joblib/multiprocessing children that would otherwise keep burning the
+    CPU quota as orphans after a wall-clock timeout.
+
+    With ``log_path`` both streams are appended to that file (useful for
+    hour-long jobs the operator wants to ``tail``) and returned as ``stdout``.
+    """
+
+    def _spawn(stdout, stderr) -> WorkerOutcome:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            out, err = proc.communicate()
+            return WorkerOutcome(None, out or "", err or "", timed_out=True)
+        return WorkerOutcome(proc.returncode, out or "", err or "")
+
+    if log_path is None:
+        return _spawn(subprocess.PIPE, subprocess.PIPE)
+    with log_path.open("w", encoding="utf-8") as handle:
+        outcome = _spawn(handle, subprocess.STDOUT)
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    return WorkerOutcome(outcome.returncode, text, "", timed_out=outcome.timed_out)
 
 
 _SAFE_ENV_NAMES = {

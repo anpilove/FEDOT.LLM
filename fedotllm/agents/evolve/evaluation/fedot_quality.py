@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -22,7 +21,9 @@ from fedotllm.agents.evolve.execution.guard import repo_root
 from fedotllm.agents.evolve.execution.process import (
     clean_subprocess_env,
     fedot_python,
+    run_worker,
 )
+from fedotllm.agents.evolve.storage.journal import write_json_atomic
 from fedotllm.agents.evolve.types import Decision, ScoreResult
 
 WORKER_MODULE = "fedotllm.agents.evolve.evaluation._fedot_quality_worker"
@@ -212,10 +213,7 @@ def _store_stock_cache(
         "registry_identity": identity["registry_identity"],
         "fedot_commit": identity["fedot_commit"],
     }
-    _stock_cache_path(dataset, registry, n_jobs).write_text(
-        json.dumps(payload, default=str),
-        encoding="utf-8",
-    )
+    write_json_atomic(_stock_cache_path(dataset, registry, n_jobs), payload)
 
 
 def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str) -> ScoreResult:
@@ -308,43 +306,38 @@ def run_quality_side(
         flush=True,
     )
     try:
-        with log_path.open("w", encoding="utf-8") as logf:
-            proc = subprocess.run(
-                cmd,
-                env=env,
-                cwd=str(repo_root()),
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                timeout=wall,
-                check=False,
+        proc = run_worker(cmd, cwd=repo_root(), env=env, timeout=wall, log_path=log_path)
+        log_text = proc.stdout
+        if proc.timed_out:
+            return ScoreResult(
+                task_id=dataset.task_id,
+                status="timeout",
+                score=float("nan"),
+                detail=f"timeout after {wall}s",
+                duration_s=wall,
+                env_hash=env_hash,
+                cmd=" ".join(cmd),
+                seed=registry.seed,
+                log_tail=log_text[-4000:],
+                metric_observations={"search_ran": False, "search_detail": "wall_timeout"},
             )
-        log_text = log_path.read_text(encoding="utf-8", errors="replace")
-    except subprocess.TimeoutExpired:
-        return ScoreResult(
-            task_id=dataset.task_id,
-            status="timeout",
-            score=float("nan"),
-            detail=f"timeout after {wall}s",
-            duration_s=wall,
-            env_hash=env_hash,
-            cmd=" ".join(cmd),
-            seed=registry.seed,
-            metric_observations={"search_ran": False, "search_detail": "wall_timeout"},
-        )
-    if not out_path.is_file():
-        return ScoreResult(
-            task_id=dataset.task_id,
-            status="invalid",
-            score=float("nan"),
-            traceback=log_text[-4000:],
-            detail=f"worker exit {proc.returncode}",
-            env_hash=env_hash,
-            cmd=" ".join(cmd),
-            log_tail=log_text[-4000:],
-            seed=registry.seed,
-            metric_observations={"search_ran": False},
-        )
-    payload = json.loads(out_path.read_text(encoding="utf-8"))
+        if not out_path.is_file():
+            return ScoreResult(
+                task_id=dataset.task_id,
+                status="invalid",
+                score=float("nan"),
+                traceback=log_text[-4000:],
+                detail=f"worker exit {proc.returncode}",
+                env_hash=env_hash,
+                cmd=" ".join(cmd),
+                log_tail=log_text[-4000:],
+                seed=registry.seed,
+                metric_observations={"search_ran": False},
+            )
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+    finally:
+        spec_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
     payload["log_tail"] = (str(payload.get("log_tail") or "") + "\n" + log_text)[-2000:]
     result = _score_from_payload(
         dataset.task_id, payload, env_hash=env_hash, cmd=" ".join(cmd)
@@ -403,20 +396,14 @@ def run_quality_stock_jobs(
 ) -> list[dict]:
     """Stock-only baselines on the pre-registered set (cache for later pairs)."""
 
-    registry = registry or load_quality_registry()
-    ids = task_ids or list_quality_task_ids(registry)
-    jobs = int(n_jobs if n_jobs is not None else registry.n_jobs_per_job)
-    quota = int(cpu_quota if cpu_quota is not None else registry.cpu_quota)
-    parallel = max(1, min(len(ids), quota // max(1, jobs)))
-
-    def one(task_id: str) -> dict:
+    def one(task_id: str, *, registry: QualityRegistry, n_jobs: int) -> dict:
         dataset = get_dataset(task_id, registry)
-        spec = job_spec(dataset, n_jobs=jobs, registry=registry)
+        spec = job_spec(dataset, n_jobs=n_jobs, registry=registry)
         stock = run_quality_side(
             dataset,
             checkout=stock_checkout,
             side="stock",
-            n_jobs=jobs,
+            n_jobs=n_jobs,
             registry=registry,
         )
         return {
@@ -426,12 +413,9 @@ def run_quality_stock_jobs(
             "cache_hit": bool((stock.metric_observations or {}).get("cache_hit")),
         }
 
-    if parallel <= 1 or len(ids) == 1:
-        return [one(task_id) for task_id in ids]
-    with ThreadPoolExecutor(max_workers=parallel) as pool:
-        futures = {pool.submit(one, task_id): task_id for task_id in ids}
-        by_id = {futures[future]: future.result() for future in as_completed(futures)}
-        return [by_id[task_id] for task_id in ids]
+    return _run_over_tasks(
+        one, task_ids=task_ids, n_jobs=n_jobs, cpu_quota=cpu_quota, registry=registry
+    )
 
 
 def run_quality_jobs(
@@ -445,38 +429,44 @@ def run_quality_jobs(
 ) -> list[dict]:
     """Run 1–N registered pairs. Parallelism is datasets × n_jobs under cpu_quota."""
 
+    def one(task_id: str, *, registry: QualityRegistry, n_jobs: int) -> dict:
+        return run_quality_pair(
+            task_id,
+            stock_checkout=stock_checkout,
+            patch_checkout=patch_checkout,
+            n_jobs=n_jobs,
+            registry=registry,
+        )
+
+    return _run_over_tasks(
+        one, task_ids=task_ids, n_jobs=n_jobs, cpu_quota=cpu_quota, registry=registry
+    )
+
+
+def _run_over_tasks(
+    one,
+    *,
+    task_ids: tuple[str, ...] | None,
+    n_jobs: int | None,
+    cpu_quota: int | None,
+    registry: QualityRegistry | None,
+) -> list[dict]:
+    """Run ``one(task_id)`` per task, ``cpu_quota // n_jobs`` datasets at a time; keep order."""
+
     registry = registry or load_quality_registry()
     ids = task_ids or list_quality_task_ids(registry)
     jobs = int(n_jobs if n_jobs is not None else registry.n_jobs_per_job)
     quota = int(cpu_quota if cpu_quota is not None else registry.cpu_quota)
     parallel = max(1, min(len(ids), quota // max(1, jobs)))
-    rows: list[dict] = []
     if parallel <= 1 or len(ids) == 1:
-        return [
-            run_quality_pair(
-                task_id,
-                stock_checkout=stock_checkout,
-                patch_checkout=patch_checkout,
-                n_jobs=jobs,
-                registry=registry,
-            )
-            for task_id in ids
-        ]
+        return [one(task_id, registry=registry, n_jobs=jobs) for task_id in ids]
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = {
-            pool.submit(
-                run_quality_pair,
-                task_id,
-                stock_checkout=stock_checkout,
-                patch_checkout=patch_checkout,
-                n_jobs=jobs,
-                registry=registry,
-            ): task_id
+            pool.submit(one, task_id, registry=registry, n_jobs=jobs): task_id
             for task_id in ids
         }
         by_id = {futures[future]: future.result() for future in as_completed(futures)}
-        rows = [by_id[task_id] for task_id in ids]
-    return rows
+    return [by_id[task_id] for task_id in ids]
 
 
 def decision_from_quality_jobs(rows: list[dict]) -> Decision:

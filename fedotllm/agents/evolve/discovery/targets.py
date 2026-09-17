@@ -6,10 +6,10 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 
-from fedotllm.agents.evolve.types import PatchSite, VerificationResult
+from fedotllm.agents.evolve.types import MatchSite, VerificationResult
 
 
-def resolve_verification_target(checkout: Path, lead: PatchSite, *, file_path: str = "", line: int | None = None, symbol: str = ""):
+def resolve_verification_target(checkout: Path, lead: MatchSite, *, file_path: str = "", line: int | None = None, symbol: str = ""):
     root = checkout.resolve()
     original = (root / lead.file_path).resolve()
     path = (root / (file_path or lead.file_path)).resolve()
@@ -45,7 +45,7 @@ def resolve_verification_target(checkout: Path, lead: PatchSite, *, file_path: s
     return replace(lead, file_path=relative, line=nominated), target
 
 
-def apply_verified_target(checkout: Path, lead: PatchSite, verification: VerificationResult) -> PatchSite:
+def apply_verified_target(checkout: Path, lead: MatchSite, verification: VerificationResult) -> MatchSite:
     """Revalidate the persisted identity before Fixer, coverage or bookkeeping."""
     target = verification.resolved_target
     if verification.status != "verified_bug" or not target:

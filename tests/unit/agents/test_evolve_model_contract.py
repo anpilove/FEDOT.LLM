@@ -9,7 +9,6 @@ from fedotllm.agents.evolve.model_contract import (
     KNOWN_MODEL_STAGES,
     REQUIRED_MODEL_NAME,
     build_model_contract,
-    model_contract_diagnostics,
 )
 
 
@@ -116,7 +115,7 @@ def test_model_contract_rejects_environment_fallback_for_real_clients_only():
         "scout: FEDOTLLM_LLM_FALLBACK must be empty, got openai/gpt-5-mini",
         "fixer: FEDOTLLM_LLM_FALLBACK must be empty, got openai/gpt-5-mini",
     ]
-    assert model_contract_diagnostics(clients, environ={}) == []
+    assert build_model_contract(clients, environ={})["diagnostics"] == []
 
 
 def test_model_contract_treats_config_without_model_name_as_real_and_invalid():

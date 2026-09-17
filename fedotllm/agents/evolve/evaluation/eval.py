@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -14,9 +13,11 @@ from fedotllm.agents.evolve.execution.process import (
     clean_subprocess_env,
     fedot_python,
     interpreter_identity,
+    run_worker,
     thread_environment,
 )
 from fedotllm.agents.evolve.protocol import score_protocol_fingerprint
+from fedotllm.agents.evolve.storage.journal import write_json_atomic
 from fedotllm.agents.evolve.evaluation.tasks import load_task
 from fedotllm.agents.evolve.types import ScoreResult
 
@@ -33,40 +34,17 @@ def run_stock(
     collect_coverage: bool = False,
     task_override: dict | None = None,
 ) -> ScoreResult:
-    seed_value = int(seed if seed is not None else os.environ.get("EVOLVE_AGENT_SEED", "42"))
-    fingerprint = _env_hash(
-        checkout, task_id, split=split, task_override=task_override
-    )
-    cache_root = Path(
-        os.environ.get("EVOLVE_AGENT_BASELINE_CACHE", "/tmp/evolve-agent-baseline-cache")
-    )
-    cache_key = hashlib.sha256(
-        f"{fingerprint}|{task_id}|{split}|{seed_value}|coverage={int(collect_coverage)}".encode()
-    ).hexdigest()
-    cache_file = cache_root / f"{cache_key}.json"
-    try:
-        payload = json.loads(cache_file.read_text(encoding="utf-8"))
-        if payload.get("env_hash") == fingerprint:
-            payload["coverage"] = tuple(payload.get("coverage") or ())
-            payload["dataflow"] = tuple(payload.get("dataflow") or ())
-            return ScoreResult(**payload)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        pass
-    result = _run(
+    return _run_cached(
         task_id,
+        cache_env="EVOLVE_AGENT_BASELINE_CACHE",
+        cache_default="/tmp/evolve-agent-baseline-cache",
         checkout=checkout,
         timeout_s=timeout_s,
         split=split,
-        seed=seed_value,
+        seed=seed,
         collect_coverage=collect_coverage,
         task_override=task_override,
     )
-    if result.status in {"ok", "crash"}:
-        cache_root.mkdir(parents=True, exist_ok=True)
-        temp = cache_file.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-        temp.write_text(json.dumps(asdict(result), default=str), encoding="utf-8")
-        temp.replace(cache_file)
-    return result
 
 
 def run_patched(
@@ -79,13 +57,40 @@ def run_patched(
     collect_coverage: bool = False,
     task_override: dict | None = None,
 ) -> ScoreResult:
-    seed_value = int(seed if seed is not None else os.environ.get("EVOLVE_AGENT_SEED", "42"))
-    fingerprint = _env_hash(
-        checkout, task_id, split=split, task_override=task_override
+    return _run_cached(
+        task_id,
+        cache_env="EVOLVE_AGENT_SCORE_CACHE",
+        cache_default="/tmp/evolve-agent-score-cache",
+        checkout=checkout,
+        timeout_s=timeout_s,
+        split=split,
+        seed=seed,
+        collect_coverage=collect_coverage,
+        task_override=task_override,
     )
-    cache_root = Path(
-        os.environ.get("EVOLVE_AGENT_SCORE_CACHE", "/tmp/evolve-agent-score-cache")
-    )
+
+
+def _seed_value(seed: int | None) -> int:
+    return int(seed if seed is not None else os.environ.get("EVOLVE_AGENT_SEED", "42"))
+
+
+def _run_cached(
+    task_id: str,
+    *,
+    cache_env: str,
+    cache_default: str,
+    checkout: Path,
+    timeout_s: float | None,
+    split: str,
+    seed: int | None,
+    collect_coverage: bool,
+    task_override: dict | None,
+) -> ScoreResult:
+    """Score one task, reusing a cached result keyed by the full environment hash."""
+
+    seed_value = _seed_value(seed)
+    fingerprint = _env_hash(checkout, task_id, split=split, task_override=task_override)
+    cache_root = Path(os.environ.get(cache_env, cache_default))
     cache_key = hashlib.sha256(
         f"{fingerprint}|{task_id}|{split}|{seed_value}|coverage={int(collect_coverage)}".encode()
     ).hexdigest()
@@ -106,12 +111,10 @@ def run_patched(
         seed=seed_value,
         collect_coverage=collect_coverage,
         task_override=task_override,
+        env_hash=fingerprint,
     )
     if result.status in {"ok", "crash"}:
-        cache_root.mkdir(parents=True, exist_ok=True)
-        temp = cache_file.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-        temp.write_text(json.dumps(asdict(result), default=str), encoding="utf-8")
-        temp.replace(cache_file)
+        write_json_atomic(cache_file, asdict(result))
     return result
 
 
@@ -124,6 +127,7 @@ def _run(
     seed: int | None = None,
     collect_coverage: bool = False,
     task_override: dict | None = None,
+    env_hash: str | None = None,
 ) -> ScoreResult:
     spec = load_task(task_id)
     limit = timeout_s if timeout_s is not None else spec.timeout_s
@@ -133,7 +137,7 @@ def _run(
     root = str(repo_root())
     env = clean_subprocess_env(checkout, repo_root=repo_root())
     python = fedot_python(checkout)
-    seed = int(seed if seed is not None else os.environ.get("EVOLVE_AGENT_SEED", "42"))
+    seed = _seed_value(seed)
     cmd = [
         python,
         "-m",
@@ -159,78 +163,68 @@ def _run(
             ]
         )
     cmd_s = " ".join(cmd)
-    env_hash = _env_hash(
-        checkout, task_id, split=split, task_override=task_override
-    )
+    if env_hash is None:
+        env_hash = _env_hash(checkout, task_id, split=split, task_override=task_override)
     try:
-        proc = subprocess.run(
-            cmd,
-            env=env,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=limit,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        out.unlink(missing_ok=True)
-        return ScoreResult(
-            task_id=task_id,
-            status="timeout",
-            score=float("nan"),
-            traceback="",
-            detail=f"timeout after {limit}s",
-            duration_s=float(limit),
-            env_hash=env_hash,
-            cmd=cmd_s,
-            seed=seed,
-        )
-    log_tail = ((proc.stdout or "") + "\n" + (proc.stderr or ""))[-4000:]
-    if not out.exists():
-        return ScoreResult(
-            task_id=task_id,
-            status="invalid",
-            score=float("nan"),
-            traceback=(proc.stderr or "")[-4000:],
-            detail=f"worker exit {proc.returncode}",
-            duration_s=0.0,
-            env_hash=env_hash,
-            cmd=cmd_s,
-            log_tail=log_tail,
-            seed=seed,
-        )
-    try:
-        payload = json.loads(out.read_text(encoding="utf-8"))
-        return ScoreResult(
-            task_id=str(payload["task_id"]),
-            status=payload["status"],
-            score=float(payload["score"]),
-            traceback=payload.get("traceback") or "",
-            detail=payload.get("detail") or "",
-            duration_s=float(payload.get("duration_s") or 0.0),
-            n_train=int(payload.get("n_train") or 0),
-            env_hash=env_hash,
-            cmd=cmd_s,
-            log_tail=log_tail,
-            seed=int(payload.get("seed") or seed),
-            coverage=tuple(payload.get("coverage") or ()),
-            dataflow=tuple(payload.get("dataflow") or ()),
-            data_evidence=payload.get("data_evidence") or {},
-            metric_observations=payload.get("metric_observations") or {},
-        )
-    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-        return ScoreResult(
-            task_id=task_id,
-            status="invalid",
-            score=float("nan"),
-            traceback="",
-            detail=f"malformed worker output: {type(exc).__name__}: {exc}",
-            duration_s=0.0,
-            env_hash=env_hash,
-            cmd=cmd_s,
-            log_tail=log_tail,
-            seed=seed,
-        )
+        proc = run_worker(cmd, cwd=root, env=env, timeout=limit)
+        if proc.timed_out:
+            return ScoreResult(
+                task_id=task_id,
+                status="timeout",
+                score=float("nan"),
+                traceback="",
+                detail=f"timeout after {limit}s",
+                duration_s=float(limit),
+                env_hash=env_hash,
+                cmd=cmd_s,
+                seed=seed,
+            )
+        log_tail = (proc.stdout + "\n" + proc.stderr)[-4000:]
+        if not out.exists():
+            return ScoreResult(
+                task_id=task_id,
+                status="invalid",
+                score=float("nan"),
+                traceback=proc.stderr[-4000:],
+                detail=f"worker exit {proc.returncode}",
+                duration_s=0.0,
+                env_hash=env_hash,
+                cmd=cmd_s,
+                log_tail=log_tail,
+                seed=seed,
+            )
+        try:
+            payload = json.loads(out.read_text(encoding="utf-8"))
+            return ScoreResult(
+                task_id=str(payload["task_id"]),
+                status=payload["status"],
+                score=float(payload["score"]),
+                traceback=payload.get("traceback") or "",
+                detail=payload.get("detail") or "",
+                duration_s=float(payload.get("duration_s") or 0.0),
+                n_train=int(payload.get("n_train") or 0),
+                env_hash=env_hash,
+                cmd=cmd_s,
+                log_tail=log_tail,
+                seed=int(payload.get("seed") or seed),
+                coverage=tuple(payload.get("coverage") or ()),
+                dataflow=tuple(payload.get("dataflow") or ()),
+                data_evidence=payload.get("data_evidence") or {},
+                metric_observations=payload.get("metric_observations") or {},
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            return ScoreResult(
+                task_id=task_id,
+                status="invalid",
+                score=float("nan"),
+                traceback="",
+                detail=f"malformed worker output: {type(exc).__name__}: {exc}",
+                duration_s=0.0,
+                env_hash=env_hash,
+                cmd=cmd_s,
+                log_tail=log_tail,
+                seed=seed,
+            )
     finally:
         out.unlink(missing_ok=True)
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.types import MatchSite
 
 MAX_CHUNK_CHARS = 2_400
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
@@ -246,7 +246,7 @@ def retrieve_knowledge(
 
 def knowledge_for_lead(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     max_chars: int = 4_000,
 ) -> str:

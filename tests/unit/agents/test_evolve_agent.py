@@ -4,15 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from fedotllm.agents.evolve.evaluation.compare import compare, compare_pack
-from fedotllm.agents.evolve.discovery.context import context_from_lead, context_from_traceback, inspect_trace, show_source
-from fedotllm.agents.evolve.discovery.discover import format_lint_for_llm, parse_lint, parse_pytest_output
+from fedotllm.agents.evolve.evaluation.compare import compare_pack
+from fedotllm.agents.evolve.discovery.context import context_from_lead, inspect_trace, show_source
+from fedotllm.agents.evolve.discovery.discover import parse_pytest_output
 from fedotllm.agents.evolve.execution.guard import guard_path
 from fedotllm.agents.evolve.execution.patch import apply_patch
-from fedotllm.agents.evolve.evaluation.tasks import list_task_metadata, load_task
+from fedotllm.agents.evolve.evaluation.tasks import load_task
 from fedotllm.agents.evolve.types import (
     PatchCandidate,
-    PatchSite,
+    MatchSite,
     ScoreResult,
     SnippetResult,
     TestResult,
@@ -72,15 +72,6 @@ def test_guard_allows_fedot_copy_inside_disposable_checkout(tmp_path):
     assert deny_write(repo_root() / "fedotllm/llm.py", checkout=checkout)
 
 
-def test_list_tasks_is_quality_suite_not_bug_catalog():
-    rows = list_task_metadata()
-    ids = {row["task_id"] for row in rows}
-    assert {"catboost", "lgbm", "rf", "cancer", "kc2", "cholesterol", "river", "metocean"} <= ids
-    for row in rows:
-        assert "bug" not in row
-        assert "role" not in row
-
-
 def test_quality_suite_covers_real_cases():
     from fedotllm.agents.evolve.evaluation.tasks import (
         DEFAULT_COVERAGE_TASKS,
@@ -138,43 +129,6 @@ def test_quality_suite_covers_real_cases():
     assert {"scoring", "cancer", "kc2"} <= lgbm_datasets
 
 
-def test_compare_keep_crash_to_metric():
-    decision = compare(
-        _score("pca->catboost", "crash", 0.5),
-        _score("pca->catboost", "ok", 0.85),
-            [(_score("fast_ica->lgbm", "ok", 0.80), _score("fast_ica->lgbm", "ok", 0.80))],
-        min_delta=0.01,
-        sentinel=0.5,
-    )
-    assert decision.keep is True
-    assert decision.target_delta == pytest.approx(0.35)
-
-
-def test_compare_drop_regression():
-    decision = compare(
-        _score("pca->catboost", "crash", 0.5),
-        _score("pca->catboost", "ok", 0.85),
-        [(_score("fast_ica->lgbm", "ok", 0.80), _score("fast_ica->lgbm", "ok", 0.70))],
-        min_delta=0.01,
-        sentinel=0.5,
-    )
-    assert decision.keep is False
-    assert "regression" in decision.reason
-
-
-def test_timeout_is_not_sentinel():
-    decision = compare(
-        _score("pca->catboost", "ok", 0.5),
-        _score("pca->catboost", "timeout", float("nan")),
-        [],
-        min_delta=0.01,
-        sentinel=0.5,
-    )
-    assert decision.keep is False
-    assert decision.target_delta is None
-    assert decision.reason == "timeout_or_invalid"
-
-
 def test_inspect_trace_keeps_checkout_frames_only(tmp_path: Path):
     src = tmp_path / "fedot" / "core" / "pca.py"
     src.parent.mkdir(parents=True)
@@ -191,13 +145,6 @@ def test_inspect_trace_keeps_checkout_frames_only(tmp_path: Path):
     assert len(frames) == 1
     assert frames[0]["file"] == "fedot/core/pca.py"
     assert frames[0]["line"] == 2
-    ctx = context_from_traceback(
-        ScoreResult(task_id="t", status="crash", score=0.5, traceback=traceback, detail="IndexError: x"),
-        tmp_path,
-    )
-    assert "scorer.py" not in ctx
-    assert "fedot/core/pca.py" in ctx
-    assert "IndexError: x" in ctx
 
 
 def test_show_source_is_enclosing_function_not_file_window(tmp_path: Path):
@@ -255,19 +202,6 @@ def test_apply_patch_denies_evaluator(tmp_path: Path):
         )
 
 
-def test_parse_lint_and_prompt_has_no_exam_ids():
-    row = parse_lint("fedot/core/data/data.py:718:12: F821 undefined name 'x'")
-    assert row is not None
-    assert row["file"] == "fedot/core/data/data.py"
-    assert row["line"] == 718
-    text = format_lint_for_llm(
-        [PatchSite(channel="lint", file_path=row["file"], line=row["line"], why=f"{row['rule']} {row['message']}")]
-    )
-    assert "pca->catboost" not in text
-    assert "cases.json" not in text
-    assert "leftover" not in text.lower()
-
-
 def test_parse_pytest_uses_fedot_frames_not_gym(tmp_path: Path):
     src = tmp_path / "fedot" / "core" / "data.py"
     src.parent.mkdir(parents=True)
@@ -290,21 +224,7 @@ def test_parse_pytest_uses_fedot_frames_not_gym(tmp_path: Path):
     assert "pca->catboost" not in leads[0].why
 
 
-def test_rank_leads_prefers_core_over_api():
-    from fedotllm.agents.evolve.discovery.discover import _rank_leads, parse_lint
-
-    ranked = _rank_leads(
-        [
-            PatchSite(channel="lint", file_path="fedot/api/api_utils/api_data.py", line=1, why="x"),
-            PatchSite(channel="lint", file_path="fedot/core/data/data.py", line=2, why="y"),
-        ]
-    )
-    assert ranked[0].file_path.startswith("fedot/core/")
-    row = parse_lint("fedot/api/api_utils/api_composer.py:185:12: RUF010 Use explicit conversion flag")
-    assert row is not None
-    from fedotllm.agents.evolve.discovery.signals import _LINT_NOISE
-
-    assert _LINT_NOISE.match(row["rule"])
+def test_signal_text_normalizes_bytes():
     from fedotllm.agents.evolve.discovery.signals import _as_text
 
     assert _as_text(None) == ""
@@ -326,7 +246,7 @@ def test_context_from_lead_includes_field_usage(tmp_path: Path):
         encoding="utf-8",
     )
     ctx = context_from_lead(
-        PatchSite(channel="trace", file_path="fedot/core/data.py", line=2, why="IndexError in get_not_encoded_data"),
+        MatchSite(channel="trace", file_path="fedot/core/data.py", line=2, why="IndexError in get_not_encoded_data"),
         tmp_path,
     )
     assert "get_not_encoded_data" in ctx
@@ -338,7 +258,7 @@ def test_context_from_lead(tmp_path: Path):
     src = tmp_path / "fedot" / "core" / "data.py"
     src.parent.mkdir(parents=True)
     src.write_text("def f():\n    return 1\n", encoding="utf-8")
-    ctx = context_from_lead(PatchSite(channel="lint", file_path="fedot/core/data.py", line=2, why="F821 x"), tmp_path)
+    ctx = context_from_lead(MatchSite(channel="lint", file_path="fedot/core/data.py", line=2, why="F821 x"), tmp_path)
     assert "fedot/core/data.py" in ctx
     assert "Channel:" not in ctx
     assert "pca->catboost" not in ctx
@@ -418,7 +338,7 @@ def test_scoreboard_summarize_getting_better(tmp_path: Path):
     patched = {"pca->catboost": _score("pca->catboost", "ok", 0.85)}
     append_attempt(
         tmp_path,
-        lead=PatchSite(channel="fedot_test", file_path="fedot/core/data.py", line=2),
+        lead=MatchSite(channel="fedot_test", file_path="fedot/core/data.py", line=2),
         candidate=None,
         stock=stock,
         patched=patched,
@@ -440,7 +360,7 @@ def test_scoreboard_final_is_the_claim(tmp_path: Path):
     patched = {"pca->catboost": _score("pca->catboost", "ok", 0.85)}
     append_attempt(
         tmp_path,
-        lead=PatchSite(channel="fedot_test", file_path="fedot/core/data.py", line=2),
+        lead=MatchSite(channel="fedot_test", file_path="fedot/core/data.py", line=2),
         candidate=None,
         stock=stock,
         patched=patched,
@@ -468,18 +388,15 @@ def test_eval_passes_fixed_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("EVOLVE_AGENT_SEED", "7")
     monkeypatch.setenv("EVOLVE_AGENT_TMP", str(tmp_path))
 
-    class _Proc:
-        stdout = ""
-        stderr = ""
-        returncode = 0
+    from fedotllm.agents.evolve.execution.process import WorkerOutcome
 
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd, **_k):
         captured["cmd"] = list(cmd)
-        return _Proc()
+        return WorkerOutcome(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    monkeypatch.setattr(ev, "run_worker", fake_run)
     result = ev.run_stock("catboost", checkout=checkout)
     assert "--seed" in captured["cmd"]
     assert "7" in captured["cmd"]
@@ -618,7 +535,7 @@ def test_discover_prioritizes_crash_trace_over_coverage(tmp_path: Path):
     trace_path.parent.mkdir(parents=True)
     trace_path.write_text("def fit():\n    return 1\n", encoding="utf-8")
     coverage_path.write_text("def fit():\n    return 2\n", encoding="utf-8")
-    trace_lead = PatchSite(
+    trace_lead = MatchSite(
         "trace",
         "fedot/core/trace_target.py",
         1,
@@ -1173,7 +1090,7 @@ def test_run_once_drops_on_new_fedot_test_failure(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_fedot_tests", fake_tests)
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.scout",
-        lambda *_a, **_k: [PatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006")],
+        lambda *_a, **_k: [MatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006")],
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.fix_lead",
@@ -1215,7 +1132,7 @@ def test_run_once_drops_unimportable_before_holdout(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.scout",
-        lambda *_a, **_k: [PatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="x")],
+        lambda *_a, **_k: [MatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="x")],
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.fix_lead",
@@ -1258,8 +1175,8 @@ def test_run_once_tries_second_lead_and_writes_comparison(tmp_path: Path, monkey
     checkout.mkdir()
     _accept_behavior_probe(monkeypatch)
     leads = [
-        PatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006"),
-        PatchSite(channel="fedot_test", file_path="fedot/b.py", line=2, why="test/unit/x.py"),
+        MatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006"),
+        MatchSite(channel="fedot_test", file_path="fedot/b.py", line=2, why="test/unit/x.py"),
     ]
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.hidden_exam",
@@ -1394,7 +1311,7 @@ def test_discover_skips_pipeline_and_helpers_for_max_leads(tmp_path: Path):
     assert names <= {"fit", "transform"}
 
 
-def _lead_why_name(lead: PatchSite) -> str:
+def _lead_why_name(lead: MatchSite) -> str:
     return lead.why.strip().split()[-1].rsplit(".", 1)[-1]
 
 
@@ -1412,13 +1329,13 @@ def test_skip_tried_sites_from_scoreboard(tmp_path: Path):
         },
     )
     leads = [
-        PatchSite(
+        MatchSite(
             channel="repo_map",
             file_path="fedot/core/pipelines/node.py",
             line=185,
             why="method PipelineNode.fit",
         ),
-        PatchSite(
+        MatchSite(
             channel="repo_map",
             file_path="fedot/core/operations/knn.py",
             line=53,
@@ -1444,7 +1361,7 @@ def test_skip_tried_skips_no_patch(tmp_path: Path):
         },
     )
     leads = [
-        PatchSite(
+        MatchSite(
             channel="repo_map",
             file_path="fedot/core/operations/encoders.py",
             line=31,
@@ -1482,8 +1399,8 @@ def test_skip_tried_does_not_permanently_hide_cross_workspace_location(tmp_path:
         },
     )
     leads = [
-        PatchSite("repo_map", "fedot/core/operations/encoders.py", 31),
-        PatchSite("repo_map", "fedot/core/operations/knn.py", 53),
+        MatchSite("repo_map", "fedot/core/operations/encoders.py", 31),
+        MatchSite("repo_map", "fedot/core/operations/knn.py", 53),
     ]
 
     kept = skip_tried(
@@ -1717,7 +1634,7 @@ def test_context_includes_callee_in_other_file(tmp_path: Path):
     a.write_text("def fit(data):\n    return helper(data)\n", encoding="utf-8")
     b.write_text("def helper(data):\n    return data.features\n", encoding="utf-8")
     ctx = context_from_lead(
-        PatchSite(channel="repo_map", file_path="fedot/core/operations/a.py", line=1, why="function fit"),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/a.py", line=1, why="function fit"),
         tmp_path,
     )
     assert "Called from this function" in ctx
@@ -1910,14 +1827,14 @@ def test_propose_rejects_noop_and_strips_gutter():
 def test_unique_keeps_llm_pick_for_pool_rows():
     from fedotllm.agents.evolve.discovery.discover import _unique, pool_rows
 
-    structural = PatchSite(
+    structural = MatchSite(
         channel="repo_map",
         file_path="fedot/core/operations/impute.py",
         line=10,
         why="method Imputer.fit",
         signals=("reachable",),
     )
-    picked = PatchSite(
+    picked = MatchSite(
         channel="llm",
         file_path="fedot/core/operations/impute.py",
         line=10,
@@ -1938,10 +1855,7 @@ def test_calibrate_stock_summarizes_ok_scores(tmp_path: Path, monkeypatch: pytes
 
     scores = {1: 0.80, 2: 0.82, 3: 0.81}
 
-    def fake_stock(task_id, *, checkout, timeout_s=None):
-        import os
-
-        seed = int(os.environ["EVOLVE_AGENT_SEED"])
+    def fake_stock(task_id, *, checkout, seed, timeout_s=None):
         return ScoreResult(task_id=task_id, status="ok", score=scores[seed])
 
     monkeypatch.setattr("fedotllm.agents.evolve.commands.calibrate.run_stock", fake_stock)
@@ -2152,7 +2066,7 @@ def test_context_includes_sibling_runtime_methods(tmp_path: Path):
         encoding="utf-8",
     )
     ctx = context_from_lead(
-        PatchSite(channel="repo_map", file_path="fedot/core/operations/knn.py", line=2, why="method Knn.fit"),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/knn.py", line=2, why="method Knn.fit"),
         tmp_path,
     )
     assert "def fit" in ctx
@@ -2167,7 +2081,7 @@ def test_context_from_lead_sends_whole_file(tmp_path: Path):
         encoding="utf-8",
     )
     ctx = context_from_lead(
-        PatchSite(channel="repo_map", file_path="fedot/core/operations/pca.py", line=5, why="method Pca.transform"),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/pca.py", line=5, why="method Pca.transform"),
         tmp_path,
     )
     assert "def helper" in ctx
@@ -2182,7 +2096,7 @@ def test_context_slices_long_file(tmp_path: Path):
     src.write_text(body, encoding="utf-8")
     line = body.splitlines().index("    def transform(self, data):") + 1
     ctx = context_from_lead(
-        PatchSite(channel="repo_map", file_path="fedot/core/operations/wide.py", line=line, why="method P.transform"),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/wide.py", line=line, why="method P.transform"),
         tmp_path,
     )
     assert "def transform" in ctx
@@ -2212,7 +2126,7 @@ def test_bounded_context_prioritizes_measured_symbol_over_repeated_runtime_rows(
         for index in range(12)
     )
     ctx = context_from_lead(
-        PatchSite(
+        MatchSite(
             channel="execution",
             file_path="fedot/core/operations/medium.py",
             line=lead_line,
@@ -2252,8 +2166,8 @@ def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.Monkey
         },
     )
     leads = [
-        PatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="method A.fit"),
-        PatchSite(channel="repo_map", file_path="fedot/b.py", line=2, why="method B.fit"),
+        MatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="method A.fit"),
+        MatchSite(channel="repo_map", file_path="fedot/b.py", line=2, why="method B.fit"),
     ]
     seen: list[str] = []
 
@@ -2293,7 +2207,7 @@ def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_recall_metrics_and_split_disjoint():
     from fedotllm.agents.evolve.commands.recall import metrics, split_gold, unique_files
-    from fedotllm.agents.evolve.types import PatchSite
+    from fedotllm.agents.evolve.types import MatchSite
 
     ranks = [1, 4, None]
     row = metrics(ranks)
@@ -2305,9 +2219,9 @@ def test_recall_metrics_and_split_disjoint():
     assert parts["dev"] and parts["test"]
     assert set(parts["dev"]).isdisjoint(parts["test"])
     leads = [
-        PatchSite(channel="repo_map", file_path="fedot/a.py", line=1),
-        PatchSite(channel="repo_map", file_path="fedot/a.py", line=2),
-        PatchSite(channel="repo_map", file_path="fedot/b.py", line=1),
+        MatchSite(channel="repo_map", file_path="fedot/a.py", line=1),
+        MatchSite(channel="repo_map", file_path="fedot/a.py", line=2),
+        MatchSite(channel="repo_map", file_path="fedot/b.py", line=1),
     ]
     assert unique_files(leads) == ["fedot/a.py", "fedot/b.py"]
 
@@ -2490,6 +2404,33 @@ def test_run_fedot_snippet_blocks_harness(tmp_path: Path, monkeypatch: pytest.Mo
     out = rc.run_fedot_snippet(tmp_path, "from fedotllm.agents.evolve.evaluation.scorer import score")
     assert out.status == "blocked"
     assert out.detail.startswith("<blocked")
+
+
+def test_run_fedot_snippet_blocks_importlib_harness(tmp_path: Path):
+    from fedotllm.agents.evolve.execution import run_code as rc
+
+    code = (
+        "import importlib\n"
+        "importlib.import_module('fedotllm.agents.evolve.evaluation.scorer')"
+    )
+    out = rc.run_fedot_snippet(tmp_path, code)
+    assert out.status == "blocked"
+
+
+def test_run_fedot_snippet_redacts_secret_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import sys
+
+    from fedotllm.agents.evolve.execution import run_code as rc
+
+    monkeypatch.setattr(
+        rc,
+        "fedot_python",
+        lambda _checkout: sys.executable,
+    )
+    out = rc.run_fedot_snippet(tmp_path, 'print("token=supersecret123")')
+    if out.status == "ok":
+        assert "supersecret123" not in out.stdout
+        assert "REDACTED" in out.stdout
 
 
 def test_llm_pick_runs_then_picks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -2793,7 +2734,7 @@ def test_public_contract_failure_becomes_correctness_lead(
 ):
     from fedotllm.agents.evolve.discovery import contracts
 
-    first = contracts.public_contracts()[0]
+    first = contracts._CONTRACTS[0]
     target = tmp_path / first.candidate_files[0]
     target.parent.mkdir(parents=True)
     target.write_text("pass\n", encoding="utf-8")

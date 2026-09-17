@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fedotllm.agents.evolve.storage.journal import append_journal
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.storage.journal import append_journal, write_json_atomic
+from fedotllm.agents.evolve.types import MatchSite
 
 
 def load_checkpoint(workspace: Path) -> dict[str, Any]:
@@ -43,13 +42,7 @@ def save_checkpoint(
         "sequence": int(prior.get("sequence") or 0) + 1,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    path = workspace / "checkpoint.json"
-    temporary = workspace / f".checkpoint-{os.getpid()}.tmp"
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
+    write_json_atomic(workspace / "checkpoint.json", payload)
     append_journal(
         workspace / "checkpoint_history.jsonl",
         {
@@ -63,16 +56,16 @@ def save_checkpoint(
     return payload
 
 
-def checkpoint_leads(workspace: Path) -> list[PatchSite]:
+def checkpoint_leads(workspace: Path) -> list[MatchSite]:
     """Recover Scout selections even when its later catalog walk was interrupted."""
 
-    result: list[PatchSite] = []
+    result: list[MatchSite] = []
     for raw in load_checkpoint(workspace).get("selected_leads") or ():
         if not isinstance(raw, dict):
             continue
         try:
             result.append(
-                PatchSite(
+                MatchSite(
                     channel=str(raw.get("channel") or "checkpoint"),
                     file_path=str(raw["file_path"]),
                     line=int(raw["line"]),

@@ -230,7 +230,6 @@ def propose_patch(
     context: str,
     errors: list[str] | None = None,
     max_edits: int = 1,
-    raw_out: list[str] | None = None,
     checkout: Path | None = None,
     audit_metadata: dict | None = None,
 ) -> PatchCandidate | None:
@@ -274,8 +273,6 @@ def propose_patch(
                     "synthesis_step": synthesis_step,
                 },
             )
-            if raw_out is not None and raw:
-                raw_out.append(raw)
         except Exception as exc:
             failure = classify_model_failure(exc)
             last = str(failure)[:400]
@@ -326,21 +323,11 @@ def propose_patch(
                 )
             continue
         if status in {"search", "symbol", "callers", "docs"} and checkout is not None:
-            from fedotllm.agents.evolve.discovery.research_tools import (
-                callers_runtime,
-                docs_runtime,
-                search_runtime,
-                symbol_runtime,
-            )
+            from fedotllm.agents.evolve.discovery.research_tools import run_research_tool
 
-            if status == "search":
-                opened = search_runtime(checkout, parsed.query)
-            elif status == "symbol":
-                opened = symbol_runtime(checkout, parsed.query or parsed.symbol)
-            elif status == "docs":
-                opened = docs_runtime(checkout, parsed.query)
-            else:
-                opened = callers_runtime(checkout, parsed.symbol or parsed.query)
+            _, opened = run_research_tool(
+                checkout, status, query=parsed.query, symbol=parsed.symbol
+            )
             tool_history.append(f"Step {step} action={status}:\n{opened[:8_000]}")
             continue
         break

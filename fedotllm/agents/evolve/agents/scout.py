@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from fedotllm.agents.evolve.discovery.discover import discover_leads
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.types import MatchSite
 
 
 def scout(
@@ -17,7 +17,7 @@ def scout(
     max_picks: int | None = None,
     trace: dict | None = None,
     execution: list[dict] | None = None,
-    trace_leads: list[PatchSite] | None = None,
+    trace_leads: list[MatchSite] | None = None,
     max_actions: int | None = None,
     max_runs_per_file: int = 2,
     excluded_files: set[str] | None = None,
@@ -25,8 +25,8 @@ def scout(
     prior_hypotheses: list[dict] | None = None,
     excluded_semantic_sites: set[str] | None = None,
     present_full_catalog: bool = False,
-    on_pick: Callable[[list[PatchSite]], None] | None = None,
-) -> list[PatchSite]:
+    on_pick: Callable[[list[MatchSite]], None] | None = None,
+) -> list[MatchSite]:
     return discover_leads(
         checkout,
         inference=inference,

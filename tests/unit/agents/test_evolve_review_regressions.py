@@ -13,7 +13,7 @@ from fedotllm.agents.evolve.agents import verifier
 from fedotllm.agents.evolve.benchmark import hidden_controls as hidden
 from fedotllm.agents.evolve.storage import replay
 from fedotllm.agents.evolve.types import (
-    Decision, EvolveRunPolicy, PatchCandidate, PatchEdit, PatchSite, ScoreResult,
+    Decision, EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite, ScoreResult,
     SnippetResult, TestResult as EvolveTestResult,
 )
 
@@ -56,7 +56,7 @@ def test_target_context_uses_exact_file_class_method_and_docstrings(source):
 ])
 def test_unresolved_context_is_inconclusive_without_model_call(source, path, line):
     audit = verifier._audit_contract_support(
-        source, PatchSite("execution", path, line),
+        source, MatchSite("execution", path, line),
         verifier.VerificationProposal(action="verify_bug"), inference=None,
     )
     assert audit.verdict == "inconclusive"
@@ -64,7 +64,9 @@ def test_unresolved_context_is_inconclusive_without_model_call(source, path, lin
 
 def test_audit_never_globally_resolves_constructor(source, monkeypatch):
     queries = []
-    monkeypatch.setattr(verifier, "symbol_runtime", lambda *a, **k: pytest.fail("global lookup"))
+    from fedotllm.agents.evolve.discovery import research_tools
+
+    monkeypatch.setattr(research_tools, "symbol_runtime", lambda *a, **k: pytest.fail("global lookup"))
     monkeypatch.setattr(verifier, "docs_runtime", lambda root, q: queries.append(q) or "")
     monkeypatch.setattr(verifier, "callers_runtime", lambda root, q: queries.append(q) or "")
 
@@ -76,7 +78,7 @@ def test_audit_never_globally_resolves_constructor(source, monkeypatch):
             return schema(verdict="inconclusive", reason="contract not established")
 
     result = verifier._audit_contract_support(
-        source, PatchSite("execution", "fedot/a.py", 6),
+        source, MatchSite("execution", "fedot/a.py", 6),
         verifier.VerificationProposal(action="verify_bug"), inference=Inference(),
     )
     assert result.verdict == "inconclusive"
@@ -107,7 +109,7 @@ def test_contract_audit_receives_actual_setup_failure(source, monkeypatch):
             assert "actual setup failure" in prompt
             assert "method docstring need not repeat" in prompt
             return schema(verdict="inconclusive", reason="probe setup failed")
-    verdict = verifier._audit_contract_support(source, PatchSite("execution", "fedot/a.py", 6),
+    verdict = verifier._audit_contract_support(source, MatchSite("execution", "fedot/a.py", 6),
         verifier.VerificationProposal(action="verify_bug"), inference=Inference(),
         stock_probe=SnippetResult("runtime_error", "", stderr="actual setup failure"))
     assert verdict.verdict == "inconclusive"
@@ -193,7 +195,7 @@ def test_audit_inconclusive_propagates_through_real_verifier(source, monkeypatch
             )
 
     result = verifier.verify_lead(
-        source, PatchSite("execution", "fedot/a.py", 6, hypothesis_kind="correctness"),
+        source, MatchSite("execution", "fedot/a.py", 6, hypothesis_kind="correctness"),
         inference=Inference(), max_model_calls=3, correctness_only=True,
     )
     assert result.status == "inconclusive"
@@ -250,7 +252,7 @@ def test_verifier_rejects_assertion_before_target(source, monkeypatch):
                           reproduction_code="from fedot.a import Relevant\nassert False, 'setup failed'")
 
     result = verifier.verify_lead(
-        source, PatchSite("execution", "fedot/a.py", 6, hypothesis_kind="correctness"),
+        source, MatchSite("execution", "fedot/a.py", 6, hypothesis_kind="correctness"),
         inference=Inference(), max_model_calls=2, correctness_only=True,
     )
     assert not result.proceed
@@ -406,7 +408,7 @@ def test_real_controller_decision_is_judged_by_separate_stricter_oracle(
     inference = Inference()
     decision = campaign.run_once(
         checkout=source, workspace=work, inference=inference, verifier_inference=inference,
-        resume_lead=PatchSite("execution", "fedot/a.py", 6, hypothesis_kind="correctness"),
+        resume_lead=MatchSite("execution", "fedot/a.py", 6, hypothesis_kind="correctness"),
         lift_ids=("catboost",), protect_ids=("catboost",),
         max_leads=1, max_revisions=1, policy=EvolveRunPolicy(verify_manifest=False, fedot_quality_jobs=False),
     )

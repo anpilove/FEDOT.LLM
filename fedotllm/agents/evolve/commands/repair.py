@@ -18,7 +18,7 @@ from fedotllm.agents.evolve.execution.checkout import (
 )
 from fedotllm.agents.evolve.discovery.discover import static_leads
 from fedotllm.agents.evolve.agents.fixer import fix_lead
-from fedotllm.agents.evolve.storage.journal import append_journal
+from fedotllm.agents.evolve.storage.journal import append_journal, read_jsonl
 from fedotllm.agents.evolve.evaluation.judge import (
     measure_fedot_tests,
     measure_patched,
@@ -31,18 +31,18 @@ from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.commands.recall import split_gold, unique_files
 from fedotllm.agents.evolve.execution.smoke import import_error
 from fedotllm.agents.evolve.evaluation.tasks import hidden_exam
-from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit, PatchSite
+from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit, MatchSite
 
 _RUNTIME = frozenset({"fit", "transform", "predict", "predict_proba", "predict_for_fit"})
 
 
-def oracle_lead(checkout: Path, file_path: str) -> PatchSite | None:
+def oracle_lead(checkout: Path, file_path: str) -> MatchSite | None:
     target = checkout / file_path
     if not target.is_file():
         return None
     for lead in static_leads(checkout):
         if lead.file_path == file_path:
-            return PatchSite(
+            return MatchSite(
                 channel="oracle",
                 file_path=file_path,
                 line=lead.line,
@@ -50,7 +50,7 @@ def oracle_lead(checkout: Path, file_path: str) -> PatchSite | None:
                 signals=lead.signals,
             )
     line, name = _first_runtime(target)
-    return PatchSite(channel="oracle", file_path=file_path, line=line, why=f"function {name}")
+    return MatchSite(channel="oracle", file_path=file_path, line=line, why=f"function {name}")
 
 
 def _first_runtime(path: Path) -> tuple[int, str]:
@@ -127,17 +127,9 @@ def measure_repair(
 
 
 def _saved_attempts(workspace: Path) -> list[dict[str, Any]]:
-    import json
-
-    journal = workspace / "repair.jsonl"
     attempts: list[dict[str, Any]] = []
     seen: set[str] = set()
-    if not journal.is_file():
-        return attempts
-    for line in journal.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_jsonl(workspace / "repair.jsonl"):
         cid = row.get("candidate_id")
         if row.get("event") != "oracle_attempt" or not cid or cid in seen:
             continue

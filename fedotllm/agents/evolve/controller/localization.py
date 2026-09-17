@@ -8,14 +8,14 @@ from typing import Callable
 
 from fedotllm.agents.evolve.storage.hypothesis import Hypothesis, as_row
 from fedotllm.agents.evolve.storage.journal import append_journal
-from fedotllm.agents.evolve.types import PatchSite, ScoreResult
+from fedotllm.agents.evolve.types import MatchSite, ScoreResult
 
 ScoreRunner = Callable[..., dict[str, ScoreResult]]
 
 def start_revision(
     workspace: Path,
     parent: Hypothesis,
-    lead: PatchSite,
+    lead: MatchSite,
     revision: int,
     reason: str,
 ) -> Hypothesis:

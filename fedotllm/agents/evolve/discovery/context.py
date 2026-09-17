@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import deny_write
-from fedotllm.agents.evolve.types import PatchSite, ScoreResult
+from fedotllm.agents.evolve.types import MatchSite
 
 _FILE = re.compile(r'^\s*File "([^"]+)", line (\d+)(?:, in (.+))?$', re.MULTILINE)
 _FALLBACK_RADIUS = 12
@@ -28,7 +28,7 @@ def _clip(text: str, limit: int) -> str:
     return text[: max(0, limit)].rsplit("\n", 1)[0] + "\n...[truncated]"
 
 
-def _compact_lead_evidence(lead: PatchSite, *, max_chars: int = 3_000) -> str:
+def _compact_lead_evidence(lead: MatchSite, *, max_chars: int = 3_000) -> str:
     """Preserve causal evidence without letting repeated workloads hide source.
 
     Coverage contributes one runtime/operation row per workload.  Dumping all
@@ -97,7 +97,7 @@ def show_source(
 
 
 def scout_source_context(
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     checkout: Path,
     max_chars: int = 12_000,
@@ -195,23 +195,7 @@ def inspect_trace(
     return frames
 
 
-def context_from_traceback(
-    stock: ScoreResult,
-    checkout: Path,
-    *,
-    max_chars: int = 24_000,
-) -> str:
-    frames = inspect_trace(stock.traceback, checkout=checkout)
-    parts: list[str] = []
-    if stock.detail:
-        parts.append(f"Error: {stock.detail}")
-    for frame in frames[-_MAX_FRAMES:]:
-        header = f"{frame['file']}:{frame['line']} in {frame['func']}"
-        parts.append(header + "\n" + frame["source"])
-    return "\n\n".join(parts)[:max_chars]
-
-
-def context_from_lead(lead: PatchSite, checkout: Path, *, max_chars: int = _MAX_FILE_CHARS) -> str:
+def context_from_lead(lead: MatchSite, checkout: Path, *, max_chars: int = _MAX_FILE_CHARS) -> str:
     target = checkout / lead.file_path
     n_lines = 0
     if target.is_file():
@@ -425,7 +409,7 @@ def _attrs_in_source(source: str, *, limit: int = 4) -> list[str]:
     return seen
 
 
-def _fields_in_evidence(lead: PatchSite, *, limit: int = 6) -> list[str]:
+def _fields_in_evidence(lead: MatchSite, *, limit: int = 6) -> list[str]:
     """Extract concrete data-contract field names from measured runtime rows."""
 
     joined = "\n".join(str(item or "") for item in lead.evidence)
@@ -436,7 +420,7 @@ def _fields_in_evidence(lead: PatchSite, *, limit: int = 6) -> list[str]:
     return list(dict.fromkeys(candidates))[: max(1, limit)]
 
 
-def _runtime_siblings(checkout: Path, lead: PatchSite, *, limit: int = 3) -> str:
+def _runtime_siblings(checkout: Path, lead: MatchSite, *, limit: int = 3) -> str:
     """Other methods on the same class — not only fit/transform/predict."""
 
     from fedotllm.agents.evolve.discovery.repo_map import _NOISE_IN_NAME
@@ -475,7 +459,7 @@ def _runtime_siblings(checkout: Path, lead: PatchSite, *, limit: int = 3) -> str
     return "\n\n".join(parts)
 
 
-def _base_class_sources(checkout: Path, lead: PatchSite, *, limit: int = 6) -> str:
+def _base_class_sources(checkout: Path, lead: MatchSite, *, limit: int = 6) -> str:
     """Runtime methods inherited by the class containing the lead.
 
     A long FEDOT file is normally sliced to one enclosing method.  For thin
@@ -568,7 +552,7 @@ def _base_class_sources(checkout: Path, lead: PatchSite, *, limit: int = 6) -> s
 
 def _related_implementation_sources(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     limit: int = 4,
 ) -> str:
@@ -660,7 +644,7 @@ def _ast_name(node: ast.expr) -> str | None:
 
 def _callee_sources(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     skip_file: str | None = None,
     limit: int = 4,

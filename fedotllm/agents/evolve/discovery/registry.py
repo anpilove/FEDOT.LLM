@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import deny_write
 from fedotllm.agents.evolve.discovery.repo_map import in_metric_scan, skip_metric_noise
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.types import MatchSite
 
 _REPO_JSON = (
     "model_repository.json",
@@ -113,21 +113,21 @@ def _impl_imports(path: Path, checkout: Path) -> list[str]:
     return out
 
 
-def registry_leads(checkout: Path) -> list[PatchSite]:
+def registry_leads(checkout: Path) -> list[MatchSite]:
     files = registry_files(checkout)
     if not files:
         return []
     from fedotllm.agents.evolve.discovery.repo_map import iter_symbols, looks_metric
 
     allowed = set(files)
-    leads: list[PatchSite] = []
+    leads: list[MatchSite] = []
     for symbol in iter_symbols(checkout):
         if symbol.file_path not in allowed or symbol.kind not in {"method", "function"}:
             continue
         if not looks_metric(checkout, symbol):
             continue
         leads.append(
-            PatchSite(
+            MatchSite(
                 channel="registry",
                 file_path=symbol.file_path,
                 line=symbol.line,
@@ -138,7 +138,7 @@ def registry_leads(checkout: Path) -> list[PatchSite]:
     params = "fedot/core/repository/data/default_operation_params.json"
     if params in allowed:
         leads.append(
-            PatchSite(
+            MatchSite(
                 channel="registry",
                 file_path=params,
                 line=1,

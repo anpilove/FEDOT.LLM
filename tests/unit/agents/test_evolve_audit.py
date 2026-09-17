@@ -13,7 +13,7 @@ from fedotllm.agents.evolve.storage.scoreboard import (
     append_final,
     summarize,
 )
-from fedotllm.agents.evolve.types import Decision, PatchSite, ScoreResult
+from fedotllm.agents.evolve.types import Decision, MatchSite, ScoreResult
 
 
 def test_shipped_manifest_is_loadable():
@@ -292,7 +292,7 @@ def test_atomic_checkpoint_preserves_scout_candidates_and_history(tmp_path):
         save_checkpoint,
     )
 
-    lead = PatchSite(
+    lead = MatchSite(
         "llm",
         "fedot/core/example.py",
         12,
@@ -634,7 +634,7 @@ def test_scout_skip_does_not_become_static_hypothesis(tmp_path, monkeypatch):
     source.parent.mkdir(parents=True)
     source.write_text("def transform(x):\n    return x + 1\n")
     monkeypatch.setattr(
-        discover, "static_leads", lambda *_: [PatchSite("static", rel, 1)]
+        discover, "static_leads", lambda *_: [MatchSite("static", rel, 1)]
     )
 
     class Skip:
@@ -735,7 +735,7 @@ def test_resume_preserves_controller_observed_crash(tmp_path, legacy):
     from fedotllm.agents.evolve.storage.journal import append_journal
     from fedotllm.agents.evolve.storage.replay import load_resume_branch
 
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/core/data.py",
         10,
@@ -778,7 +778,7 @@ def test_resume_recovers_candidate_artifact_without_decision(tmp_path):
     from fedotllm.agents.evolve.storage.journal import append_journal
     from fedotllm.agents.evolve.storage.replay import load_resume_branch
 
-    lead = PatchSite(
+    lead = MatchSite(
         "invariant",
         "fedot/core/example.py",
         17,
@@ -902,7 +902,7 @@ def test_controller_correctness_replay_uses_only_crashes_that_reached_lead():
         _controller_crashes_for_lead,
     )
 
-    lead = PatchSite("execution", "fedot/core/target.py", 10)
+    lead = MatchSite("execution", "fedot/core/target.py", 10)
     stock = {
         "trace_hit": ScoreResult(
             "trace_hit",
@@ -969,12 +969,12 @@ def test_scout_long_read_keeps_tool_header_and_source_start():
 
 def test_runtime_class_priority_does_not_promote_a_shared_name_prefix():
     from fedotllm.agents.evolve.discovery.selection import _execution_causal_priority
-    from fedotllm.agents.evolve.types import PatchSite
+    from fedotllm.agents.evolve.types import MatchSite
 
     evidence = (
         "runtime operation instances: lgbm/FedotLightGBMClassificationImplementation fit params={}",
     )
-    dispatcher = PatchSite(
+    dispatcher = MatchSite(
         "execution",
         "fedot/api/main.py",
         100,
@@ -982,7 +982,7 @@ def test_runtime_class_priority_does_not_promote_a_shared_name_prefix():
         evidence=evidence,
         signals=("executed", "method"),
     )
-    concrete = PatchSite(
+    concrete = MatchSite(
         "execution",
         "fedot/core/operations/evaluation/operation_implementations/models.py",
         20,
@@ -990,7 +990,7 @@ def test_runtime_class_priority_does_not_promote_a_shared_name_prefix():
         evidence=evidence,
         signals=("executed", "method"),
     )
-    transform = PatchSite(
+    transform = MatchSite(
         "execution",
         "fedot/core/operations/evaluation/operation_implementations/data_operations/ts.py",
         20,

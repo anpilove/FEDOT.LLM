@@ -7,21 +7,23 @@ from fedotllm.agents.evolve.evaluation.quality_registry import (
     get_dataset,
     job_spec,
     list_quality_task_ids,
-    list_starter_task_ids,
-    list_tabular_task_ids,
-    list_ts_task_ids,
     load_quality_registry,
     select_task_ids_for_job,
 )
 from fedotllm.agents.evolve.controller.quality_queue import queue_priority
+from fedotllm.agents.evolve.execution.process import WorkerOutcome
 from fedotllm.agents.evolve.types import ScoreResult, TestResult
+
+
+def _task_ids(registry, problem: str) -> tuple[str, ...]:
+    return tuple(item.task_id for item in registry.datasets if item.problem == problem)
 
 
 def test_quality_registry_is_full_openml_and_fixed_before_scores():
     registry = load_quality_registry()
     ids = list_quality_task_ids(registry)
-    tabular = list_tabular_task_ids(registry)
-    ts_ids = list_ts_task_ids(registry)
+    tabular = _task_ids(registry, "classification")
+    ts_ids = _task_ids(registry, "ts_forecasting")
     assert registry.timeout_seconds == 3600
     assert registry.preset == "best_quality"
     assert registry.with_tuning is True
@@ -57,7 +59,6 @@ def test_quality_registry_is_full_openml_and_fixed_before_scores():
     )
     assert ts_ids == ("fedot-ts-beer", "fedot-ts-australia", "fedot-ts-salaries")
     assert ids == tabular + ts_ids
-    assert list_starter_task_ids(registry) == ids
     assert len(tabular) == 24
     assert len(ids) >= 16
     assert registry.selection_study == 99
@@ -159,13 +160,13 @@ def test_historical_delta0_and_no_change_stay_hour_queue_eligible(tmp_path):
 
 def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller import campaign as loop
-    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, PatchSite
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
 
     source = tmp_path / "source"
     (source / "fedot").mkdir(parents=True)
     (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
     (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     stock = {
         "catboost": ScoreResult("catboost", "ok", 0.86),
         "rf": ScoreResult("rf", "ok", 0.80),
@@ -416,7 +417,7 @@ def test_stock_warm_skips_matching_cache_identity_including_leftover_njobs(tmp_p
     def boom(*_args, **_kwargs):
         raise AssertionError("matching stock cache must not launch Fedot")
 
-    monkeypatch.setattr(fq.subprocess, "run", boom)
+    monkeypatch.setattr(fq, "run_worker", boom)
     result = fq.run_quality_side(
         dataset,
         checkout=tmp_path / "FEDOT",
@@ -465,13 +466,9 @@ def test_stock_warm_does_not_skip_identity_mismatch(tmp_path, monkeypatch):
 
     def fake_run(*_args, **_kwargs):
         called.append(True)
+        return WorkerOutcome(returncode=0, stdout="", stderr="")
 
-        class Proc:
-            returncode = 0
-
-        return Proc()
-
-    monkeypatch.setattr(fq.subprocess, "run", fake_run)
+    monkeypatch.setattr(fq, "run_worker", fake_run)
     result = fq.run_quality_side(
         dataset,
         checkout=tmp_path / "FEDOT",
@@ -484,8 +481,9 @@ def test_stock_warm_does_not_skip_identity_mismatch(tmp_path, monkeypatch):
 
 
 def test_quality_job_selects_tabular_or_ts_by_patch_path():
-    tabular = list_tabular_task_ids()
-    ts_ids = list_ts_task_ids()
+    registry = load_quality_registry()
+    tabular = _task_ids(registry, "classification")
+    ts_ids = _task_ids(registry, "ts_forecasting")
     assert select_task_ids_for_job(
         {"file_path": "fedot/core/operations/evaluation/operation_implementations/models/boostings_implementations.py"}
     ) == tabular
@@ -602,10 +600,10 @@ def test_drain_runs_ts_tasks_for_ts_patch_and_keeps_toy_delta_zero(tmp_path, mon
     )
     payload = drain_quality_queue(source, workspace)
     assert payload["jobs"][0]["keep"] is True
-    assert payload["jobs"][0]["task_ids"] == list(list_ts_task_ids())
-    assert seen[0] == ("stock", list_ts_task_ids())
+    assert payload["jobs"][0]["task_ids"] == list(_task_ids(load_quality_registry(), "ts_forecasting"))
+    assert seen[0] == ("stock", _task_ids(load_quality_registry(), "ts_forecasting"))
     assert seen[1][0] == "patch"
-    assert seen[1][1] == list_ts_task_ids()
+    assert seen[1][1] == _task_ids(load_quality_registry(), "ts_forecasting")
     job = json.loads((workspace / "quality_queue" / "ar-toy-zero.json").read_text(encoding="utf-8"))
     assert job["status"] == "keep"
     assert job["probe_status"] == "no_change"
@@ -631,7 +629,7 @@ def test_drain_does_not_rewarm_pool_when_no_applicable_tasks(tmp_path, monkeypat
         patch_text=f"--- a/{rel}\n+++ b/{rel}\n@@\n-value = 1\n+value = 2\n",
         hint="ts family against tabular-only pool",
         priority="normal",
-        task_ids=list_tabular_task_ids(),
+        task_ids=_task_ids(load_quality_registry(), "classification"),
     )
     stock_calls: list[tuple[str, ...]] = []
 
@@ -650,7 +648,7 @@ def test_drain_does_not_rewarm_pool_when_no_applicable_tasks(tmp_path, monkeypat
     payload = drain_quality_queue(
         source,
         workspace,
-        task_ids=list_tabular_task_ids(),
+        task_ids=_task_ids(load_quality_registry(), "classification"),
     )
     assert stock_calls == []
     assert payload["task_ids"] == []
@@ -713,6 +711,55 @@ def test_drain_picks_up_jobs_enqueued_after_start(tmp_path, monkeypatch):
     payload = drain_quality_queue(source, workspace)
     assert [job["candidate_id"] for job in payload["jobs"]] == ["first-job", "late-job"]
     assert all(job["keep"] for job in payload["jobs"])
+
+
+def test_drain_marks_executor_crash_failed_not_running(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue
+    from fedotllm.agents.evolve.controller.quality_queue import enqueue_quality_job
+    from fedotllm.agents.evolve.types import PatchCandidate
+
+    source = tmp_path / "FEDOT"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "x.py").write_text("value = 1\n", encoding="utf-8")
+    workspace = tmp_path / "campaign"
+    enqueue_quality_job(
+        workspace,
+        candidate=PatchCandidate(candidate_id="crash-job", file_path="fedot/x.py"),
+        patch_text="--- a/fedot/x.py\n+++ b/fedot/x.py\n@@\n-value = 1\n+value = 2\n",
+        hint="executor crash should not stick in running",
+        priority="normal",
+    )
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.controller.quality_executor.run_quality_stock_jobs",
+        lambda **kwargs: [
+            {
+                "spec": {"source_dataset": task_id},
+                "stock": {"status": "ok", "score": 0.7},
+                "search_ran": True,
+            }
+            for task_id in kwargs["task_ids"]
+        ],
+    )
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("fedot worker died")
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.controller.quality_executor.measure_fedot_quality",
+        boom,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.controller.quality_executor.append_journal",
+        lambda *a, **k: None,
+    )
+
+    payload = drain_quality_queue(source, workspace, task_ids=list_quality_task_ids())
+    job = json.loads((workspace / "quality_queue" / "crash-job.json").read_text(encoding="utf-8"))
+    assert job["status"] == "failed"
+    assert job["status"] != "running"
+    assert payload["jobs"][0]["status"] == "failed"
+    assert "executor_error" in payload["jobs"][0]["reason"]
 
 
 def test_quality_regression_drops():

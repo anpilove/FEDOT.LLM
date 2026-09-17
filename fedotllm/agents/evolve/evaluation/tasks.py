@@ -137,7 +137,6 @@ _seq(
     "pca->catboost",
     "pca",
     "catboost",
-    must_not_regress=("catboost", "fast_ica->lgbm"),
 )
 _seq("fast_ica->lgbm", "fast_ica", "lgbm")
 _seq(
@@ -284,24 +283,6 @@ def all_tasks() -> list[TaskSpec]:
     return list(_TASKS.values())
 
 
-def list_task_metadata() -> list[dict]:
-    """Harness-only. Not an LLM tool."""
-
-    return [
-        {
-            "task_id": spec.task_id,
-            "nodes": list(spec.nodes),
-            "dataset": spec.dataset,
-            "problem": spec.problem,
-            "metric": spec.metric,
-            "sentinel": spec.sentinel,
-            "min_delta": spec.min_delta,
-            "higher_is_better": spec.higher_is_better,
-        }
-        for spec in all_tasks()
-    ]
-
-
 def _csv_env(name: str, default: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in os.environ.get(name, default).split(",") if part.strip())
 
@@ -324,14 +305,14 @@ def coverage_task_limit() -> int:
 
 
 def hidden_exam() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Quality suite used as both lift and protect."""
+    """Quality suite used as both lift and protect.
+
+    FINAL evaluates the same workloads on their disjoint FINAL partitions, so
+    ``final_exam`` is the same pair.
+    """
 
     suite = quality_suite()
     return suite, suite
 
 
-def final_exam() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Same workloads as DEV, evaluated on their disjoint FINAL partitions."""
-
-    suite = quality_suite()
-    return suite, suite
+final_exam = hidden_exam

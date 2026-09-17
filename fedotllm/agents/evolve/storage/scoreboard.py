@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from fedotllm.agents.evolve.storage.journal import append_journal, resolve_run_workspace
+from fedotllm.agents.evolve.storage.journal import (
+    append_journal,
+    read_jsonl,
+    resolve_run_workspace,
+)
 from fedotllm.agents.evolve.types import (
     Decision,
     PatchCandidate,
-    PatchSite,
+    MatchSite,
     ScoreResult,
 )
 
@@ -22,7 +25,7 @@ def scoreboard_path(workspace: Path) -> Path:
 def append_attempt(
     workspace: Path,
     *,
-    lead: PatchSite | None,
+    lead: MatchSite | None,
     candidate: PatchCandidate | None,
     stock: dict[str, ScoreResult],
     patched: dict[str, ScoreResult] | None,
@@ -89,19 +92,6 @@ def append_final(
 
 def summarize(workspace: Path) -> dict[str, Any]:
     workspace = resolve_run_workspace(workspace)
-    path = scoreboard_path(workspace)
-    if not path.is_file():
-        return {
-            "attempts": 0,
-            "keeps": 0,
-            "correctness_keeps": 0,
-            "maintenance_keeps": 0,
-            "metric_signal_keeps": 0,
-            "best_delta": None,
-            "getting_better": False,
-            "getting_better_final": False,
-            "last_keep": False,
-        }
     attempts = 0
     keeps = 0
     metric_keeps = 0
@@ -112,10 +102,7 @@ def summarize(workspace: Path) -> dict[str, Any]:
     last_keep = False
     final_keep = False
     final_delta: float | None = None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_jsonl(scoreboard_path(workspace)):
         if row.get("event") == "final":
             final_keep = bool(row.get("keep"))
             delta = row.get("target_delta")

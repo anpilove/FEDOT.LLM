@@ -10,7 +10,7 @@ from fedotllm.agents.evolve.evaluation.independent_data import (
     PROTOCOL, partition_indices, select_indices, table_split, ts_indices,
 )
 from fedotllm.agents.evolve.evaluation.uncertainty import paired_interval
-from fedotllm.agents.evolve.types import PatchSite, ScoreResult, TaskSpec
+from fedotllm.agents.evolve.types import MatchSite, ScoreResult, TaskSpec
 from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit, VerificationResult
 
 
@@ -139,7 +139,7 @@ def test_parameterized_target_retains_default_workload_guard(monkeypatch, specs)
 
 
 def test_preregistered_target_cannot_change_on_resume(tmp_path, specs):
-    lead = PatchSite("execution", "fedot/a.py", 3)
+    lead = MatchSite("execution", "fedot/a.py", 3)
     covered = ({"file_path": "fedot/a.py", "line_ranges": [[2, 4]]},)
     baseline = {"b": score("b", .1, coverage=covered), "a": score("a", .9, coverage=covered)}
     path = tmp_path / "plan.json"
@@ -196,7 +196,7 @@ def test_candidate_stages_keep_target_and_never_query_final_before_batch(tmp_pat
     source = tmp_path / "source"
     (source / "fedot").mkdir(parents=True)
     (source / "fedot/a.py").write_text("value = 1\n")
-    lead = PatchSite("execution", "fedot/a.py", 1)
+    lead = MatchSite("execution", "fedot/a.py", 1)
     candidate = PatchCandidate("candidate", edits=[PatchEdit("fedot/a.py", "value = 1", "value = 2")])
     plan = {"target_task": "target", "data_hashes": {"target": "frozen-data"}, "transfer": {}}
     calls = []

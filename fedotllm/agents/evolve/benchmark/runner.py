@@ -30,7 +30,7 @@ from fedotllm.agents.evolve.types import (
     Decision,
     PatchCandidate,
     PatchEdit,
-    PatchSite,
+    MatchSite,
     ScoreResult,
     VerificationResult,
 )
@@ -200,7 +200,7 @@ pipeline = PipelineBuilder().add_node('lagged', params={'window_size': 100}).bui
 assert pipeline is not None
 """,
         )
-        lead = PatchSite("benchmark", _LAGGED_FILE, 132)
+        lead = MatchSite("benchmark", _LAGGED_FILE, 132)
         result = evaluate_affected_metric(
             source,
             experiment,
@@ -323,7 +323,7 @@ observed = PipelineStructureExplorer.check_structure_by_tag(
     pipeline, 'imputation', source_name='source-not-present-in-pipeline')
 assert observed is False
 """
-    lead = PatchSite(
+    lead = MatchSite(
         "regression",
         "fedot/preprocessing/structure.py",
         57,

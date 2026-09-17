@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fedotllm.agents.evolve.evaluation.eval import run_patched, run_stock
 from fedotllm.agents.evolve.evaluation.tasks import all_tasks, load_task
-from fedotllm.agents.evolve.types import PatchSite, VerificationResult
+from fedotllm.agents.evolve.types import MatchSite, VerificationResult
 
 
 def _json_literal(value):
@@ -66,7 +66,7 @@ def extract_operation_overlays(code: str) -> dict[str, dict]:
     return overlays
 
 
-def _line_reached(result, lead: PatchSite) -> bool:
+def _line_reached(result, lead: MatchSite) -> bool:
     target = lead.file_path.replace("\\", "/").lstrip("/")
     for row in result.coverage:
         file_path = str(row.get("file_path") or "").replace("\\", "/")
@@ -119,7 +119,7 @@ def evaluate_affected_metric(
     source: Path,
     experiment: Path,
     verification: VerificationResult,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     seed: int = 42,
     split: str = "dev",
@@ -227,7 +227,7 @@ def confirm_affected_metric(
     source: Path,
     experiment: Path,
     verification: VerificationResult,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     seeds: tuple[int, ...] = (42, 43, 44),
     split: str = "dev",

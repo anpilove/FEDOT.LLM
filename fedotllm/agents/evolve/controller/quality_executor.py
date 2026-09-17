@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -231,7 +232,7 @@ def drain_quality_queue(
                 stock_by_task[row["spec"]["source_dataset"]] = row
         for job in queued:
             candidate_id = str(job.get("candidate_id") or "")
-            processed.add(candidate_id or str(job.get("_path") or ""))
+            job_key = candidate_id or str(job.get("_path") or "")
             job_path = Path(str(job["_path"]))
             recorded = Path(str(job.get("patch") or ""))
             sibling = job_path.with_suffix(".patch")
@@ -261,26 +262,28 @@ def drain_quality_queue(
                         "toy_metric": job.get("toy_metric"),
                     }
                 )
+                processed.add(job_key)
                 continue
             write_job_status(job_path, "running")
-            if not patch_path.is_file():
-                write_job_status(job_path, "apply_failed", {"reason": "missing_patch"})
-                results.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "status": "apply_failed",
-                        "reason": "missing_patch",
-                        "keep": False,
-                    }
-                )
-                continue
-            tree = create_experiment_checkout(
-                source,
-                workspace,
-                run_id="quality-drain",
-                candidate_id=candidate_id,
-            )
+            tree: Path | None = None
             try:
+                if not patch_path.is_file():
+                    write_job_status(job_path, "apply_failed", {"reason": "missing_patch"})
+                    results.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "status": "apply_failed",
+                            "reason": "missing_patch",
+                            "keep": False,
+                        }
+                    )
+                    continue
+                tree = create_experiment_checkout(
+                    source,
+                    workspace,
+                    run_id="quality-drain",
+                    candidate_id=candidate_id,
+                )
                 applied = apply_queue_patch(
                     tree,
                     candidate_id=candidate_id,
@@ -302,6 +305,10 @@ def drain_quality_queue(
                     source,
                     tree,
                     journal=journal,
+                    candidate=PatchCandidate(
+                        candidate_id=candidate_id,
+                        file_path=str(job.get("file_path") or ""),
+                    ),
                     task_ids=job_ids,
                     n_jobs=n_jobs,
                     cpu_quota=cpu_quota,
@@ -334,8 +341,63 @@ def drain_quality_queue(
                         "toy_metric": job.get("toy_metric"),
                     }
                 )
+            except Exception as exc:
+                write_job_status(
+                    job_path,
+                    "failed",
+                    {
+                        "reason": f"executor_error:{type(exc).__name__}",
+                        "keep": False,
+                        "infrastructure_error": True,
+                    },
+                )
+                results.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "status": "failed",
+                        "reason": f"executor_error:{type(exc).__name__}",
+                        "keep": False,
+                        "infrastructure_error": True,
+                        "task_ids": list(job_ids),
+                        "priority": job.get("priority"),
+                        "probe_status": job.get("probe_status"),
+                        "toy_metric": job.get("toy_metric"),
+                    }
+                )
             finally:
-                discard_experiment_checkout(tree, workspace=workspace, source=source)
+                if tree is not None:
+                    discard_experiment_checkout(tree, workspace=workspace, source=source)
+                try:
+                    payload = json.loads(job_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    # Never let a broken job file in ``finally`` mask the real error.
+                    payload = {}
+                status = str(payload.get("status") or "")
+                if status == "running":
+                    write_job_status(
+                        job_path,
+                        "failed",
+                        {
+                            "reason": "executor_aborted",
+                            "keep": False,
+                            "infrastructure_error": True,
+                        },
+                    )
+                    results.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "status": "failed",
+                            "reason": "executor_aborted",
+                            "keep": False,
+                            "infrastructure_error": True,
+                            "task_ids": list(job_ids),
+                            "priority": job.get("priority"),
+                            "probe_status": job.get("probe_status"),
+                            "toy_metric": job.get("toy_metric"),
+                        }
+                    )
+                elif status not in {"queued", "running", ""}:
+                    processed.add(job_key)
 
     stock_rows = list(stock_by_task.values())
     return {

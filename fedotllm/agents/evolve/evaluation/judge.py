@@ -7,7 +7,6 @@ import json
 import os
 import re
 import sys
-import uuid
 from dataclasses import asdict
 from pathlib import Path
 
@@ -17,8 +16,9 @@ from fedotllm.agents.evolve.evaluation.compare import compare_pack
 from fedotllm.agents.evolve.discovery.discover import pytest_failure_excerpt, pytest_snapshot
 from fedotllm.agents.evolve.evaluation.eval import run_patched, run_stock
 from fedotllm.agents.evolve.execution.guard import repo_root
+from fedotllm.agents.evolve.storage.journal import write_json_atomic
 from fedotllm.agents.evolve.evaluation.tasks import coverage_task_limit, hidden_exam, load_task
-from fedotllm.agents.evolve.types import Decision, PatchSite, ScoreResult, TestResult
+from fedotllm.agents.evolve.types import Decision, MatchSite, ScoreResult, TestResult
 from fedotllm.agents.evolve.evaluation.test_contracts import run_with_test_repairs
 
 
@@ -160,7 +160,7 @@ def measure_baseline_fedot_tests(checkout: Path, *, runner=None) -> TestResult:
                 result = dict(payload["result"])
                 result["failed_nodes"] = set(result.get("failed_nodes") or ())
                 result["leads"] = [
-                    item if isinstance(item, PatchSite) else PatchSite(**item)
+                    item if isinstance(item, MatchSite) else MatchSite(**item)
                     for item in result.get("leads") or ()
                 ]
                 return TestResult(**result)
@@ -169,20 +169,9 @@ def measure_baseline_fedot_tests(checkout: Path, *, runner=None) -> TestResult:
     run_tests = runner or measure_fedot_tests
     result = normalize_test_result(run_tests(checkout))
     if use_cache and result.completed:
-        cache_root.mkdir(parents=True, exist_ok=True)
-        temp = cache_file.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-        temp.write_text(
-            json.dumps(
-                {
-                    "fingerprint": fingerprint,
-                    "result": asdict(result),
-                },
-                ensure_ascii=False,
-                default=lambda value: sorted(value) if isinstance(value, set) else str(value),
-            ),
-            encoding="utf-8",
-        )
-        temp.replace(cache_file)
+        payload = asdict(result)
+        payload["failed_nodes"] = sorted(result.failed_nodes)
+        write_json_atomic(cache_file, {"fingerprint": fingerprint, "result": payload})
     return result
 
 

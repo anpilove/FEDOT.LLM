@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from fedotllm.agents.evolve.discovery.context import inspect_trace, show_source
-from fedotllm.agents.evolve.execution.guard import deny_write
+from fedotllm.agents.evolve.execution.guard import deny_write, repo_root
 from fedotllm.agents.evolve.storage.journal import append_journal
 from fedotllm.agents.evolve.discovery.repo_map import (
     format_map,
@@ -17,7 +17,7 @@ from fedotllm.agents.evolve.discovery.repo_map import (
     repo_map,
     search_callers,
 )
-from fedotllm.agents.evolve.execution.run_code import _clean_env, fedot_python
+from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python
 from fedotllm.agents.evolve.types import SnippetResult, TestResult
 
 MAX_TOOL_OUTPUT = 8_000
@@ -388,6 +388,28 @@ def callers_runtime(checkout: Path, symbol: str, *, limit: int = 12) -> str:
     return output
 
 
+def run_research_tool(
+    checkout: Path, action: str, *, query: str = "", symbol: str = ""
+) -> tuple[str, str]:
+    """Dispatch one read-only research action; return ``(effective_query, output)``.
+
+    ``search``/``docs`` take the free-text query; ``symbol`` prefers the query
+    and falls back to the symbol; ``callers`` prefers the symbol.
+    """
+
+    if action == "search":
+        return query, search_runtime(checkout, query)
+    if action == "symbol":
+        effective = query or symbol
+        return effective, symbol_runtime(checkout, effective)
+    if action == "docs":
+        return query, docs_runtime(checkout, query)
+    if action == "callers":
+        effective = symbol or query
+        return effective, callers_runtime(checkout, effective)
+    raise ValueError(f"unknown research tool: {action}")
+
+
 def docs_runtime(checkout: Path, query: str, *, limit: int = 4) -> str:
     """Retrieve docs, docstrings, and operation metadata shipped with FEDOT."""
 
@@ -425,7 +447,7 @@ def focused_test(checkout: Path, node_id: str, *, timeout_s: float = 90) -> Test
         proc = subprocess.run(
             cmd,
             cwd=checkout,
-            env=_clean_env(checkout),
+            env=clean_subprocess_env(checkout, repo_root=repo_root()),
             capture_output=True,
             text=True,
             timeout=timeout_s,

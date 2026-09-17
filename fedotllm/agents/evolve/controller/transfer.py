@@ -13,7 +13,7 @@ from fedotllm.agents.evolve.evaluation.affected_eval import _line_reached
 from fedotllm.agents.evolve.evaluation.eval import run_stock, run_patched
 from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL
 from fedotllm.agents.evolve.evaluation.tasks import all_tasks, load_task
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.types import MatchSite
 
 TRANSFER_PROTOCOL = "benchmark-transfer-v1"
 
@@ -60,7 +60,7 @@ def scenario_tasks(target):
 _JSON_OPERATION = re.compile(r'^\s*"([^"\n]+)"\s*:\s*\{')
 
 
-def _configuration_operation_at_lead(source, lead: PatchSite) -> str | None:
+def _configuration_operation_at_lead(source, lead: MatchSite) -> str | None:
     """Resolve the JSON operation owning a planned metadata line."""
     if source is None or not lead.file_path.endswith(".json"):
         return None
@@ -76,7 +76,7 @@ def _configuration_operation_at_lead(source, lead: PatchSite) -> str | None:
     return None
 
 
-def _crash_at_lead(result, lead: PatchSite) -> bool:
+def _crash_at_lead(result, lead: MatchSite) -> bool:
     """A crash can prove reachability when coverage stops at the exception."""
     target = lead.file_path.replace("\\", "/").lstrip("/")
     trace = str(getattr(result, "traceback", "") or "").replace("\\", "/")
@@ -188,7 +188,10 @@ def evaluate_transfer(source, experiment, plan, *, params=None, split, fold=None
         else {row["data_hash"] for row in plan["datasets"]}
     )
     selected_rows = [row for row in plan["datasets"] if row["data_hash"] in selected_hashes]
-    lead = PatchSite(**plan["lead"])
+    # FINAL pairs must draw on the reserve that MeasurementBudget keeps for
+    # them; charging them as "full" would let the reserve block FINAL itself.
+    budget_stage = "final" if split == "final" else scope
+    lead = MatchSite(**plan["lead"])
     affected_hashes = {row["data_hash"] for row in selected_rows if row["affected"]}
     required = max(2, len(affected_hashes) // 2 + 1)
     scenario_wins = {}
@@ -197,7 +200,7 @@ def evaluate_transfer(source, experiment, plan, *, params=None, split, fold=None
         task = row["task"]
         target = row["scenario"]
         override = _override(target, params, fold)
-        started = budget.begin(scope) if budget is not None else None
+        started = budget.begin(budget_stage) if budget is not None else None
         if budget is not None and started is None:
             report.update(affected_dataset_count=len(affected_hashes), failures=failures,
                           measurement_budget=budget.snapshot(), reason="inconclusive_budget")
@@ -268,7 +271,7 @@ def evaluate_transfer(source, experiment, plan, *, params=None, split, fold=None
             normal["index_offset"] = 0
             if fold is not None:
                 normal["resample_fold"] = fold
-            started = budget.begin(scope) if budget is not None else None
+            started = budget.begin(budget_stage) if budget is not None else None
             if budget is not None and started is None:
                 report.update(affected_dataset_count=len(affected_hashes), failures=failures,
                               measurement_budget=budget.snapshot(), reason="inconclusive_budget")

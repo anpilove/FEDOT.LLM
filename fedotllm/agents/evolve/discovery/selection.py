@@ -24,7 +24,7 @@ from fedotllm.agents.evolve.execution.guard import deny_write
 from fedotllm.agents.evolve.discovery.repo_map import in_metric_scan
 from fedotllm.agents.evolve.discovery.navigation import architecture_cards
 from fedotllm.agents.evolve.storage.replay import semantic_site_id
-from fedotllm.agents.evolve.types import PatchSite, ToolAction
+from fedotllm.agents.evolve.types import MatchSite, ToolAction
 
 _RAW_PICK_CHARS = 32_000
 
@@ -61,7 +61,7 @@ task families and sibling operations. DEV decides whether it is better. If DEV i
 neutral, the change is useful only when an independent stock failure is reproduced
 and the same probe passes after patching. You do not have to pick this file.
 
-status=pick — record this file (or an opened neighbor) as a patch site. The catalog
+status=pick — record this file (or an opened neighbor) as a match site. The catalog
 walk continues with the next file; pick does not stop the scan. Fill `mechanism`,
 `proposed_change`, `expected_metric_effect`, `hypothesis_kind`, and `change_line`.
 Use hypothesis_kind=correctness only for a concrete violation of a stable data,
@@ -221,15 +221,20 @@ def _pick_claim_is_positive(parsed: SiteProposal) -> bool:
     )
     if _SELF_REJECTING_PICK.search(explanation):
         return False
-    structured = (
-        parsed.mechanism.strip(),
-        parsed.proposed_change.strip(),
-        parsed.expected_metric_effect.strip(),
+    return _pick_is_structured(parsed)
+
+
+def _pick_is_structured(parsed: SiteProposal) -> bool:
+    return all(
+        (
+            parsed.mechanism.strip(),
+            parsed.proposed_change.strip(),
+            parsed.expected_metric_effect.strip(),
+        )
     )
-    return all(structured)
 
 
-def _pick_change_line(parsed: SiteProposal, fallback: int) -> int | None:
+def _pick_change_line(parsed: SiteProposal) -> int | None:
     """Resolve the actual edit location, rejecting incomplete causal claims.
 
     The model must distinguish the inspected anchor from the first line it
@@ -237,19 +242,12 @@ def _pick_change_line(parsed: SiteProposal, fallback: int) -> int | None:
     proposed change to an unexecuted sibling branch.
     """
 
-    structured = all(
-        (
-            parsed.mechanism.strip(),
-            parsed.proposed_change.strip(),
-            parsed.expected_metric_effect.strip(),
-        )
-    )
-    if not structured or parsed.change_line <= 0:
+    if not _pick_is_structured(parsed) or parsed.change_line <= 0:
         return None
     return max(1, int(parsed.change_line))
 
 
-def _impact(lead: PatchSite) -> int:
+def _impact(lead: MatchSite) -> int:
     """Compose bonuses. Call graph is not a hard gate; package is not a hard gate."""
 
     score = 0
@@ -301,7 +299,7 @@ def _metric_path(path: str) -> bool:
     return path not in _METADATA_REGISTRY_FILES and in_metric_scan(path)
 
 
-def _execution_causal_priority(lead: PatchSite) -> int:
+def _execution_causal_priority(lead: MatchSite) -> int:
     """Rank measured data-plane code above high-hit registry/dispatch plumbing."""
 
     path = lead.file_path.lower()
@@ -377,8 +375,8 @@ def _execution_causal_priority(lead: PatchSite) -> int:
     return 3
 
 
-def _unique(leads: list[PatchSite]) -> list[PatchSite]:
-    by_key: dict[tuple[str, int], PatchSite] = {}
+def _unique(leads: list[MatchSite]) -> list[MatchSite]:
+    by_key: dict[tuple[str, int], MatchSite] = {}
     order: list[tuple[str, int]] = []
     for lead in leads:
         key = (lead.file_path, lead.line)
@@ -395,7 +393,7 @@ def _unique(leads: list[PatchSite]) -> list[PatchSite]:
         else:
             channel = old.channel
             why = old.why or lead.why
-        by_key[key] = PatchSite(
+        by_key[key] = MatchSite(
             channel=channel,
             file_path=old.file_path,
             line=old.line,
@@ -421,8 +419,7 @@ def _unique(leads: list[PatchSite]) -> list[PatchSite]:
     return [by_key[key] for key in order]
 
 
-def pool_rows(leads: list[PatchSite], *, picked: PatchSite | None = None) -> list[dict]:
-    _ = picked
+def pool_rows(leads: list[MatchSite]) -> list[dict]:
     rows = []
     for rank, lead in enumerate(leads, start=1):
         rows.append(
@@ -514,11 +511,11 @@ def _create_pick(inference, prompt, *, metadata: dict | None = None):
     )
 
 
-def _pick_files(leads: list[PatchSite]) -> list[PatchSite]:
+def _pick_files(leads: list[MatchSite]) -> list[MatchSite]:
     """One catalog site per file, in ranked order."""
 
     seen: set[str] = set()
-    out: list[PatchSite] = []
+    out: list[MatchSite] = []
     for lead in leads:
         if lead.file_path in seen:
             continue
@@ -572,20 +569,23 @@ def _metric_line_is_executed(line: int, evidence: tuple[str, ...]) -> bool | Non
     return False
 
 
+def _executed_operations(evidence: tuple[str, ...]) -> set[str]:
+    return {
+        item.split(":", 1)[1].strip()
+        for item in evidence
+        if item.startswith("executed operation:")
+    }
+
+
 def _default_pick_matches_executed_operation(
     parsed: SiteProposal,
-    picked: PatchSite,
+    picked: MatchSite,
     checkout: Path,
 ) -> bool:
     """Keep a shared defaults-file pick tied to one measured operation."""
 
     operation = parsed.operation_id.strip()
-    executed = {
-        item.split(":", 1)[1].strip()
-        for item in picked.evidence
-        if item.startswith("executed operation:")
-    }
-    if not operation or operation not in executed:
+    if not operation or operation not in _executed_operations(picked.evidence):
         return False
     path = checkout / picked.file_path
     try:
@@ -642,7 +642,7 @@ def _canonical_scalar(value) -> str:
 
 def _default_pick_changes_effective_value(
     parsed: SiteProposal,
-    picked: PatchSite,
+    picked: MatchSite,
 ) -> bool:
     """Reject explicit defaults that exactly restate current runtime values."""
 
@@ -741,38 +741,63 @@ def _matches_confirmed_defect_proposal(
     return False
 
 
-def _configuration_pick_matches_executed_operation(
-    parsed: SiteProposal,
-    picked: PatchSite,
-    checkout: Path,
-) -> bool:
-    """Keep a shared defaults-file pick tied to one measured operation."""
+_DEFAULTS_GATE_STATUSES = {"unexecuted_operation_default", "inert_operation_default"}
 
-    if not picked.file_path.endswith("/default_operation_params.json"):
-        return True
-    executed = {
-        item.split(":", 1)[1].strip()
-        for item in picked.evidence
-        if item.startswith("executed operation:")
-    }
-    operation = parsed.operation_id.strip()
-    if not operation or operation not in executed:
-        return False
-    path = checkout / picked.file_path
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    if operation not in payload:
-        claim = " ".join((parsed.proposed_change, parsed.mechanism))
-        return bool(re.search(rf'["\']{re.escape(operation)}["\']', claim))
-    owner = ""
-    for text in lines[: max(1, picked.line)]:
-        match = re.match(r'^  "([^"]+)"\s*:', text)
-        if match:
-            owner = match.group(1)
-    return owner == operation
+
+def _first_pick_rejection(
+    parsed: SiteProposal,
+    picked: MatchSite,
+    *,
+    checkout: Path,
+    prior_hypotheses: list[dict],
+    excluded_exact: set[tuple[str, int]],
+    excluded_semantic: set[str],
+) -> tuple[str, str] | None:
+    """Return ``(status, feedback)`` for the first gate a pick fails, else None.
+
+    Gates run in order: shared-defaults picks must name an executed operation
+    and change an effective value; then source-proposal memory, exact-site and
+    semantic-site cooldowns.
+    """
+
+    is_defaults = picked.file_path.endswith("/default_operation_params.json")
+    if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
+        return (
+            "unexecuted_operation_default",
+            "operation_id must name an operation from the runtime evidence and "
+            "the proposed JSON block must belong to it",
+        )
+    if is_defaults and not _default_pick_changes_effective_value(parsed, picked):
+        return (
+            "inert_operation_default",
+            "every proposed parameter/value already equals the current effective "
+            "or estimator default; choose a value that changes runtime behavior or skip",
+        )
+    if _matches_recent_concrete_proposal(parsed, picked.file_path, prior_hypotheses):
+        return (
+            "recent_concrete_proposal_duplicate",
+            "the same concrete parameter/value assignment already appears in recent "
+            "source-proposal memory; choose a different causal change or skip",
+        )
+    if _matches_confirmed_defect_proposal(parsed, picked.file_path, prior_hypotheses):
+        return (
+            "confirmed_defect_duplicate",
+            "its defect mechanism matches a previously confirmed finding; inspect "
+            "the current version for a different mechanism or skip",
+        )
+    if (picked.file_path, picked.line) in excluded_exact:
+        return (
+            "recent_site_cooldown",
+            "that exact change_line is cooling down after a recent completed campaign; "
+            "choose a different executed line with a distinct causal change or skip this file",
+        )
+    if semantic_site_id(picked) in excluded_semantic:
+        return (
+            "recent_semantic_site_cooldown",
+            "that logical source site is cooling down after a recent completed campaign; "
+            "choose a distinct operation or runtime mechanism",
+        )
+    return None
 
 
 def _accept_pick(
@@ -781,8 +806,7 @@ def _accept_pick(
     checkout: Path,
     *,
     default_file: str = "",
-    default_line: int = 1,
-) -> PatchSite | None:
+) -> MatchSite | None:
     if (parsed.status or "pick").strip().lower() == "skip":
         return None
     if not _pick_claim_is_positive(parsed):
@@ -790,7 +814,6 @@ def _accept_pick(
     # A complete claim may omit only the current catalog path; causal fields and
     # change_line remain mandatory. Explicit neighboring paths still have to be
     # present in `shown`.
-    used_default = not (parsed.file_path or "").strip()
     rel = (parsed.file_path or default_file or "").lstrip("/")
     if "fedot/" in rel and not rel.startswith("fedot/"):
         rel = rel[rel.index("fedot/") :]
@@ -801,13 +824,12 @@ def _accept_pick(
         return None
     if not _metric_path(rel):
         return None
-    inspected_line = max(1, default_line if used_default else int(parsed.line))
-    line = _pick_change_line(parsed, inspected_line)
+    line = _pick_change_line(parsed)
     if line is None:
         return None
     if not show_source(target, checkout=checkout, around=line):
         return None
-    return PatchSite(
+    return MatchSite(
         channel="llm",
         file_path=rel,
         line=line,
@@ -891,7 +913,7 @@ def _open_requested_runtime(
 def _llm_pick(
     inference,
     checkout: Path,
-    leads: list[PatchSite],
+    leads: list[MatchSite],
     *,
     max_picks: int = 3,
     trace: dict | None = None,
@@ -901,8 +923,8 @@ def _llm_pick(
     prior_hypotheses: list[dict] | None = None,
     excluded_semantic_sites: set[str] | None = None,
     present_full_catalog: bool = False,
-    on_pick: Callable[[list[PatchSite]], None] | None = None,
-) -> list[PatchSite]:
+    on_pick: Callable[[list[MatchSite]], None] | None = None,
+) -> list[MatchSite]:
     """Walk catalog files. A pick is recorded; the walk continues until max_picks or the catalog ends."""
 
     from fedotllm.agents.evolve.execution.run_code import MAX_STEPS, run_fedot_snippet
@@ -913,14 +935,14 @@ def _llm_pick(
     logger.info("evolve pick 0/%s files, want %s sites", n_files, want)
     raws: list[str] = []
     rounds: list[dict] = []
-    found: list[PatchSite] = []
+    found: list[MatchSite] = []
     # A final skip is meaningful evidence for this bounded catalog walk.  The
     # file may still be opened as dependency context, but selecting it again
     # from a later generic/dispatcher entry would recreate the same hypothesis
     # and starve the portfolio of independent metric paths.  This memory is
     # deliberately local to one Scout call; future campaigns reconsider files.
     declined_files: set[str] = set()
-    evidence_by_file: dict[str, PatchSite] = {}
+    evidence_by_file: dict[str, MatchSite] = {}
     for catalog_lead in leads:
         current = evidence_by_file.get(catalog_lead.file_path)
         has_crash = any(
@@ -952,7 +974,7 @@ def _llm_pick(
         if current is None:
             evidence_by_file[catalog_lead.file_path] = catalog_lead
             continue
-        evidence_by_file[catalog_lead.file_path] = PatchSite(
+        evidence_by_file[catalog_lead.file_path] = MatchSite(
             channel=winner.channel,
             file_path=winner.file_path,
             line=winner.line,
@@ -1107,7 +1129,7 @@ def _llm_pick(
         base_extra = base_extra[:_SCOUT_EXTRA_CHARS]
         tool_history: list[str] = []
         shown = {lead.file_path}
-        picked: PatchSite | None = None
+        picked: MatchSite | None = None
         runs = 0
         for step in range(1, per_file_steps + 1):
             if actions >= action_limit:
@@ -1337,25 +1359,11 @@ def _llm_pick(
                 )
                 continue
             if status in {"search", "symbol", "callers", "docs"}:
-                from fedotllm.agents.evolve.discovery.research_tools import (
-                    callers_runtime,
-                    docs_runtime,
-                    search_runtime,
-                    symbol_runtime,
-                )
+                from fedotllm.agents.evolve.discovery.research_tools import run_research_tool
 
-                if status == "search":
-                    output = search_runtime(checkout, parsed.query)
-                    tool_query = parsed.query
-                elif status == "symbol":
-                    output = symbol_runtime(checkout, parsed.query or parsed.symbol)
-                    tool_query = parsed.query or parsed.symbol
-                elif status == "docs":
-                    output = docs_runtime(checkout, parsed.query)
-                    tool_query = parsed.query
-                else:
-                    tool_query = parsed.symbol or parsed.query
-                    output = callers_runtime(checkout, tool_query)
+                tool_query, output = run_research_tool(
+                    checkout, status, query=parsed.query, symbol=parsed.symbol
+                )
                 shown_output = output[:_SCOUT_OUTPUT_CHARS]
                 tool_history.append(
                     f"Step {step} action={status} query={tool_query!r}:\n{shown_output}"
@@ -1465,7 +1473,6 @@ def _llm_pick(
                 shown,
                 checkout,
                 default_file=lead.file_path,
-                default_line=lead.line,
             )
             if picked is not None:
                 runtime_lead = evidence_by_file.get(picked.file_path)
@@ -1478,19 +1485,22 @@ def _llm_pick(
                             )
                         )
                     )
+                    # Surface the model's operation_id as the leading evidence
+                    # row only when the runtime evidence actually executed it;
+                    # otherwise the executed-operation gate below would be
+                    # checking the model's own claim against itself.
+                    operation_id = parsed.operation_id.strip()
                     if (
                         picked.file_path.endswith("/default_operation_params.json")
-                        and parsed.operation_id.strip()
+                        and operation_id
+                        and operation_id in _executed_operations(runtime_lead.evidence)
                     ):
                         evidence = tuple(
                             dict.fromkeys(
-                                (
-                                    f"executed operation: {parsed.operation_id.strip()}",
-                                    *evidence,
-                                )
+                                (f"executed operation: {operation_id}", *evidence)
                             )
                         )
-                    picked = PatchSite(
+                    picked = MatchSite(
                         channel=picked.channel,
                         file_path=picked.file_path,
                         line=picked.line,
@@ -1502,166 +1512,35 @@ def _llm_pick(
                         expected_metric_effect=picked.expected_metric_effect,
                         hypothesis_kind=picked.hypothesis_kind,
                     )
-            if (
-                picked is not None
-                and picked.file_path.endswith("/default_operation_params.json")
-                and not _default_pick_matches_executed_operation(
-                    parsed, picked, checkout
+            rejection = (
+                _first_pick_rejection(
+                    parsed,
+                    picked,
+                    checkout=checkout,
+                    prior_hypotheses=prior_hypotheses or [],
+                    excluded_exact=excluded_exact,
+                    excluded_semantic=excluded_semantic,
                 )
-            ):
-                rounds.append(
-                    {
-                        "file_path": picked.file_path,
-                        "status": "unexecuted_operation_default",
-                        "line": picked.line,
-                        "operation_id": parsed.operation_id,
-                        "catalog_file": lead.file_path,
-                    }
-                )
-                tool_history.append(
-                    "pick rejected: operation_id must name an operation from the "
-                    "runtime evidence and the proposed JSON block must belong to it"
-                )
+                if picked is not None
+                else None
+            )
+            if rejection is not None:
+                reject_status, reject_feedback = rejection
+                row = {
+                    "file_path": picked.file_path,
+                    "status": reject_status,
+                    "line": picked.line,
+                    "catalog_file": lead.file_path,
+                }
+                if reject_status in _DEFAULTS_GATE_STATUSES:
+                    row["operation_id"] = parsed.operation_id
+                rounds.append(row)
+                tool_history.append(f"pick rejected: {reject_feedback}")
                 logger.info(
-                    "evolve pick %s/%s reject unexecuted default %s:%s (%s)",
+                    "evolve pick %s/%s reject %s %s:%s",
                     walked,
                     n_files,
-                    picked.file_path,
-                    picked.line,
-                    parsed.operation_id,
-                )
-                picked = None
-                if step < per_file_steps:
-                    continue
-                break
-            if (
-                picked is not None
-                and picked.file_path.endswith("/default_operation_params.json")
-                and not _default_pick_changes_effective_value(parsed, picked)
-            ):
-                rounds.append(
-                    {
-                        "file_path": picked.file_path,
-                        "status": "inert_operation_default",
-                        "line": picked.line,
-                        "operation_id": parsed.operation_id,
-                        "catalog_file": lead.file_path,
-                    }
-                )
-                tool_history.append(
-                    "pick rejected: every proposed parameter/value already equals "
-                    "the current effective or estimator default; choose a value "
-                    "that changes runtime behavior or skip"
-                )
-                logger.info(
-                    "evolve pick %s/%s reject inert default %s:%s (%s)",
-                    walked,
-                    n_files,
-                    picked.file_path,
-                    picked.line,
-                    parsed.operation_id,
-                )
-                picked = None
-                if step < per_file_steps:
-                    continue
-                break
-            if picked is not None and _matches_recent_concrete_proposal(
-                parsed, picked.file_path, prior_hypotheses or []
-            ):
-                rounds.append(
-                    {
-                        "file_path": picked.file_path,
-                        "status": "recent_concrete_proposal_duplicate",
-                        "line": picked.line,
-                        "catalog_file": lead.file_path,
-                    }
-                )
-                tool_history.append(
-                    "pick rejected: the same concrete parameter/value assignment "
-                    "already appears in recent source-proposal memory; choose a "
-                    "different causal change or skip"
-                )
-                logger.info(
-                    "evolve pick %s/%s reject repeated concrete proposal %s:%s",
-                    walked,
-                    n_files,
-                    picked.file_path,
-                    picked.line,
-                )
-                picked = None
-                if step < per_file_steps:
-                    continue
-                break
-            if picked is not None and _matches_confirmed_defect_proposal(
-                parsed, picked.file_path, prior_hypotheses or []
-            ):
-                rounds.append(
-                    {
-                        "file_path": picked.file_path,
-                        "status": "confirmed_defect_duplicate",
-                        "line": picked.line,
-                        "catalog_file": lead.file_path,
-                    }
-                )
-                tool_history.append(
-                    "pick rejected: its defect mechanism matches a previously "
-                    "confirmed finding; inspect the current version for a different "
-                    "mechanism or skip"
-                )
-                logger.info(
-                    "evolve pick %s/%s reject known defect mechanism %s:%s",
-                    walked,
-                    n_files,
-                    picked.file_path,
-                    picked.line,
-                )
-                picked = None
-                if step < per_file_steps:
-                    continue
-                break
-            if picked is not None and (picked.file_path, picked.line) in excluded_exact:
-                rounds.append(
-                    {
-                        "file_path": picked.file_path,
-                        "status": "recent_site_cooldown",
-                        "line": picked.line,
-                        "catalog_file": lead.file_path,
-                    }
-                )
-                tool_history.append(
-                    "pick rejected: that exact change_line is cooling down after "
-                    "a recent completed campaign; choose a different executed line "
-                    "with a distinct causal change or skip this file"
-                )
-                logger.info(
-                    "evolve pick %s/%s reject cooldown %s:%s",
-                    walked,
-                    n_files,
-                    picked.file_path,
-                    picked.line,
-                )
-                picked = None
-                if step < per_file_steps:
-                    continue
-                break
-            if picked is not None and semantic_site_id(picked) in excluded_semantic:
-                rounds.append(
-                    {
-                        "file_path": picked.file_path,
-                        "status": "recent_semantic_site_cooldown",
-                        "line": picked.line,
-                        "catalog_file": lead.file_path,
-                    }
-                )
-                tool_history.append(
-                    "pick rejected: that logical source site is cooling down after "
-                    "a recent completed campaign; choose a distinct operation or "
-                    "runtime mechanism"
-                )
-                logger.info(
-                    "evolve pick %s/%s reject semantic cooldown %s:%s",
-                    walked,
-                    n_files,
+                    reject_status,
                     picked.file_path,
                     picked.line,
                 )

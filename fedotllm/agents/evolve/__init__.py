@@ -1,4 +1,6 @@
-"""EvolveAgent: patch FEDOT source, keep iff frozen holdout metric rises.
+"""EvolveAgent: hunt FEDOT source for patches, judge them with hour-long Fedot.
 
-The LLM never reads this package's scorer or harness graph ids.
+Hunt (Scout/Verifier/Fixer) only enqueues technically valid candidates;
+KEEP/DROP is decided by ``quality-drain`` on the preregistered task registry.
+The LLM never reads this package's scorer, holdout splits or benchmark cases.
 """

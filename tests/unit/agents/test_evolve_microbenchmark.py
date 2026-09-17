@@ -33,12 +33,8 @@ def test_micro_case_catalog_is_private_and_diverse():
 
 
 def test_hidden_controls_are_three_private_cross_component_mutations():
-    from fedotllm.agents.evolve.benchmark.hidden_controls import (
-        _healthy_decision_prompt,
-        hidden_controls,
-    )
+    from fedotllm.agents.evolve.benchmark.hidden_controls import _CONTROLS as controls
 
-    controls = hidden_controls()
     assert len(controls) == 3
     assert len({case.component for case in controls}) == 3
     assert len({case.file_path for case in controls}) == 3
@@ -47,21 +43,15 @@ def test_hidden_controls_are_three_private_cross_component_mutations():
     # Public symptoms must not disclose the private target or exact correction.
     assert all(case.file_path not in case.symptom for case in controls)
     assert all(case.responsible_symbol not in case.symptom for case in controls)
-    for case in controls:
-        prompt = _healthy_decision_prompt(case, "healthy observation")
-        assert case.public_contract in prompt
-        assert case.symptom not in prompt
 
 
 def test_fresh_hidden_controls_are_disjoint_and_keep_oracles_private():
     from fedotllm.agents.evolve.benchmark.hidden_controls import (
-        fresh_hidden_controls,
-        fresh_v2_hidden_controls,
-        hidden_controls,
+        _CONTROLS as old,
+        _FRESH_CONTROLS as fresh,
+        _FRESH_V2_CONTROLS as fresh_v2,
     )
 
-    old = hidden_controls()
-    fresh = fresh_hidden_controls()
     assert len(fresh) == 3
     assert {case.control_id for case in fresh}.isdisjoint(
         case.control_id for case in old
@@ -71,7 +61,6 @@ def test_fresh_hidden_controls_are_disjoint_and_keep_oracles_private():
     assert all(case.file_path not in case.symptom for case in fresh)
     assert all(case.responsible_symbol not in case.symptom for case in fresh)
 
-    fresh_v2 = fresh_v2_hidden_controls()
     assert len(fresh_v2) == 3
     assert {case.control_id for case in fresh_v2}.isdisjoint(
         {case.control_id for case in (*old, *fresh)}

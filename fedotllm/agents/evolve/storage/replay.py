@@ -11,10 +11,10 @@ from typing import Any
 from fedotllm.agents.evolve.types import (
     PatchCandidate,
     PatchEdit,
-    PatchSite,
+    MatchSite,
     VerificationResult,
 )
-from fedotllm.agents.evolve.storage.journal import resolve_run_workspace
+from fedotllm.agents.evolve.storage.journal import read_jsonl, resolve_run_workspace
 from fedotllm.agents.evolve.storage.hypothesis import behavior_probe_fingerprint
 
 
@@ -180,7 +180,7 @@ def load_resume_branch(
     if verification_row is None:
         return None
     try:
-        lead = PatchSite(
+        lead = MatchSite(
             channel=str(lead_row.get("channel") or "resume"),
             file_path=str(lead_row["file_path"]),
             line=int(lead_row["line"]),
@@ -276,7 +276,12 @@ def load_resume_branch(
     }
 
 
-def semantic_site_id(lead: PatchSite | dict[str, Any]) -> str:
+def _first_word(text: str) -> str:
+    words = text.strip().split()
+    return words[0] if words else ""
+
+
+def semantic_site_id(lead: MatchSite | dict[str, Any]) -> str:
     """Stable identity for a site whose meaningful unit is not one line.
 
     Shared defaults JSON contains many independent operation blocks.  The LLM
@@ -284,7 +289,7 @@ def semantic_site_id(lead: PatchSite | dict[str, Any]) -> str:
     both must deduplicate as the same operation without hiding sibling blocks.
     """
 
-    if isinstance(lead, PatchSite):
+    if isinstance(lead, MatchSite):
         file_path = lead.file_path
         line = lead.line
         why = lead.why
@@ -302,12 +307,12 @@ def semantic_site_id(lead: PatchSite | dict[str, Any]) -> str:
         operation = ""
         for item in evidence:
             if item.startswith("executed operation:"):
-                operation = item.partition(":")[2].strip().split()[0]
+                operation = _first_word(item.partition(":")[2])
                 break
         if not operation:
             marker = "default parameters for executed operation "
             if marker in why:
-                operation = why.partition(marker)[2].strip().split()[0]
+                operation = _first_word(why.partition(marker)[2])
         if operation:
             return f"{normalized}#operation:{operation}"
     for item in evidence:
@@ -324,17 +329,6 @@ def semantic_site_id(lead: PatchSite | dict[str, Any]) -> str:
     return f"{normalized}:{line}"
 
 
-def exclude_whole_file_after_attempt(file_path: str) -> bool:
-    """Locations are never a permanent cross-run exclusion boundary.
-
-    One failed hypothesis says nothing about other changes in the same file or
-    method. Exact normalized patches are deduplicated separately.
-    """
-
-    _ = file_path
-    return False
-
-
 def load_replay(
     workspace: Path, *, candidate: str | None = None
 ) -> dict[str, Any] | None:
@@ -343,10 +337,7 @@ def load_replay(
     if not path.is_file():
         return None
     picked: dict[str, Any] | None = None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_jsonl(path):
         if row.get("event") != "decision":
             continue
         if candidate and row.get("candidate") != candidate:
@@ -368,16 +359,7 @@ def tried_sites(workspace: Path) -> set[tuple[str, int]]:
 
     seen: set[tuple[str, int]] = set()
     for name in ("scoreboard.jsonl", "journal.jsonl"):
-        path = workspace / name
-        if not path.is_file():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for row in read_jsonl(workspace / name):
             if row.get("event") not in {"attempt", "decision"}:
                 continue
             if str(row.get("reason") or "").startswith((
@@ -621,33 +603,6 @@ def recent_completed_hypotheses_from_findings(
     return hypotheses[:32]
 
 
-def tried_semantic_sites_from_findings(
-    findings_path: Path | None,
-    *,
-    source_hash: str = "",
-) -> set[str]:
-    """Load stable semantic identities for cross-workspace Scout memory."""
-
-    if findings_path is None or not findings_path.is_file():
-        return set()
-    seen: set[str] = set()
-    for raw in findings_path.read_text(encoding="utf-8").splitlines():
-        if not raw.strip():
-            continue
-        try:
-            row = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if row.get("record_type") not in {"finding", "rejudge"}:
-            continue
-        if source_hash and row.get("source_hash") != source_hash:
-            continue
-        lead = row.get("lead")
-        if isinstance(lead, dict) and lead.get("file_path"):
-            seen.add(semantic_site_id(lead))
-    return seen
-
-
 def _matching_patch_findings(
     findings_path: Path | None,
     *,
@@ -842,43 +797,10 @@ def patch_feedback_from_findings(
     )[:12_000]
 
 
-def configuration_trials_from_findings(
-    findings_path: Path | None,
-    *,
-    source_hash: str = "",
-    evaluation_protocol_hash: str = "",
-) -> list[dict[str, Any]]:
-    """Return measured deterministic trials for execution-guided refinement."""
-
-    if findings_path is None or not findings_path.is_file():
-        return []
-    rows: list[dict[str, Any]] = []
-    for raw in findings_path.read_text(encoding="utf-8").splitlines():
-        if not raw.strip():
-            continue
-        try:
-            row = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if row.get("record_type") != "configuration_trial":
-            continue
-        if source_hash and row.get("source_hash") != source_hash:
-            continue
-        if (
-            evaluation_protocol_hash
-            and row.get("evaluation_protocol_hash") != evaluation_protocol_hash
-        ):
-            continue
-        if row.get("stage") == "dedup" or not isinstance(row.get("variant"), dict):
-            continue
-        rows.append(row)
-    return rows
-
-
 def skip_tried(
-    leads: list[PatchSite],
+    leads: list[MatchSite],
     workspace: Path,
-) -> list[PatchSite]:
+) -> list[MatchSite]:
     """Skip exact locations attempted in this workspace only."""
 
     seen = tried_sites(workspace)

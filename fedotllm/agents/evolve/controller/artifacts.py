@@ -12,14 +12,14 @@ from fedotllm.agents.evolve.storage.scoreboard import append_attempt
 from fedotllm.agents.evolve.types import (
     Decision,
     PatchCandidate,
-    PatchSite,
+    MatchSite,
     ScoreResult,
 )
 
 def _record_attempt(
     journal: Path,
     workspace: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     candidate: PatchCandidate | None,
     stock: dict[str, ScoreResult],
     patched: dict[str, ScoreResult] | None,

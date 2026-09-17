@@ -10,7 +10,7 @@ import pytest
 from fedotllm.agents.evolve.agents import verifier
 from fedotllm.agents.evolve.discovery.targets import apply_verified_target, resolve_verification_target
 from fedotllm.agents.evolve.execution import run_code
-from fedotllm.agents.evolve.types import PatchSite, VerificationResult
+from fedotllm.agents.evolve.types import MatchSite, VerificationResult
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def source(tmp_path):
 
 
 def lead():
-    return PatchSite("execution", "fedot/a.py", 7,
+    return MatchSite("execution", "fedot/a.py", 7,
                      why="Output export must preserve row order", hypothesis_kind="correctness")
 
 

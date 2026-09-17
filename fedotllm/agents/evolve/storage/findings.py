@@ -12,7 +12,11 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from fedotllm.agents.evolve.storage.journal import append_journal, resolve_run_workspace
+from fedotllm.agents.evolve.storage.journal import (
+    append_journal,
+    read_jsonl,
+    resolve_run_workspace,
+)
 
 SCHEMA_VERSION = 1
 
@@ -53,33 +57,19 @@ def default_findings_path() -> Path:
     return Path(__file__).resolve().parents[4] / "docs" / "evolve" / "findings.jsonl"
 
 
-def _rows(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
 
 
 def next_run_number(path: Path) -> int:
     numbers = [
         int(row["run_number"])
-        for row in _rows(path)
+        for row in read_jsonl(path)
         if isinstance(row.get("run_number"), int)
     ]
     return max(numbers, default=0) + 1
 
 
 def has_run(path: Path, run_id: str) -> bool:
-    return any(row.get("run_id") == run_id for row in _rows(path))
+    return any(row.get("run_id") == run_id for row in read_jsonl(path))
 
 
 def _test_gate_passed(row: dict[str, Any]) -> bool:
@@ -109,7 +99,7 @@ def begin_run(
     run_number: int | None = None,
 ) -> int:
     if has_run(path, run_id):
-        for row in _rows(path):
+        for row in read_jsonl(path):
             if row.get("run_id") == run_id and isinstance(row.get("run_number"), int):
                 return int(row["run_number"])
     number = run_number if run_number is not None else next_run_number(path)
@@ -200,7 +190,7 @@ def append_finding(
     row: dict[str, Any],
 ) -> None:
     outcome, recommendation = classify_finding(row)
-    existing = _rows(path)
+    existing = read_jsonl(path)
     successful = {
         "correctness_keep",
         "functional_recovery",
@@ -387,7 +377,7 @@ def append_final_outcome(
         and row.get("run_id") == run_id
         and row.get("candidate_id") == candidate_id
         and row.get("final")
-        for row in _rows(path)
+        for row in read_jsonl(path)
     ):
         return
     infrastructure = bool(decision.get("infrastructure_error"))
@@ -418,107 +408,6 @@ def append_final_outcome(
             "outcome": outcome,
             "application_recommendation": recommendation,
             "final": decision,
-        },
-    )
-
-
-def append_semantic_duplicate_outcome(
-    path: Path,
-    *,
-    run_number: int,
-    run_id: str,
-    candidate_id: str,
-    workspace: Path,
-    duplicate_of: dict[str, str],
-    reason: str,
-) -> None:
-    """Correct a claimed finding that repeats an earlier defect family."""
-
-    append_journal(
-        path,
-        {
-            "schema_version": SCHEMA_VERSION,
-            "record_type": "rejudge",
-            "event": "semantic_duplicate_outcome",
-            "run_number": run_number,
-            "run_id": run_id,
-            "workspace": str(workspace.resolve()),
-            "candidate_id": candidate_id,
-            "outcome": "semantic_duplicate",
-            "application_recommendation": "do_not_count_as_new",
-            "duplicate_of": duplicate_of,
-            "reason": reason,
-        },
-    )
-
-
-def append_dev_rejudge(
-    path: Path,
-    *,
-    run_number: int,
-    run_id: str,
-    candidate_id: str,
-    patch_hash: str,
-    source_hash: str,
-    workspace: Path,
-    decision: dict[str, Any],
-    reason: str,
-    score_protocol_hash: str = "",
-    evaluation_protocol_hash: str = "",
-) -> None:
-    """Append a corrected DEV verdict without rewriting historical evidence.
-
-    A controller/evaluator bug can make an earlier finding invalid.  The old row
-    remains auditable, while replay and exact-patch feedback use this later,
-    structured measurement as the effective outcome.
-    """
-
-    infrastructure = bool(decision.get("infrastructure_error"))
-    keep = bool(decision.get("keep")) and not infrastructure
-    decision_reason = str(decision.get("reason") or "")
-    if infrastructure:
-        outcome = "infrastructure_error"
-        recommendation = "retry_after_infrastructure_fix"
-    elif (
-        decision.get("metric_signal_keep")
-        or decision_reason == "confirmed_small_metric_keep"
-    ):
-        outcome = "confirmed_small_metric_keep"
-        recommendation = "review_metric_patch"
-    elif keep:
-        outcome = "quality_keep_dev"
-        recommendation = "confirm_dev_then_final"
-    elif decision_reason.startswith("regression"):
-        outcome = "rejected_dev_regression"
-        recommendation = "do_not_apply"
-    else:
-        outcome = "metric_neutral_unverified"
-        recommendation = "do_not_apply"
-    append_journal(
-        path,
-        {
-            "schema_version": SCHEMA_VERSION,
-            "record_type": "rejudge",
-            "event": "dev_rejudge",
-            "run_number": run_number,
-            "run_id": run_id,
-            "workspace": str(workspace.resolve()),
-            "candidate_id": candidate_id,
-            "patch_hash": patch_hash,
-            "source_hash": source_hash,
-            "score_protocol_hash": score_protocol_hash,
-            "evaluation_protocol_hash": evaluation_protocol_hash,
-            "outcome": outcome,
-            "application_recommendation": recommendation,
-            "supersedes": {"stage": "dev", "reason": reason},
-            "dev": {
-                "keep": keep,
-                "reason": decision_reason,
-                "target_delta": decision.get("target_delta"),
-                "regression_deltas": decision.get("regression_deltas") or {},
-                "infrastructure_error": infrastructure,
-                "metric_signal_keep": bool(decision.get("metric_signal_keep")),
-            },
         },
     )
 
@@ -557,7 +446,7 @@ def import_workspace(workspace: Path, path: Path) -> dict[str, Any]:
         if summary_path.is_file()
         else {}
     )
-    trace_rows = _rows(workspace / "trace.jsonl")
+    trace_rows = read_jsonl(workspace / "trace.jsonl")
     start = next(
         (row for row in trace_rows if row.get("event") == "campaign_start"), {}
     )
@@ -581,7 +470,7 @@ def import_workspace(workspace: Path, path: Path) -> dict[str, Any]:
         campaign_config=config,
     )
     decisions = 0
-    for row in _rows(workspace / "journal.jsonl"):
+    for row in read_jsonl(workspace / "journal.jsonl"):
         if row.get("event") != "decision" or "revision" not in row:
             continue
         append_finding(
@@ -598,7 +487,7 @@ def import_workspace(workspace: Path, path: Path) -> dict[str, Any]:
             row=row,
         )
         decisions += 1
-    configuration_trials = _rows(workspace / "configuration_trials.jsonl")
+    configuration_trials = read_jsonl(workspace / "configuration_trials.jsonl")
     append_configuration_trials(
         path,
         run_number=run_number,
@@ -635,7 +524,7 @@ def import_workspace(workspace: Path, path: Path) -> dict[str, Any]:
 
 
 def summarize(path: Path) -> dict[str, Any]:
-    rows = _rows(path)
+    rows = read_jsonl(path)
     outcomes: dict[str, int] = {}
     for row in rows:
         outcome = row.get("outcome")

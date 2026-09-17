@@ -1,4 +1,4 @@
-"""Walk FEDOT source for a patch site. No tests, no exam, no gym."""
+"""Walk FEDOT source for a match site. No tests, no exam, no gym."""
 
 from __future__ import annotations
 
@@ -26,11 +26,7 @@ from fedotllm.agents.evolve.discovery.repo_map import (
 )
 from fedotllm.agents.evolve.discovery.signals import (
     DEFAULT_PYTEST_TIMEOUT_S,
-    collect_lint,
     failed_pytest_nodes,
-    format_lint_for_llm,
-    lint_leads,
-    parse_lint,
     parse_pytest_output,
     pytest_contract_source,
     pytest_failure_excerpt,
@@ -49,21 +45,17 @@ from fedotllm.agents.evolve.discovery.selection import (
     localization,
     pool_rows,
 )
-from fedotllm.agents.evolve.types import PatchSite, ScoreResult
+from fedotllm.agents.evolve.types import MatchSite, ScoreResult
 
 __all__ = [
     "DEFAULT_PYTEST_TIMEOUT_S",
     "SiteProposal",
     "annotate_pool_rows",
-    "collect_lint",
     "default_parameter_leads",
     "discover_leads",
     "failed_pytest_nodes",
-    "format_lint_for_llm",
     "leads_from_scores",
-    "lint_leads",
     "localization",
-    "parse_lint",
     "parse_pytest_output",
     "pool_rows",
     "pytest_contract_source",
@@ -72,42 +64,24 @@ __all__ = [
     "pytest_snapshot",
 ]
 
-EXCLUDED_DIR_PARTS = {
-    ".git",
-    "__pycache__",
-    ".pytest_cache",
-    "docs",
-    "examples",
-    "jupyter_notebooks",
-    "caching",
-    "visualisation",
-    "visualization",
-    "explainability",
-    "remote",
-    "structural_analysis",
-}
-_LINT_LIMIT = 40
+_DEFAULT_LEAD_LIMIT = 40
 _FILE_LIMIT = 400
 _TEST_LEAD_LIMIT = 8
 LOGGING_VERSION = 2
 
 
-def _lead_name(lead: PatchSite) -> str:
+def _lead_name(lead: MatchSite) -> str:
     token = (lead.why or "").strip().split()[-1] if (lead.why or "").strip() else ""
     return token.rsplit(".", 1)[-1] if token else ""
 
 
-def _rank_leads(leads: list[PatchSite]) -> list[PatchSite]:
-    return sorted(leads, key=lambda lead: (-_impact(lead), lead.file_path, lead.line))
-
-
 def _spread_leads(
-    leads: list[PatchSite], *, limit: int | None = None
-) -> list[PatchSite]:
-    buckets: dict[str, list[PatchSite]] = {}
+    leads: list[MatchSite], *, limit: int | None = None
+) -> list[MatchSite]:
+    buckets: dict[str, list[MatchSite]] = {}
     for lead in leads:
         buckets.setdefault(_area(lead.file_path), []).append(lead)
-    out: list[PatchSite] = []
+    out: list[MatchSite] = []
     cap = len(leads) if limit is None else max(1, limit)
     while len(out) < cap:
         progressed = False
@@ -124,20 +98,20 @@ def _spread_leads(
     return out
 
 
-def _order_leads(leads: list[PatchSite]) -> list[PatchSite]:
+def _order_leads(leads: list[MatchSite]) -> list[MatchSite]:
     preferred = ("fit", "transform", "predict", "predict_proba")
-    by_file: dict[str, list[PatchSite]] = {}
+    by_file: dict[str, list[MatchSite]] = {}
     for lead in leads:
         by_file.setdefault(lead.file_path, []).append(lead)
-    picked: list[PatchSite] = []
+    picked: list[MatchSite] = []
     for group in by_file.values():
         names = {_lead_name(item): item for item in group}
         chosen = next((names[name] for name in preferred if name in names), group[0])
         picked.append(chosen)
-    tiers: dict[int, list[PatchSite]] = {}
+    tiers: dict[int, list[MatchSite]] = {}
     for lead in picked:
         tiers.setdefault(-_impact(lead), []).append(lead)
-    ordered: list[PatchSite] = []
+    ordered: list[MatchSite] = []
     for key in sorted(tiers):
         ordered.extend(_spread_leads(tiers[key]))
     return ordered
@@ -166,12 +140,12 @@ def leads_from_scores(
     checkout: Path,
     *,
     operation_hints: dict[str, tuple[str, ...]] | None = None,
-) -> list[PatchSite]:
+) -> list[MatchSite]:
     """Localize from execution evidence. Ignores dict keys (those are harness ids)."""
 
     if not stock:
         return []
-    leads: list[PatchSite] = []
+    leads: list[MatchSite] = []
     seen: set[tuple[str, int]] = set()
     for task_key, result in stock.items():
         if result.status != "crash":
@@ -245,7 +219,7 @@ def leads_from_scores(
                 continue
             seen.add(key)
             leads.append(
-                PatchSite(
+                MatchSite(
                     channel="operation",
                     file_path=rel,
                     line=line,
@@ -264,7 +238,7 @@ def leads_from_scores(
                 continue
             seen.add(key)
             leads.append(
-                PatchSite(
+                MatchSite(
                     channel="trace",
                     file_path=frame["file"],
                     line=int(frame["line"]),
@@ -282,7 +256,7 @@ def default_parameter_leads(
     operation_hints: dict[str, tuple[str, ...]],
     *,
     scores: dict[str, ScoreResult] | None = None,
-) -> list[PatchSite]:
+) -> list[MatchSite]:
     """Expose defaults of actually evaluated operations as quality levers.
 
     This contains no DEV/FINAL values and no case labels.  It only connects the
@@ -372,7 +346,7 @@ def default_parameter_leads(
             bucket = runtime_by_operation.setdefault(operation, [])
             if text not in bucket:
                 bucket.append(text)
-    leads: list[PatchSite] = []
+    leads: list[MatchSite] = []
     for operation, task_ids in sorted(
         tasks_by_operation.items(), key=lambda item: (-len(item[1]), item[0])
     ):
@@ -407,7 +381,7 @@ def default_parameter_leads(
                 sort_keys=True,
             )
         leads.append(
-            PatchSite(
+            MatchSite(
                 channel="configuration",
                 file_path=file_path,
                 line=line,
@@ -440,7 +414,7 @@ def default_parameter_leads(
 
 def static_leads(
     checkout: Path, *, rank_metadata_stale: bool = False
-) -> list[PatchSite]:
+) -> list[MatchSite]:
     """Registry files first, then the rest of runtime fedot/. One site per file."""
 
     structural = [
@@ -460,7 +434,7 @@ def static_leads(
             ):
                 continue
             structural.append(
-                PatchSite(
+                MatchSite(
                     channel="repo_map",
                     file_path=symbol.file_path,
                     line=symbol.line,
@@ -481,18 +455,18 @@ def static_leads(
     return _order_leads(_unique([*hints, *structural]))
 
 
-def _extra_fedot_sites(checkout: Path, seen: set[str]) -> list[PatchSite]:
+def _extra_fedot_sites(checkout: Path, seen: set[str]) -> list[MatchSite]:
     """Runtime fedot/ files not already in the registry/fallback catalog."""
 
     from fedotllm.agents.evolve.discovery.repo_map import _py_files
 
-    out: list[PatchSite] = []
+    out: list[MatchSite] = []
     for path in _py_files(checkout):
         rel = path.relative_to(checkout).as_posix()
         if rel in seen:
             continue
         out.append(
-            PatchSite(
+            MatchSite(
                 channel="core_scan",
                 file_path=rel,
                 line=1,
@@ -507,11 +481,11 @@ def discover_leads(
     checkout: Path,
     *,
     inference=None,
-    limit: int = _LINT_LIMIT,
+    limit: int = _DEFAULT_LEAD_LIMIT,
     max_picks: int | None = None,
     trace: dict | None = None,
     execution: list[dict] | None = None,
-    trace_leads: list[PatchSite] | None = None,
+    trace_leads: list[MatchSite] | None = None,
     max_actions: int | None = None,
     max_runs_per_file: int = 2,
     excluded_files: set[str] | None = None,
@@ -519,10 +493,10 @@ def discover_leads(
     prior_hypotheses: list[dict] | None = None,
     excluded_semantic_sites: set[str] | None = None,
     present_full_catalog: bool = False,
-    on_pick: Callable[[list[PatchSite]], None] | None = None,
-) -> list[PatchSite]:
+    on_pick: Callable[[list[MatchSite]], None] | None = None,
+) -> list[MatchSite]:
     pooled = static_leads(checkout)
-    executed_by_file: dict[str, PatchSite] = {}
+    executed_by_file: dict[str, MatchSite] = {}
     # File-level metric reachability must come only from function/method bodies
     # that actually ran.  A class statement executes all nested ``def`` lines
     # during import, which previously let Scout select an untouched sibling
@@ -563,7 +537,7 @@ def discover_leads(
         if symbol_kind in {"method", "function"} and row.get("body_executed") is False:
             symbol_kind = "definition"
         runtime = str(row.get("runtime") or "")
-        candidate = PatchSite(
+        candidate = MatchSite(
             channel="execution",
             file_path=rel,
             line=line,
@@ -637,7 +611,7 @@ def discover_leads(
                 )
             )
             merged_evidence = (*winner_runtime, *workload_evidence)
-            executed_by_file[rel] = PatchSite(
+            executed_by_file[rel] = MatchSite(
                 channel=winner.channel,
                 file_path=winner.file_path,
                 line=winner.line,
@@ -645,7 +619,7 @@ def discover_leads(
                 evidence=merged_evidence,
                 signals=winner.signals,
             )
-    executed: list[PatchSite] = []
+    executed: list[MatchSite] = []
     for rel, lead in executed_by_file.items():
         metric_lines = executed_metric_lines.get(rel) or set()
         file_evidence = (
@@ -654,7 +628,7 @@ def discover_leads(
             else ""
         )
         executed.append(
-            PatchSite(
+            MatchSite(
                 channel=lead.channel,
                 file_path=lead.file_path,
                 line=lead.line,
@@ -770,7 +744,7 @@ def discover_leads(
                 continue
             for lead in pooled:
                 if lead.file_path == picked.file_path and lead.line == picked.line:
-                    picked = PatchSite(
+                    picked = MatchSite(
                         channel="llm",
                         file_path=picked.file_path,
                         line=picked.line,
@@ -792,4 +766,3 @@ def discover_leads(
     return pooled[: max(1, limit)]
 
 
-_FILE_COVERAGE_PREFIX = "executed metric-bearing lines in file:"

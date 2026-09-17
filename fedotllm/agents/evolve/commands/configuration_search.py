@@ -752,6 +752,17 @@ def search_configuration_variants(
             )
             if not affected:
                 last = Decision(False, "configuration_no_affected_workload", None)
+                row = {
+                    "event": "configuration_trial",
+                    "index": index,
+                    "variant": asdict(variant),
+                    "candidate": candidate.candidate_id,
+                    "patch_hash": patch_hash,
+                    "stage": "scope",
+                    "reason": last.reason,
+                }
+                trials.append(row)
+                append_journal(workspace / "configuration_trials.jsonl", row)
                 continue
             quick_patched = measure_patched(
                 affected,

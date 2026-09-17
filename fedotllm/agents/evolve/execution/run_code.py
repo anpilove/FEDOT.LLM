@@ -13,18 +13,10 @@ from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import repo_root
 from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python
+from fedotllm.agents.evolve.storage.journal import append_journal
+from fedotllm.agents.evolve.execution.snippet_policy import redact_snippet_output, snippet_blocked
 from fedotllm.agents.evolve.types import SnippetResult
 
-_BLOCK = (
-    "cases.json",
-    "evolve.evaluation.scorer",
-    "evolve.evaluation.tasks",
-    "evolve.commands.recall",
-    "benchmark_manifest",
-    "quality_suite",
-    "hidden_exam",
-    "final_exam",
-)
 MAX_STEPS = int(os.environ.get("FEDOTLLM_EXPLORE_STEPS", "6"))
 SNIPPET_TIMEOUT_S = float(os.environ.get("FEDOTLLM_EXPLORE_TIMEOUT", "120"))
 MAX_OUTPUT_CHARS = int(os.environ.get("FEDOTLLM_EXPLORE_OUTPUT", "10000"))
@@ -48,33 +40,24 @@ def _echo_last_expression(code: str) -> str:
     return "\n".join(lines[: last.lineno - 1] + [f"print({expr.strip()})"] + lines[last.end_lineno :])
 
 
-def _clean_env(checkout: Path) -> dict[str, str]:
-    """Compatibility alias used by the research tools."""
-
-    return clean_subprocess_env(checkout, repo_root=repo_root())
-
-
 def _append_trace(path: Path | None, result: SnippetResult) -> None:
     if path is None:
         raw = os.environ.get("EVOLVE_AGENT_TRACE")
         path = Path(raw) if raw else None
     if path is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
     row = {
-        "schema_version": 1,
         "event": "snippet",
         "status": result.status,
         "code": result.code,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
+        "stdout": redact_snippet_output(result.stdout),
+        "stderr": redact_snippet_output(result.stderr),
         "exit_code": result.exit_code,
         "duration_s": result.duration_s,
         "detail": result.detail,
         "target_reached": result.target_reached,
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    append_journal(path, row)
 
 
 def run_fedot_snippet(
@@ -90,12 +73,12 @@ def run_fedot_snippet(
 
     checkout = checkout.resolve()
     blob = code or ""
-    lowered = blob.lower()
-    if any(token.lower() in lowered for token in _BLOCK):
+    blocked = snippet_blocked(blob)
+    if blocked:
         result = SnippetResult(
             status="blocked",
             code=blob,
-            detail="<blocked: evaluator / catalog import>",
+            detail=f"<blocked: evaluator / catalog import ({blocked})>",
         )
         _append_trace(trace_path, result)
         return result
@@ -132,7 +115,7 @@ def run_fedot_snippet(
             proc = subprocess.Popen(
                 cmd,
                 cwd=checkout,
-                env=_clean_env(checkout),
+                env=clean_subprocess_env(checkout, repo_root=repo_root()),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -149,8 +132,8 @@ def run_fedot_snippet(
                 result = SnippetResult(
                     status="timeout",
                     code=blob,
-                    stdout=(stdout or "")[-MAX_OUTPUT_CHARS:],
-                    stderr=(stderr or "")[-MAX_OUTPUT_CHARS:],
+                    stdout=redact_snippet_output((stdout or "")[-MAX_OUTPUT_CHARS:]),
+                    stderr=redact_snippet_output((stderr or "")[-MAX_OUTPUT_CHARS:]),
                     exit_code=None,
                     duration_s=time.perf_counter() - started,
                     detail=f"<timed out after {limit:g}s>",
@@ -159,8 +142,8 @@ def run_fedot_snippet(
                 result = SnippetResult(
                     status="ok" if proc.returncode == 0 else "runtime_error",
                     code=blob,
-                    stdout=(stdout or "")[-MAX_OUTPUT_CHARS:],
-                    stderr=(stderr or "")[-MAX_OUTPUT_CHARS:],
+                    stdout=redact_snippet_output((stdout or "")[-MAX_OUTPUT_CHARS:]),
+                    stderr=redact_snippet_output((stderr or "")[-MAX_OUTPUT_CHARS:]),
                     exit_code=proc.returncode,
                     duration_s=time.perf_counter() - started,
                     detail="" if proc.returncode == 0 else f"process exited {proc.returncode}",

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
 from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import repo_root
-from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python
+from fedotllm.agents.evolve.execution.process import (
+    clean_subprocess_env,
+    fedot_python,
+    run_worker,
+)
 
 
 def import_error(checkout: Path, rel: str, *, timeout_s: float = 20) -> str | None:
@@ -38,17 +41,13 @@ def import_error(checkout: Path, rel: str, *, timeout_s: float = 20) -> str | No
     if not mod.startswith("fedot."):
         return None
     env = clean_subprocess_env(checkout, repo_root=repo_root())
-    try:
-        proc = subprocess.run(
-            [fedot_python(checkout), "-c", f"import {mod}"],
-            env=env,
-            cwd=str(checkout),
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
+    proc = run_worker(
+        [fedot_python(checkout), "-c", f"import {mod}"],
+        cwd=checkout,
+        env=env,
+        timeout=timeout_s,
+    )
+    if proc.timed_out:
         return "import timeout"
     if proc.returncode == 0:
         return None

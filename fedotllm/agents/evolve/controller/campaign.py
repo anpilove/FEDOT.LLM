@@ -100,15 +100,13 @@ from fedotllm.agents.evolve.controller.confirmation import (
 )
 from fedotllm.agents.evolve.controller.artifacts import _record_attempt, _score_log
 from fedotllm.agents.evolve.controller.probes import (
-    _behavior_probe_blocks_candidate as behavior_probe_blocks_candidate,
-)
-from fedotllm.agents.evolve.controller.probes import (
+    _behavior_probe_blocks_candidate,
     compare_behavior_probe as run_behavior_probe,
     compare_with_prior_probe,
 )
 from fedotllm.agents.evolve.controller.finalization import (
     record_final,
-    record_final_skipped,
+    record_final_skipped as _record_final_skipped,
 )
 from fedotllm.agents.evolve.controller.quality_queue import (
     enqueue_quality_job,
@@ -116,7 +114,7 @@ from fedotllm.agents.evolve.controller.quality_queue import (
 )
 from fedotllm.agents.evolve.controller.localization import (
     hydrate_configuration_surfaces,
-    start_revision,
+    start_revision as _start_revision,
 )
 from fedotllm.agents.evolve.controller.patches import (
     candidate_diff,
@@ -139,7 +137,7 @@ from fedotllm.agents.evolve.types import (
     EvolveAgentConfig,
     EvolveRunPolicy,
     PatchCandidate,
-    PatchSite,
+    MatchSite,
     ScoreResult,
     VerificationResult,
 )
@@ -163,12 +161,8 @@ def compare_behavior_probe(source: Path, experiment: Path, code: str) -> dict:
     )
 
 
-def _behavior_probe_blocks_candidate(result: dict) -> bool:
-    return behavior_probe_blocks_candidate(result)
-
-
 def _controller_crashes_for_lead(
-    stock: dict[str, ScoreResult], lead: PatchSite
+    stock: dict[str, ScoreResult], lead: MatchSite
 ) -> tuple[str, ...]:
     """Select stock crashes that independently executed the proposed site."""
 
@@ -185,10 +179,6 @@ def _controller_crashes_for_lead(
         if target in traceback or covered:
             matched.append(task_id)
     return tuple(matched)
-
-
-def _start_revision(*args, **kwargs) -> Hypothesis:
-    return start_revision(*args, **kwargs)
 
 
 def _hydrate_configuration_surfaces(*args, **kwargs) -> int:
@@ -236,7 +226,7 @@ def run_once(
     max_edits: int | None = None,
     max_actions: int | None = None,
     site_cooldown_campaigns: int | None = None,
-    resume_lead: PatchSite | None = None,
+    resume_lead: MatchSite | None = None,
     resume_verification: VerificationResult | None = None,
     resume_candidate: PatchCandidate | None = None,
     resume_feedback: str = "",
@@ -388,18 +378,32 @@ def run_once(
 
     patch_outcomes: dict[str, str] = {}
 
-    def record_attempt(*args, **kwargs) -> None:
+    def record_attempt(
+        lead: MatchSite,
+        candidate: PatchCandidate | None,
+        stock_scores: dict[str, ScoreResult],
+        patched: dict[str, ScoreResult] | None,
+        decision: Decision,
+        revision: int,
+        **kwargs,
+    ) -> None:
+        """Journal one attempt; campaign identity and localization are implied."""
+
+        kwargs.setdefault("hypothesis_id", hypothesis.id)
+        kwargs.setdefault("findings_path", findings_path)
+        kwargs.setdefault("run_number", run_number)
+        kwargs.setdefault("run_id", run_id)
+        kwargs.setdefault("source_commit_value", source_commit_value)
+        kwargs.setdefault("source_hash", source_hash)
         kwargs.setdefault("score_protocol_hash", score_protocol_hash)
         kwargs.setdefault("evaluation_protocol_hash", evaluation_protocol_hash)
         kwargs.setdefault("resumed_branch", bool(resume_lead))
-        _record_attempt(*args, **kwargs)
-        decision = kwargs.get("decision") or (args[6] if len(args) > 6 else None)
+        _record_attempt(
+            journal, workspace, lead, candidate, stock_scores, patched, decision,
+            loc(lead), revision, **kwargs,
+        )
         patch_hash = kwargs.get("patch_hash")
-        if (
-            patch_hash
-            and isinstance(decision, Decision)
-            and not decision.reason.startswith("duplicate_")
-        ):
+        if patch_hash and not decision.reason.startswith("duplicate_"):
             patch_outcomes[patch_hash] = decision.reason
 
     previous_trace = os.environ.get("EVOLVE_AGENT_TRACE")
@@ -648,7 +652,7 @@ def run_once(
             trace["resumed_branch"] = True
         else:
             try:
-                def persist_scout_picks(selected: list[PatchSite]) -> None:
+                def persist_scout_picks(selected: list[MatchSite]) -> None:
                     save_checkpoint(
                         workspace,
                         stage="scout_pick",
@@ -716,7 +720,7 @@ def run_once(
             pool_rows(sites), static_rows=static_rows, llm_pick=pick
         )
 
-        def loc(lead: PatchSite | None) -> dict:
+        def loc(lead: MatchSite | None) -> dict:
             if lead is None:
                 return {}
             return localization(
@@ -897,14 +901,10 @@ def run_once(
                     decision.dev_keep = False
                     decision.reason = "dev_confirmation_failed"
                     confirmation_failures[candidate.candidate_id] = confirmation
-                    promising_dir = workspace / "promising"
-                    promising_dir.mkdir(parents=True, exist_ok=True)
-                    promising_patch = promising_dir / f"{candidate.candidate_id}.patch"
-                    promising_patch.write_text(
-                        _candidate_diff(experiment, source, candidate),
-                        encoding="utf-8",
+                    promising_patch = save_patch_artifact(
+                        "promising", candidate, _candidate_diff(experiment, source, candidate)
                     )
-                    (promising_dir / f"{candidate.candidate_id}.json").write_text(
+                    promising_patch.with_suffix(".json").write_text(
                         json.dumps(
                             {
                                 "candidate_id": candidate.candidate_id,
@@ -1066,6 +1066,48 @@ def run_once(
     )
     local_seen_patches: set[str] = set()
     actions = int(trace.get("scout_actions") or 0)
+    revision_limit = max(1, max_revisions)
+
+    def advance_revision(reason: str) -> bool:
+        """Open the next revision of the current hypothesis if budget allows.
+
+        One extra revision beyond ``max_revisions`` exists only after a safety
+        gate (import, pytest, global protect) granted a targeted extension.
+        """
+        nonlocal hypothesis
+        allowed = revision < max_revisions or (
+            safety_extension_granted and revision == revision_limit
+        )
+        if not allowed:
+            return False
+        hypothesis = _start_revision(workspace, hypothesis, lead, revision + 1, reason)
+        return True
+
+    def push_feedback(text: str) -> str:
+        feedback_history.append(text)
+        return _revision_feedback_context(feedback_history)
+
+    def grant_safety_extension(gate: str, candidate: PatchCandidate, reason: str) -> None:
+        nonlocal safety_extension_granted
+        if revision >= revision_limit and not safety_extension_granted:
+            safety_extension_granted = True
+            append_journal(
+                journal,
+                {
+                    "event": "targeted_revision_extension",
+                    "gate": gate,
+                    "candidate": candidate.candidate_id,
+                    "reason": reason,
+                },
+            )
+
+    def save_patch_artifact(folder: str, candidate: PatchCandidate, text: str) -> Path:
+        target = workspace / folder
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / f"{candidate.candidate_id}.patch"
+        path.write_text(text, encoding="utf-8")
+        return path
+
     for i, lead in enumerate(leads, start=1):
         safety_extension_granted = False
         prior_behavior_probe: tuple[str, str] | None = None
@@ -1096,7 +1138,6 @@ def run_once(
             lead_index=i,
         )
         observed_crash = verification_from_observed_crash(lead)
-        metric_plan = None
         observed_contract = verification_from_contract_lead(lead)
         if i == 1 and resume_verification is not None:
             verification = resume_verification
@@ -1223,22 +1264,13 @@ def run_once(
                 "detail": verification.detail,
             }
             record_attempt(
-                journal,
-                workspace,
                 lead,
                 None,
                 stock,
                 None,
                 last,
-                loc(lead),
                 0,
-                hypothesis_id=hypothesis.id,
                 reproduction=reproduction,
-                findings_path=findings_path,
-                run_number=run_number,
-                run_id=run_id,
-                source_commit_value=source_commit_value,
-                source_hash=source_hash,
             )
             if last.infrastructure_error:
                 _record_final_skipped(journal, reason=last.reason)
@@ -1278,8 +1310,8 @@ def run_once(
             )
             append_journal(journal, {"event": "metric_target_frozen_before_patch", **metric_plan})
         retry_saved_candidate: PatchCandidate | None = None
-        for revision in range(1, max(1, max_revisions) + 2):
-            if revision > max(1, max_revisions) and not safety_extension_granted:
+        for revision in range(1, revision_limit + 2):
+            if revision > revision_limit and not safety_extension_granted:
                 break
             actions += 1
             if actions > max_actions:
@@ -1308,754 +1340,594 @@ def run_once(
                 candidate_id=experiment_id,
             )
             try:
-                candidate = fix_lead(
-                    experiment,
-                    lead,
-                    inference=fixer_inference,
-                    workspace=workspace,
-                    max_edits=max_edits,
-                    feedback=feedback,
-                    verification=verification_context(verification),
-                    validate_behavior_probe=verification.status == "quality_hypothesis",
-                    hypothesis_id=hypothesis.id,
-                    saved_candidate=(
-                        resume_candidate
-                        if i == 1 and revision == 1
-                        else retry_saved_candidate
-                    ),
-                )
-                retry_saved_candidate = None
-            except AgentModelFailure as exc:
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                last = Decision(
-                    keep=False,
-                    reason=f"llm_{exc.category}: {exc.detail}"[:500],
-                    target_delta=None,
-                    stage="infrastructure" if exc.infrastructure else "model_response",
-                    experiment_id=experiment_id,
-                    infrastructure_error=exc.infrastructure,
-                )
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    None,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    hypothesis_id=hypothesis.id,
-                    reproduction=verification_record,
-                    findings_path=findings_path,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                if exc.infrastructure:
-                    return finish(last)
-                break
-            except (EvolveBudgetExhausted, LLMRequestTimeout) as exc:
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                return finish(
-                    Decision(
-                        keep=False,
-                        reason=f"llm_infrastructure: {type(exc).__name__}: {exc}"[:500],
-                        target_delta=None,
-                        stage="infrastructure",
-                        experiment_id=experiment_id,
-                        infrastructure_error=True,
-                    )
-                )
-            if candidate is None:
-                reason = "no_patch"
-                status = (
-                    workspace
-                    / "context"
-                    / f"{Path(lead.file_path).stem}-{lead.line}"
-                    / "fix_status.txt"
-                )
-                if status.is_file():
-                    reason = status.read_text(encoding="utf-8").strip() or reason
-                last = Decision(
-                    keep=False,
-                    reason=reason,
-                    target_delta=None,
-                    regression_deltas={},
-                    experiment_id=experiment_id,
-                )
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    None,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    hypothesis_id=hypothesis.id,
-                    reproduction=verification_record,
-                    findings_path=findings_path,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                break
-
-            save_checkpoint(
-                workspace,
-                stage="patch",
-                run_id=run_id,
-                active_lead=asdict(lead),
-                hypothesis=as_row(hypothesis),
-                candidate_id=candidate.candidate_id,
-                candidate_artifact=f"candidates/{candidate.candidate_id}/candidate.json",
-                revision=revision,
-            )
-            legacy_patch_hash = normalized_patch_hash(candidate, source_hash)
-            patch_hash = normalized_patch_hash(
-                candidate,
-                source_hash,
-                checkout=experiment,
-            )
-            candidate_patch_hashes = (patch_hash, legacy_patch_hash)
-            probe_hash = behavior_probe_fingerprint(candidate.behavior_probe)
-            reproduction = replay_reproduction(experiment, verification)
-            save_checkpoint(
-                workspace,
-                stage="reproduction",
-                run_id=run_id,
-                candidate_id=candidate.candidate_id,
-                revision=revision,
-                reproduction=reproduction,
-            )
-            duplicate_probe = verification.status == "quality_hypothesis" and any(
-                probe_hash in rejected_probes.get(candidate_hash, set())
-                for candidate_hash in candidate_patch_hashes
-            )
-            matched_patch_hash = next(
-                (
-                    candidate_hash
-                    for candidate_hash in candidate_patch_hashes
-                    if candidate_hash in seen_patches
-                ),
-                patch_hash,
-            )
-            if matched_patch_hash in seen_patches or duplicate_probe:
-                historical_feedback = (
-                    patch_feedback_from_findings(
-                        findings_path,
-                        source_hash=source_hash,
-                        patch_hash=matched_patch_hash,
-                        evaluation_protocol_hash=evaluation_protocol_hash,
-                    )
-                    if (
-                        matched_patch_hash in historical_patch_hashes or duplicate_probe
-                    )
-                    and matched_patch_hash not in local_seen_patches
-                    else ""
-                )
-                prior_reason = patch_outcomes.get(matched_patch_hash, last.reason)
-                duplicate_reason = (
-                    "duplicate_historical_patch"
-                    if historical_feedback
-                    else f"duplicate_patch_after:{prior_reason}"
-                    if prior_reason and prior_reason != "no_patch"
-                    else "duplicate_patch"
-                )
-                last = Decision(
-                    False,
-                    duplicate_reason,
-                    None,
-                    experiment_id=experiment_id,
-                )
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    candidate,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    hypothesis_id=hypothesis.id,
-                    patch_hash=patch_hash,
-                    feedback=historical_feedback,
-                    reproduction=reproduction,
-                    # The original finding remains the durable record. Avoid
-                    # duplicating it merely because retrieval worked.
-                    findings_path=None,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                local_seen_patches.update(candidate_patch_hashes)
-                if historical_feedback and revision < max(1, max_revisions):
-                    feedback_history.append(historical_feedback)
-                    feedback = _revision_feedback_context(feedback_history)
-                    hypothesis = _start_revision(
-                        workspace,
-                        hypothesis,
+                try:
+                    candidate = fix_lead(
+                        experiment,
                         lead,
-                        revision + 1,
-                        duplicate_reason,
+                        inference=fixer_inference,
+                        workspace=workspace,
+                        max_edits=max_edits,
+                        feedback=feedback,
+                        verification=verification_context(verification),
+                        validate_behavior_probe=verification.status == "quality_hypothesis",
+                        hypothesis_id=hypothesis.id,
+                        saved_candidate=(
+                            resume_candidate
+                            if i == 1 and revision == 1
+                            else retry_saved_candidate
+                        ),
                     )
-                    continue
-                break
-            seen_patches.update(candidate_patch_hashes)
-            local_seen_patches.update(candidate_patch_hashes)
+                    retry_saved_candidate = None
+                except AgentModelFailure as exc:
+                    last = Decision(
+                        keep=False,
+                        reason=f"llm_{exc.category}: {exc.detail}"[:500],
+                        target_delta=None,
+                        stage="infrastructure" if exc.infrastructure else "model_response",
+                        experiment_id=experiment_id,
+                        infrastructure_error=exc.infrastructure,
+                    )
+                    record_attempt(
+                        lead,
+                        None,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        reproduction=verification_record,
+                    )
+                    if exc.infrastructure:
+                        return finish(last)
+                    break
+                except (EvolveBudgetExhausted, LLMRequestTimeout) as exc:
+                    return finish(
+                        Decision(
+                            keep=False,
+                            reason=f"llm_infrastructure: {type(exc).__name__}: {exc}"[:500],
+                            target_delta=None,
+                            stage="infrastructure",
+                            experiment_id=experiment_id,
+                            infrastructure_error=True,
+                        )
+                    )
+                if candidate is None:
+                    reason = "no_patch"
+                    status = (
+                        workspace
+                        / "context"
+                        / f"{Path(lead.file_path).stem}-{lead.line}"
+                        / "fix_status.txt"
+                    )
+                    if status.is_file():
+                        reason = status.read_text(encoding="utf-8").strip() or reason
+                    last = Decision(
+                        keep=False,
+                        reason=reason,
+                        target_delta=None,
+                        regression_deltas={},
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        None,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        reproduction=verification_record,
+                    )
+                    break
 
-            behavior_probe: dict = {}
-            if verification.status == "quality_hypothesis":
-                behavior_probe = compare_with_prior_probe(
-                    source,
-                    experiment,
-                    candidate.behavior_probe,
-                    prior_probe=prior_behavior_probe,
-                    compare_fn=compare_behavior_probe,
-                )
-                candidate_dir = workspace / "candidates" / candidate.candidate_id
-                candidate_dir.mkdir(parents=True, exist_ok=True)
-                if behavior_probe.get("reused_probe_from_candidate"):
-                    (candidate_dir / "submitted_behavior_probe.py").write_text(
-                        candidate.behavior_probe, encoding="utf-8"
-                    )
-                    candidate.behavior_probe = behavior_probe["code"]
-                    (candidate_dir / "behavior_probe.py").write_text(
-                        candidate.behavior_probe, encoding="utf-8"
-                    )
-                if (
-                    behavior_probe.get("status") == "changed"
-                    and candidate.behavior_probe
-                ):
-                    prior_behavior_probe = (
-                        candidate.candidate_id,
-                        candidate.behavior_probe,
-                    )
-                (candidate_dir / "behavior_probe_result.json").write_text(
-                    json.dumps(behavior_probe, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                append_journal(
-                    workspace / "trace.jsonl",
-                    {
-                        "event": "behavior_probe",
-                        "candidate": candidate.candidate_id,
-                        **behavior_probe,
-                    },
-                )
                 save_checkpoint(
                     workspace,
-                    stage="behavior_probe",
+                    stage="patch",
+                    run_id=run_id,
+                    active_lead=asdict(lead),
+                    hypothesis=as_row(hypothesis),
+                    candidate_id=candidate.candidate_id,
+                    candidate_artifact=f"candidates/{candidate.candidate_id}/candidate.json",
+                    revision=revision,
+                )
+                legacy_patch_hash = normalized_patch_hash(candidate, source_hash)
+                patch_hash = normalized_patch_hash(
+                    candidate,
+                    source_hash,
+                    checkout=experiment,
+                )
+                candidate_patch_hashes = (patch_hash, legacy_patch_hash)
+                probe_hash = behavior_probe_fingerprint(candidate.behavior_probe)
+                reproduction = replay_reproduction(experiment, verification)
+                save_checkpoint(
+                    workspace,
+                    stage="reproduction",
                     run_id=run_id,
                     candidate_id=candidate.candidate_id,
                     revision=revision,
-                    behavior_probe=behavior_probe,
+                    reproduction=reproduction,
                 )
-                behavior_status = behavior_probe.get("status")
-                if _behavior_probe_blocks_candidate(behavior_probe):
-                    # No metric trial has happened yet. A new diagnostic may
-                    # expose the effect of these same edits; the same pair may not.
-                    for candidate_hash in candidate_patch_hashes:
-                        seen_patches.discard(candidate_hash)
-                    rejected_probes.setdefault(patch_hash, set()).add(probe_hash)
-                    reason = f"behavior_probe_{behavior_status}"
+                duplicate_probe = verification.status == "quality_hypothesis" and any(
+                    probe_hash in rejected_probes.get(candidate_hash, set())
+                    for candidate_hash in candidate_patch_hashes
+                )
+                matched_patch_hash = next(
+                    (
+                        candidate_hash
+                        for candidate_hash in candidate_patch_hashes
+                        if candidate_hash in seen_patches
+                    ),
+                    patch_hash,
+                )
+                if matched_patch_hash in seen_patches or duplicate_probe:
+                    historical_feedback = (
+                        patch_feedback_from_findings(
+                            findings_path,
+                            source_hash=source_hash,
+                            patch_hash=matched_patch_hash,
+                            evaluation_protocol_hash=evaluation_protocol_hash,
+                        )
+                        if (
+                            matched_patch_hash in historical_patch_hashes or duplicate_probe
+                        )
+                        and matched_patch_hash not in local_seen_patches
+                        else ""
+                    )
+                    prior_reason = patch_outcomes.get(matched_patch_hash, last.reason)
+                    duplicate_reason = (
+                        "duplicate_historical_patch"
+                        if historical_feedback
+                        else f"duplicate_patch_after:{prior_reason}"
+                        if prior_reason and prior_reason != "no_patch"
+                        else "duplicate_patch"
+                    )
                     last = Decision(
                         False,
-                        reason,
+                        duplicate_reason,
                         None,
                         experiment_id=experiment_id,
                     )
-                    if behavior_status in {"invalid", "missing"}:
-                        diagnosis = (
-                            "The hypothesis remains unjudged because the diagnostic "
-                            "test is invalid. Keep the source mechanism frozen when it "
-                            "is still supported and repair only the probe. The exact "
-                            "probe code, exit status, traceback, stdout, stderr, and "
-                            "observations from both runs follow."
-                        )
-                    else:
-                        diagnosis = (
-                            "Stock completed the diagnostic but the patched checkout "
-                            "failed. Treat the patched traceback as a patch regression "
-                            "and repair the source change."
-                        )
-                    feedback = (
-                        f"outcome={reason}; interpretation="
-                        f"{behavior_probe.get('hypothesis_result')}. {diagnosis}\n"
-                        + json.dumps(behavior_probe, ensure_ascii=False)[:7_000]
-                    )
-                    feedback_history.append(feedback)
-                    feedback = _revision_feedback_context(feedback_history)
-                    if behavior_status in {"invalid", "missing"}:
-                        # The test failed to judge the source hypothesis. Reuse
-                        # the exact source edits and spend the next turn on a
-                        # corrected diagnostic instead of silently replacing
-                        # the candidate.
-                        retry_saved_candidate = candidate
                     record_attempt(
-                        journal,
-                        workspace,
                         lead,
                         candidate,
                         stock,
                         None,
                         last,
-                        loc(lead),
                         revision,
-                        diff=_candidate_diff(experiment, source, candidate),
-                        hypothesis_id=hypothesis.id,
                         patch_hash=patch_hash,
-                        feedback=feedback,
+                        feedback=historical_feedback,
                         reproduction=reproduction,
-                        behavior_probe=behavior_probe,
-                        findings_path=findings_path,
-                        run_number=run_number,
-                        run_id=run_id,
-                        source_commit_value=source_commit_value,
-                        source_hash=source_hash,
+                        # The original finding remains the durable record. Avoid
+                        # duplicating it merely because retrieval worked.
+                        findings_path=None,
                     )
-                    discard_experiment_checkout(
-                        experiment, workspace=workspace, source=source
-                    )
-                    if revision < max_revisions:
-                        hypothesis = _start_revision(
-                            workspace, hypothesis, lead, revision + 1, reason
-                        )
+                    local_seen_patches.update(candidate_patch_hashes)
+                    if historical_feedback and advance_revision(duplicate_reason):
+                        feedback = push_feedback(historical_feedback)
                         continue
                     break
+                seen_patches.update(candidate_patch_hashes)
+                local_seen_patches.update(candidate_patch_hashes)
 
-            if (
-                verification.status == "verified_bug"
-                and not is_controller_observed_crash(verification)
-                and reproduction.get("patched") != "resolved"
-            ):
-                last = Decision(
-                    False,
-                    "verified_bug_not_resolved",
-                    None,
-                    experiment_id=experiment_id,
-                )
-                feedback = (
-                    "The independent stock reproduction still fails after your patch. "
-                    "Fix the verified mechanism, not an adjacent symptom.\n"
-                    + _compact_reproduction_feedback(reproduction)
-                )
-                feedback_history.append(feedback)
-                feedback = _revision_feedback_context(feedback_history)
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    candidate,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    diff=_candidate_diff(experiment, source, candidate),
-                    hypothesis_id=hypothesis.id,
-                    patch_hash=patch_hash,
-                    feedback=feedback,
-                    reproduction=reproduction,
-                    behavior_probe=behavior_probe,
-                    findings_path=findings_path,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                continue
-
-            broken = next(
-                (
-                    error
-                    for rel in dict.fromkeys(edit.file_path for edit in candidate.edits)
-                    if (error := import_error(experiment, rel))
-                ),
-                None,
-            )
-            if broken:
-                last = Decision(
-                    False,
-                    f"patch_unimportable {broken}",
-                    None,
-                    experiment_id=experiment_id,
-                )
-                feedback = (
-                    f"outcome=import_error; error={broken}\n\nPrevious evaluated patch:\n"
-                    + _candidate_patch_text(candidate)
-                    + "\nRepair the same mechanism so every edited module imports."
-                )
-                feedback_history.append(feedback)
-                feedback = _revision_feedback_context(feedback_history)
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    candidate,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    diff=_candidate_diff(experiment, source, candidate),
-                    hypothesis_id=hypothesis.id,
-                    patch_hash=patch_hash,
-                    feedback=feedback,
-                    reproduction=reproduction,
-                    behavior_probe=behavior_probe,
-                    findings_path=findings_path,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                if revision >= max(1, max_revisions) and not safety_extension_granted:
-                    safety_extension_granted = True
+                behavior_probe: dict = {}
+                if verification.status == "quality_hypothesis":
+                    behavior_probe = compare_with_prior_probe(
+                        source,
+                        experiment,
+                        candidate.behavior_probe,
+                        prior_probe=prior_behavior_probe,
+                        compare_fn=compare_behavior_probe,
+                    )
+                    candidate_dir = workspace / "candidates" / candidate.candidate_id
+                    candidate_dir.mkdir(parents=True, exist_ok=True)
+                    if behavior_probe.get("reused_probe_from_candidate"):
+                        (candidate_dir / "submitted_behavior_probe.py").write_text(
+                            candidate.behavior_probe, encoding="utf-8"
+                        )
+                        candidate.behavior_probe = behavior_probe["code"]
+                        (candidate_dir / "behavior_probe.py").write_text(
+                            candidate.behavior_probe, encoding="utf-8"
+                        )
+                    if (
+                        behavior_probe.get("status") == "changed"
+                        and candidate.behavior_probe
+                    ):
+                        prior_behavior_probe = (
+                            candidate.candidate_id,
+                            candidate.behavior_probe,
+                        )
+                    (candidate_dir / "behavior_probe_result.json").write_text(
+                        json.dumps(behavior_probe, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
                     append_journal(
-                        journal,
+                        workspace / "trace.jsonl",
                         {
-                            "event": "targeted_revision_extension",
-                            "gate": "import",
+                            "event": "behavior_probe",
                             "candidate": candidate.candidate_id,
-                            "reason": last.reason,
+                            **behavior_probe,
                         },
                     )
-                if revision < max_revisions or (
-                    safety_extension_granted and revision == max(1, max_revisions)
-                ):
-                    hypothesis = _start_revision(
-                        workspace, hypothesis, lead, revision + 1, last.reason
+                    save_checkpoint(
+                        workspace,
+                        stage="behavior_probe",
+                        run_id=run_id,
+                        candidate_id=candidate.candidate_id,
+                        revision=revision,
+                        behavior_probe=behavior_probe,
                     )
-                    continue
-                break
+                    behavior_status = behavior_probe.get("status")
+                    if _behavior_probe_blocks_candidate(behavior_probe):
+                        # No metric trial has happened yet. A new diagnostic may
+                        # expose the effect of these same edits; the same pair may not.
+                        for candidate_hash in candidate_patch_hashes:
+                            seen_patches.discard(candidate_hash)
+                        rejected_probes.setdefault(patch_hash, set()).add(probe_hash)
+                        reason = f"behavior_probe_{behavior_status}"
+                        last = Decision(
+                            False,
+                            reason,
+                            None,
+                            experiment_id=experiment_id,
+                        )
+                        if behavior_status in {"invalid", "missing"}:
+                            diagnosis = (
+                                "The hypothesis remains unjudged because the diagnostic "
+                                "test is invalid. Keep the source mechanism frozen when it "
+                                "is still supported and repair only the probe. The exact "
+                                "probe code, exit status, traceback, stdout, stderr, and "
+                                "observations from both runs follow."
+                            )
+                        else:
+                            diagnosis = (
+                                "Stock completed the diagnostic but the patched checkout "
+                                "failed. Treat the patched traceback as a patch regression "
+                                "and repair the source change."
+                            )
+                        feedback = (
+                            f"outcome={reason}; interpretation="
+                            f"{behavior_probe.get('hypothesis_result')}. {diagnosis}\n"
+                            + json.dumps(behavior_probe, ensure_ascii=False)[:7_000]
+                        )
+                        feedback = push_feedback(feedback)
+                        if behavior_status in {"invalid", "missing"}:
+                            # The test failed to judge the source hypothesis. Reuse
+                            # the exact source edits and spend the next turn on a
+                            # corrected diagnostic instead of silently replacing
+                            # the candidate.
+                            retry_saved_candidate = candidate
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            last,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            patch_hash=patch_hash,
+                            feedback=feedback,
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        if advance_revision(reason):
+                            continue
+                        break
 
-            # A concrete leaf-operation patch is checked for a deterministic
-            # launch failure on affected workloads before pytest. Missing
-            # short-horizon gain only queues the candidate; it does not DROP.
-            quick_scope = None
-            maintenance_screen = False
-            quick_result: dict = {}
-            if verification.status == "quality_hypothesis" and not config.metric_only:
-                quick_scope = _candidate_confirmation_scope(
-                    source,
-                    candidate,
-                    stock,
-                    operation_hints,
-                    exam_ids,
-                )
-            if quick_scope is not None and set(quick_scope) != set(exam_ids):
-                quick_passed, quick_result = _quick_quality_screen(
-                    source,
-                    experiment,
-                    quick_scope,
-                    lift_ids,
-                    protect_ids,
-                    stock,
-                    seed=config.dev_seed,
-                )
-                append_journal(
-                    workspace / "trace.jsonl",
-                    {
-                        "event": "quick_quality_screen",
-                        "candidate": candidate.candidate_id,
-                        "tasks": list(quick_scope),
-                        **quick_result,
-                    },
-                )
-                if not quick_passed:
-                    shadow_screen = quick_result.get("shadow") or {}
-                    maintenance_screen = bool(
-                        verification.status == "quality_hypothesis"
-                        and quick_result.get("reason") == "no_affected_metric_signal"
-                        and shadow_screen.get("evaluated")
-                        and not (quick_result.get("dev") or {}).get(
-                            "infrastructure_error"
-                        )
-                        and not shadow_screen.get("infrastructure_error")
-                        and not str(
-                            (quick_result.get("dev") or {}).get("reason", "")
-                        ).startswith("regression")
-                        and not str(shadow_screen.get("reason", "")).startswith(
-                            "regression"
-                        )
-                    )
-                if not quick_passed and not maintenance_screen:
-                    quick_decision = Decision(
+                if (
+                    verification.status == "verified_bug"
+                    and not is_controller_observed_crash(verification)
+                    and reproduction.get("patched") != "resolved"
+                ):
+                    last = Decision(
                         False,
-                        str(quick_result.get("reason") or "no_affected_metric_signal"),
-                        quick_result.get("target_delta"),
+                        "verified_bug_not_resolved",
+                        None,
                         experiment_id=experiment_id,
                     )
                     feedback = (
-                        "outcome=quick_quality_drop; stock ran on the affected "
-                        "workloads, but the patch crashed, timed out, or returned "
-                        "an invalid score. Short-horizon metric movement is not a "
-                        "DROP. Refine the same mechanism before requesting the "
-                        "full protect suite.\n"
-                        + json.dumps(quick_result, ensure_ascii=False, default=str)[
-                            :5_000
-                        ]
+                        "The independent stock reproduction still fails after your patch. "
+                        "Fix the verified mechanism, not an adjacent symptom.\n"
+                        + _compact_reproduction_feedback(reproduction)
                     )
-                    feedback_history.append(feedback)
-                    feedback = _revision_feedback_context(feedback_history)
+                    feedback = push_feedback(feedback)
                     record_attempt(
-                        journal,
-                        workspace,
                         lead,
                         candidate,
-                        {task_id: stock[task_id] for task_id in quick_scope},
+                        stock,
                         None,
-                        quick_decision,
-                        loc(lead),
+                        last,
                         revision,
                         diff=_candidate_diff(experiment, source, candidate),
-                        hypothesis_id=hypothesis.id,
                         patch_hash=patch_hash,
                         feedback=feedback,
                         reproduction=reproduction,
                         behavior_probe=behavior_probe,
-                        findings_path=findings_path,
-                        run_number=run_number,
-                        run_id=run_id,
-                        source_commit_value=source_commit_value,
-                        source_hash=source_hash,
                     )
-                    last = quick_decision
-                    discard_experiment_checkout(
-                        experiment, workspace=workspace, source=source
+                    continue
+
+                broken = next(
+                    (
+                        error
+                        for rel in dict.fromkeys(edit.file_path for edit in candidate.edits)
+                        if (error := import_error(experiment, rel))
+                    ),
+                    None,
+                )
+                if broken:
+                    last = Decision(
+                        False,
+                        f"patch_unimportable {broken}",
+                        None,
+                        experiment_id=experiment_id,
                     )
-                    if revision < max_revisions:
-                        hypothesis = _start_revision(
-                            workspace, hypothesis, lead, revision + 1, last.reason
-                        )
+                    feedback = (
+                        f"outcome=import_error; error={broken}\n\nPrevious evaluated patch:\n"
+                        + _candidate_patch_text(candidate)
+                        + "\nRepair the same mechanism so every edited module imports."
+                    )
+                    feedback = push_feedback(feedback)
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    grant_safety_extension("import", candidate, last.reason)
+                    if advance_revision(last.reason):
                         continue
                     break
 
-            first_tests = normalize_test_result(measure_fedot_tests(experiment))
-            after_tests, blocked, test_attempts = confirm_candidate_tests(
-                baseline_tests,
-                experiment,
-                first=first_tests,
-                runner=measure_fedot_tests,
-            )
-            save_checkpoint(
-                workspace,
-                stage="pytest_gate",
-                run_id=run_id,
-                candidate_id=candidate.candidate_id,
-                revision=revision,
-                tests={
-                    "status": after_tests.status,
-                    "completed": after_tests.completed,
-                    "failed_nodes": sorted(after_tests.failed_nodes),
-                    "duration_s": after_tests.duration_s,
-                    "blocked": blocked.reason if blocked is not None else None,
-                    "attempts": len(test_attempts),
-                },
-            )
-            if len(test_attempts) > 1:
-                append_journal(
-                    journal,
-                    {
-                        "event": "pytest_gate_retry",
-                        "candidate": candidate.candidate_id,
-                        "attempts": [
-                            {
-                                "status": item.status,
-                                "failed_nodes": sorted(item.failed_nodes),
-                                "duration_s": item.duration_s,
-                            }
-                            for item in test_attempts
-                        ],
-                        "passed_after_retry": blocked is None,
+                # A concrete leaf-operation patch is checked for a deterministic
+                # launch failure on affected workloads before pytest. Missing
+                # short-horizon gain only queues the candidate; it does not DROP.
+                quick_scope = None
+                maintenance_screen = False
+                quick_result: dict = {}
+                if verification.status == "quality_hypothesis" and not config.metric_only:
+                    quick_scope = _candidate_confirmation_scope(
+                        source,
+                        candidate,
+                        stock,
+                        operation_hints,
+                        exam_ids,
+                    )
+                if quick_scope is not None and set(quick_scope) != set(exam_ids):
+                    quick_passed, quick_result = _quick_quality_screen(
+                        experiment,
+                        quick_scope,
+                        lift_ids,
+                        protect_ids,
+                        stock,
+                        seed=config.dev_seed,
+                    )
+                    append_journal(
+                        workspace / "trace.jsonl",
+                        {
+                            "event": "quick_quality_screen",
+                            "candidate": candidate.candidate_id,
+                            "tasks": list(quick_scope),
+                            **quick_result,
+                        },
+                    )
+                    if not quick_passed:
+                        shadow_screen = quick_result.get("shadow") or {}
+                        maintenance_screen = bool(
+                            verification.status == "quality_hypothesis"
+                            and quick_result.get("reason") == "no_affected_metric_signal"
+                            and shadow_screen.get("evaluated")
+                            and not (quick_result.get("dev") or {}).get(
+                                "infrastructure_error"
+                            )
+                            and not shadow_screen.get("infrastructure_error")
+                            and not str(
+                                (quick_result.get("dev") or {}).get("reason", "")
+                            ).startswith("regression")
+                            and not str(shadow_screen.get("reason", "")).startswith(
+                                "regression"
+                            )
+                        )
+                    if not quick_passed and not maintenance_screen:
+                        quick_decision = Decision(
+                            False,
+                            str(quick_result.get("reason") or "no_affected_metric_signal"),
+                            quick_result.get("target_delta"),
+                            experiment_id=experiment_id,
+                        )
+                        feedback = (
+                            "outcome=quick_quality_drop; stock ran on the affected "
+                            "workloads, but the patch crashed, timed out, or returned "
+                            "an invalid score. Short-horizon metric movement is not a "
+                            "DROP. Refine the same mechanism before requesting the "
+                            "full protect suite.\n"
+                            + json.dumps(quick_result, ensure_ascii=False, default=str)[
+                                :5_000
+                            ]
+                        )
+                        feedback = push_feedback(feedback)
+                        record_attempt(
+                            lead,
+                            candidate,
+                            {task_id: stock[task_id] for task_id in quick_scope},
+                            None,
+                            quick_decision,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            patch_hash=patch_hash,
+                            feedback=feedback,
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        last = quick_decision
+                        if advance_revision(last.reason):
+                            continue
+                        break
+
+                first_tests = normalize_test_result(measure_fedot_tests(experiment))
+                after_tests, blocked, test_attempts = confirm_candidate_tests(
+                    baseline_tests,
+                    experiment,
+                    first=first_tests,
+                    runner=measure_fedot_tests,
+                )
+                save_checkpoint(
+                    workspace,
+                    stage="pytest_gate",
+                    run_id=run_id,
+                    candidate_id=candidate.candidate_id,
+                    revision=revision,
+                    tests={
+                        "status": after_tests.status,
+                        "completed": after_tests.completed,
+                        "failed_nodes": sorted(after_tests.failed_nodes),
+                        "duration_s": after_tests.duration_s,
+                        "blocked": blocked.reason if blocked is not None else None,
+                        "attempts": len(test_attempts),
                     },
                 )
-            if blocked is not None:
-                blocked.experiment_id = experiment_id
-                last = blocked
-                new_failed_nodes = (
-                    after_tests.failed_nodes - baseline_tests.failed_nodes
-                )
-                failed_nodes = ", ".join(sorted(new_failed_nodes)[:20])
-                failure_details = pytest_failure_excerpt(
-                    after_tests.output,
-                    new_failed_nodes,
-                    max_chars=5_000,
-                )
-                if not after_tests.completed:
-                    failure_details = _test_result_diagnostics(
-                        after_tests,
-                        max_chars=5_000,
-                    )
-                contract_source = pytest_contract_source(
-                    experiment,
-                    new_failed_nodes,
-                    max_chars=3_000,
-                )
-                feedback = (
-                    f"outcome=test_failures; reason={blocked.reason}; "
-                    f"failed_nodes={failed_nodes}\n"
-                    "pytest_failure_details (ground truth; fix these exact contracts, "
-                    "do not invent an unrelated cause):\n"
-                    f"{failure_details}"
-                    + (
-                        "\n\nfailing_test_contract_source (exact frozen FEDOT "
-                        "tests; preserve these assertions):\n"
-                        f"{contract_source}"
-                        if contract_source
-                        else ""
-                    )
-                    + "\n\nPrevious evaluated patch:\n"
-                    + _candidate_patch_text(candidate)
-                    + "\nPreserve the causal hypothesis, but correct the implementation "
-                    "and all existing FEDOT contracts before DEV evaluation."
-                )
-                feedback_history.append(feedback)
-                feedback = _revision_feedback_context(feedback_history)
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    candidate,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    tests=after_tests,
-                    hypothesis_id=hypothesis.id,
-                    patch_hash=patch_hash,
-                    feedback=feedback,
-                    reproduction=reproduction,
-                    behavior_probe=behavior_probe,
-                    findings_path=findings_path,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                if blocked.infrastructure_error:
-                    _record_final_skipped(journal, reason=blocked.reason)
-                    return finish(blocked)
-                if revision >= max(1, max_revisions) and not safety_extension_granted:
-                    safety_extension_granted = True
+                if len(test_attempts) > 1:
                     append_journal(
                         journal,
                         {
-                            "event": "targeted_revision_extension",
-                            "gate": "pytest",
+                            "event": "pytest_gate_retry",
                             "candidate": candidate.candidate_id,
-                            "reason": last.reason,
+                            "attempts": [
+                                {
+                                    "status": item.status,
+                                    "failed_nodes": sorted(item.failed_nodes),
+                                    "duration_s": item.duration_s,
+                                }
+                                for item in test_attempts
+                            ],
+                            "passed_after_retry": blocked is None,
                         },
                     )
-                if revision < max_revisions or (
-                    safety_extension_granted and revision == max(1, max_revisions)
-                ):
-                    hypothesis = _start_revision(
-                        workspace, hypothesis, lead, revision + 1, last.reason
+                if blocked is not None:
+                    blocked.experiment_id = experiment_id
+                    last = blocked
+                    new_failed_nodes = (
+                        after_tests.failed_nodes - baseline_tests.failed_nodes
                     )
-                    continue
-                break
+                    failed_nodes = ", ".join(sorted(new_failed_nodes)[:20])
+                    failure_details = pytest_failure_excerpt(
+                        after_tests.output,
+                        new_failed_nodes,
+                        max_chars=5_000,
+                    )
+                    if not after_tests.completed:
+                        failure_details = _test_result_diagnostics(
+                            after_tests,
+                            max_chars=5_000,
+                        )
+                    contract_source = pytest_contract_source(
+                        experiment,
+                        new_failed_nodes,
+                        max_chars=3_000,
+                    )
+                    feedback = (
+                        f"outcome=test_failures; reason={blocked.reason}; "
+                        f"failed_nodes={failed_nodes}\n"
+                        "pytest_failure_details (ground truth; fix these exact contracts, "
+                        "do not invent an unrelated cause):\n"
+                        f"{failure_details}"
+                        + (
+                            "\n\nfailing_test_contract_source (exact frozen FEDOT "
+                            "tests; preserve these assertions):\n"
+                            f"{contract_source}"
+                            if contract_source
+                            else ""
+                        )
+                        + "\n\nPrevious evaluated patch:\n"
+                        + _candidate_patch_text(candidate)
+                        + "\nPreserve the causal hypothesis, but correct the implementation "
+                        "and all existing FEDOT contracts before DEV evaluation."
+                    )
+                    feedback = push_feedback(feedback)
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        tests=after_tests,
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if blocked.infrastructure_error:
+                        _record_final_skipped(journal, reason=blocked.reason)
+                        return finish(blocked)
+                    grant_safety_extension("pytest", candidate, last.reason)
+                    if advance_revision(last.reason):
+                        continue
+                    break
 
-            if (
-                policy.fedot_quality_jobs
-                and verification.status == "quality_hypothesis"
-                and not config.metric_only
-            ):
-                probe_status = str((behavior_probe or {}).get("status") or "")
-                toy_moved = str(quick_result.get("reason") or "") == "early_gain"
-                priority = queue_priority(
-                    probe_status=probe_status,
-                    toy_metric_moved=toy_moved,
-                )
-                job_path = enqueue_quality_job(
-                    workspace,
-                    candidate=candidate,
-                    patch_text=_candidate_diff(experiment, source, candidate),
-                    hint=(
-                        "probe_changed"
-                        if probe_status == "changed"
-                        else "technically_valid_metric_unclear"
-                    ),
-                    priority=priority,
-                    probe_status=probe_status,
-                    toy_metric="early_gain" if toy_moved else "no_veto",
-                )
-                last = Decision(
-                    False,
-                    "queued_for_fedot_quality",
-                    None,
-                    stage="quality_queue",
-                    experiment_id=experiment_id,
-                )
-                append_journal(
-                    journal,
-                    {
-                        "event": "quality_queue",
-                        "candidate": candidate.candidate_id,
-                        "path": str(job_path),
-                        "priority": priority,
-                        "probe_status": probe_status,
-                        "toy_metric": "priority_only",
-                    },
-                )
-                record_attempt(
-                    journal,
-                    workspace,
-                    lead,
-                    candidate,
-                    stock,
-                    None,
-                    last,
-                    loc(lead),
-                    revision,
-                    diff=_candidate_diff(experiment, source, candidate),
-                    tests=after_tests,
-                    hypothesis_id=hypothesis.id,
-                    patch_hash=patch_hash,
-                    reproduction=reproduction,
-                    behavior_probe=behavior_probe,
-                    findings_path=findings_path,
-                    run_number=run_number,
-                    run_id=run_id,
-                    source_commit_value=source_commit_value,
-                    source_hash=source_hash,
-                )
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                break
+                if (
+                    policy.fedot_quality_jobs
+                    and verification.status == "quality_hypothesis"
+                    and not config.metric_only
+                ):
+                    probe_status = str((behavior_probe or {}).get("status") or "")
+                    toy_moved = str(quick_result.get("reason") or "") == "early_gain"
+                    priority = queue_priority(
+                        probe_status=probe_status,
+                        toy_metric_moved=toy_moved,
+                    )
+                    job_path = enqueue_quality_job(
+                        workspace,
+                        candidate=candidate,
+                        patch_text=_candidate_diff(experiment, source, candidate),
+                        hint=(
+                            "probe_changed"
+                            if probe_status == "changed"
+                            else "technically_valid_metric_unclear"
+                        ),
+                        priority=priority,
+                        probe_status=probe_status,
+                        toy_metric="early_gain" if toy_moved else "no_veto",
+                    )
+                    last = Decision(
+                        False,
+                        "queued_for_fedot_quality",
+                        None,
+                        stage="quality_queue",
+                        experiment_id=experiment_id,
+                    )
+                    append_journal(
+                        journal,
+                        {
+                            "event": "quality_queue",
+                            "candidate": candidate.candidate_id,
+                            "path": str(job_path),
+                            "priority": priority,
+                            "probe_status": probe_status,
+                            "toy_metric": "priority_only",
+                        },
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        tests=after_tests,
+                        patch_hash=patch_hash,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    break
 
-            if config.metric_only:
-                from fedotllm.agents.evolve.controller.metric_study import evaluate_candidate
-                candidate_dir = workspace / "candidates" / candidate.candidate_id
-                try:
+                if config.metric_only:
+                    from fedotllm.agents.evolve.controller.metric_study import evaluate_candidate
+                    candidate_dir = workspace / "candidates" / candidate.candidate_id
                     last = evaluate_candidate(
                         source, experiment, candidate, verification, metric_plan,
                         lead=lead, tasks=exam_ids, study=Path(config.metric_study_path),
@@ -2063,61 +1935,37 @@ def run_once(
                     )
                     last.experiment_id = experiment_id
                     record_attempt(
-                        journal, workspace, lead, candidate, stock, None, last, loc(lead), revision,
-                        diff=_candidate_diff(experiment, source, candidate), tests=after_tests,
-                        hypothesis_id=hypothesis.id, patch_hash=patch_hash,
-                        reproduction=reproduction, findings_path=findings_path,
-                        run_number=run_number, run_id=run_id,
-                        source_commit_value=source_commit_value, source_hash=source_hash,
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        tests=after_tests,
+                        patch_hash=patch_hash,
+                        reproduction=reproduction,
                     )
-                finally:
-                    discard_experiment_checkout(experiment, workspace=workspace, source=source)
-                if last.final_keep is not None or "FINAL_already_sealed" in last.reason:
-                    return finish(last)
-                # Only DEV feedback may lead to a revision. Held-out decisions
-                # end this hypothesis; their numeric evidence never reaches Fixer.
-                if last.reason.startswith("metric_DEV_rejected") and revision < max_revisions:
-                    feedback = last.reason + "\nKeep the preregistered target and causal mechanism."
-                    hypothesis = _start_revision(workspace, hypothesis, lead, revision + 1, last.reason)
-                    continue
-                break
+                    if last.final_keep is not None or "FINAL_already_sealed" in last.reason:
+                        return finish(last)
+                    # Only DEV feedback may lead to a revision. Held-out decisions
+                    # end this hypothesis; their numeric evidence never reaches Fixer.
+                    if last.reason.startswith("metric_DEV_rejected") and advance_revision(last.reason):
+                        feedback = last.reason + "\nKeep the preregistered target and causal mechanism."
+                        continue
+                    break
 
-            affected_metric: dict = {}
-            if verification.status == "verified_bug" and verification.reproduction_code:
-                affected_metric = evaluate_affected_metric(
-                    source,
-                    experiment,
-                    verification,
-                    lead,
-                    seed=config.dev_seed,
-                )
-                candidate_dir = workspace / "candidates" / candidate.candidate_id
-                candidate_dir.mkdir(parents=True, exist_ok=True)
-                (candidate_dir / "affected_metric.json").write_text(
-                    json.dumps(affected_metric, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                append_journal(
-                    workspace / "trace.jsonl",
-                    {
-                        "event": "affected_metric",
-                        "candidate": candidate.candidate_id,
-                        **affected_metric,
-                    },
-                )
-                affected_rejected = affected_metric.get("status") == "regressed"
-                if affected_metric.get("status") == "improved":
-                    dev_confirmation = confirm_affected_metric(
+                affected_metric: dict = {}
+                if verification.status == "verified_bug" and verification.reproduction_code:
+                    affected_metric = evaluate_affected_metric(
                         source,
                         experiment,
                         verification,
                         lead,
-                        seeds=config.confirmation_seeds,
-                        split="dev",
-                        initial=affected_metric,
+                        seed=config.dev_seed,
                     )
-                    affected_metric["dev_confirmation"] = dev_confirmation
-                    affected_rejected = not dev_confirmation["confirmed"]
+                    candidate_dir = workspace / "candidates" / candidate.candidate_id
+                    candidate_dir.mkdir(parents=True, exist_ok=True)
                     (candidate_dir / "affected_metric.json").write_text(
                         json.dumps(affected_metric, ensure_ascii=False, indent=2),
                         encoding="utf-8",
@@ -2125,537 +1973,508 @@ def run_once(
                     append_journal(
                         workspace / "trace.jsonl",
                         {
-                            "event": "affected_metric_confirmation",
+                            "event": "affected_metric",
                             "candidate": candidate.candidate_id,
-                            "stage": "dev",
-                            **dev_confirmation,
+                            **affected_metric,
                         },
                     )
-                if affected_rejected:
-                    reason = (
-                        "affected_metric_regression"
-                        if affected_metric.get("status") == "regressed"
-                        else "affected_metric_not_confirmed"
-                    )
-                    last = Decision(
-                        False,
-                        reason,
-                        None,
-                        stage="affected",
-                        experiment_id=experiment_id,
-                    )
-                    feedback = (
-                        "The patch resolves the invariant but worsens a frozen real-data "
-                        "metric on a workload where the exact verified line was executed. "
-                        "Try a different deterministic policy; do not optimize against "
-                        "dataset values.\n"
-                        + affected_feedback(affected_metric)
-                        + (
-                            "\nconfirmation="
-                            + json.dumps(
-                                {
-                                    key: affected_metric["dev_confirmation"].get(key)
-                                    for key in (
-                                        "improved_seeds",
-                                        "regressed_task_seed_pairs",
-                                        "infrastructure_failures",
-                                    )
-                                },
-                                ensure_ascii=False,
+                    affected_rejected = affected_metric.get("status") == "regressed"
+                    if affected_metric.get("status") == "improved":
+                        dev_confirmation = confirm_affected_metric(
+                            source,
+                            experiment,
+                            verification,
+                            lead,
+                            seeds=config.confirmation_seeds,
+                            split="dev",
+                            initial=affected_metric,
+                        )
+                        affected_metric["dev_confirmation"] = dev_confirmation
+                        affected_rejected = not dev_confirmation["confirmed"]
+                        (candidate_dir / "affected_metric.json").write_text(
+                            json.dumps(affected_metric, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                        append_journal(
+                            workspace / "trace.jsonl",
+                            {
+                                "event": "affected_metric_confirmation",
+                                "candidate": candidate.candidate_id,
+                                "stage": "dev",
+                                **dev_confirmation,
+                            },
+                        )
+                    if affected_rejected:
+                        reason = (
+                            "affected_metric_regression"
+                            if affected_metric.get("status") == "regressed"
+                            else "affected_metric_not_confirmed"
+                        )
+                        last = Decision(
+                            False,
+                            reason,
+                            None,
+                            stage="affected",
+                            experiment_id=experiment_id,
+                        )
+                        feedback = (
+                            "The patch resolves the invariant but worsens a frozen real-data "
+                            "metric on a workload where the exact verified line was executed. "
+                            "Try a different deterministic policy; do not optimize against "
+                            "dataset values.\n"
+                            + affected_feedback(affected_metric)
+                            + (
+                                "\nconfirmation="
+                                + json.dumps(
+                                    {
+                                        key: affected_metric["dev_confirmation"].get(key)
+                                        for key in (
+                                            "improved_seeds",
+                                            "regressed_task_seed_pairs",
+                                            "infrastructure_failures",
+                                        )
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                if affected_metric.get("dev_confirmation")
+                                else ""
                             )
-                            if affected_metric.get("dev_confirmation")
-                            else ""
+                            + "\n\nPrevious evaluated patch:\n"
+                            + _candidate_patch_text(candidate)
                         )
-                        + "\n\nPrevious evaluated patch:\n"
-                        + _candidate_patch_text(candidate)
-                    )
-                    feedback_history.append(feedback)
-                    feedback = _revision_feedback_context(feedback_history)
-                    record_attempt(
-                        journal,
-                        workspace,
-                        lead,
-                        candidate,
-                        stock,
-                        None,
-                        last,
-                        loc(lead),
-                        revision,
-                        diff=_candidate_diff(experiment, source, candidate),
-                        tests=after_tests,
-                        hypothesis_id=hypothesis.id,
-                        patch_hash=patch_hash,
-                        feedback=feedback,
-                        reproduction=reproduction,
-                        behavior_probe=behavior_probe,
-                        affected_metric=affected_metric,
-                        findings_path=findings_path,
-                        run_number=run_number,
-                        run_id=run_id,
-                        source_commit_value=source_commit_value,
-                        source_hash=source_hash,
-                    )
-                    discard_experiment_checkout(
-                        experiment, workspace=workspace, source=source
-                    )
-                    if revision < max_revisions:
-                        hypothesis = _start_revision(
-                            workspace, hypothesis, lead, revision + 1, last.reason
+                        feedback = push_feedback(feedback)
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            last,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            tests=after_tests,
+                            patch_hash=patch_hash,
+                            feedback=feedback,
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                            affected_metric=affected_metric,
                         )
-                        continue
-                    break
+                        if advance_revision(last.reason):
+                            continue
+                        break
 
-            blocking_crash_ids = _blocking_lift_crash_ids(stock, lift_ids)
-            controller_crash_ids = (
-                _controller_crashes_for_lead(stock, lead)
-                if is_controller_observed_crash(verification)
-                else ()
-            )
-            crash_ids = tuple(
-                dict.fromkeys((*blocking_crash_ids, *controller_crash_ids))
-            )
-            crash_probe: dict[str, ScoreResult] = {}
-            if crash_ids:
-                crash_probe = measure_patched(
-                    crash_ids,
-                    checkout=experiment,
-                    split="dev",
-                    seed=config.dev_seed,
-                    collect_coverage=True,
+                blocking_crash_ids = _blocking_lift_crash_ids(stock, lift_ids)
+                controller_crash_ids = (
+                    _controller_crashes_for_lead(stock, lead)
+                    if is_controller_observed_crash(verification)
+                    else ()
                 )
-            if controller_crash_ids:
-                transitions = {
-                    task_id: {
-                        "stock_status": stock[task_id].status,
-                        "patched_status": (
-                            crash_probe[task_id].status
-                            if task_id in crash_probe
-                            else "missing"
-                        ),
-                        "stock_output": (
-                            stock[task_id].detail
-                            or stock[task_id].log_tail
-                            or stock[task_id].traceback
-                        )[-2_000:],
-                        "patched_output": (
-                            (
-                                crash_probe[task_id].detail
-                                or crash_probe[task_id].log_tail
-                                or crash_probe[task_id].traceback
-                            )[-2_000:]
-                            if task_id in crash_probe
-                            else ""
-                        ),
-                    }
-                    for task_id in controller_crash_ids
-                }
-                reproduction["controller_workloads"] = transitions
-                reproduction["patched"] = (
-                    "resolved"
-                    if all(
-                        task_id in crash_probe
-                        and crash_probe[task_id].status == "ok"
+                crash_ids = tuple(
+                    dict.fromkeys((*blocking_crash_ids, *controller_crash_ids))
+                )
+                crash_probe: dict[str, ScoreResult] = {}
+                if crash_ids:
+                    crash_probe = measure_patched(
+                        crash_ids,
+                        checkout=experiment,
+                        split="dev",
+                        seed=config.dev_seed,
+                        collect_coverage=True,
+                    )
+                if controller_crash_ids:
+                    transitions = {
+                        task_id: {
+                            "stock_status": stock[task_id].status,
+                            "patched_status": (
+                                crash_probe[task_id].status
+                                if task_id in crash_probe
+                                else "missing"
+                            ),
+                            "stock_output": (
+                                stock[task_id].detail
+                                or stock[task_id].log_tail
+                                or stock[task_id].traceback
+                            )[-2_000:],
+                            "patched_output": (
+                                (
+                                    crash_probe[task_id].detail
+                                    or crash_probe[task_id].log_tail
+                                    or crash_probe[task_id].traceback
+                                )[-2_000:]
+                                if task_id in crash_probe
+                                else ""
+                            ),
+                        }
                         for task_id in controller_crash_ids
+                    }
+                    reproduction["controller_workloads"] = transitions
+                    reproduction["patched"] = (
+                        "resolved"
+                        if all(
+                            task_id in crash_probe
+                            and crash_probe[task_id].status == "ok"
+                            for task_id in controller_crash_ids
+                        )
+                        else "still_failing"
                     )
-                    else "still_failing"
+                unresolved_crashes = bool(blocking_crash_ids) and all(
+                    crash_probe.get(task_id) is not None
+                    and crash_probe[task_id].status == "crash"
+                    for task_id in blocking_crash_ids
                 )
-            unresolved_crashes = bool(blocking_crash_ids) and all(
-                crash_probe.get(task_id) is not None
-                and crash_probe[task_id].status == "crash"
-                for task_id in blocking_crash_ids
-            )
-            if unresolved_crashes:
-                # No lift is possible only when the complete lift set consists
-                # of unresolved crashes. A known crash in the protect-only set
-                # is an unchanged baseline, not a reason to skip healthy lift
-                # workloads. The old all-stock shortcut silently evaluated
-                # unrelated PolyFeatures patches only on the known PCA crash.
-                # Reuse stock protect results and return the instrumented causal
-                # feedback immediately instead of spending minutes on a full
-                # suite that cannot produce KEEP.
-                patched = dict(stock)
-                patched.update(crash_probe)
-            else:
-                patched = measure_patched(
-                    exam_ids,
-                    checkout=experiment,
-                    split="dev",
-                    seed=config.dev_seed,
-                )
-            last = verdict(stock, patched, lift_ids=lift_ids, protect_ids=protect_ids)
-            last.experiment_id = experiment_id
-            if (
-                verification.status == "quality_hypothesis"
-                and not last.keep
-                and not last.infrastructure_error
-                and str(last.reason).startswith("target_delta")
-            ):
-                affected_ids = (
-                    _candidate_confirmation_scope(
-                        source,
-                        candidate,
-                        stock,
-                        operation_hints,
-                        exam_ids,
-                    )
-                    or exam_ids
-                )
-                if affected_metric_moved(stock, patched, affected_ids):
-                    last.keep = True
-                    last.reason = "affected_metric_moved_pending_final"
+                if unresolved_crashes:
+                    # No lift is possible only when the complete lift set consists
+                    # of unresolved crashes. A known crash in the protect-only set
+                    # is an unchanged baseline, not a reason to skip healthy lift
+                    # workloads. The old all-stock shortcut silently evaluated
+                    # unrelated PolyFeatures patches only on the known PCA crash.
+                    # Reuse stock protect results and return the instrumented causal
+                    # feedback immediately instead of spending minutes on a full
+                    # suite that cannot produce KEEP.
+                    patched = dict(stock)
+                    patched.update(crash_probe)
                 else:
-                    last.reason = "no_affected_metric_signal"
-            record_stock = stock
-            global_protect_failed = False
-            if last.keep:
-                global_decision, global_stock, global_patched = (
-                    enforce_global_dev_protect(
-                        experiment,
-                        stock,
-                        patched,
+                    patched = measure_patched(
+                        exam_ids,
+                        checkout=experiment,
+                        split="dev",
+                        seed=config.dev_seed,
                     )
-                )
-                record_stock = global_stock
-                patched = global_patched
-                if not global_decision.keep:
-                    if (
-                        verification.status == "quality_hypothesis"
-                        and str(global_decision.reason).startswith("target_delta")
-                    ):
+                last = verdict(stock, patched, lift_ids=lift_ids, protect_ids=protect_ids)
+                last.experiment_id = experiment_id
+                if (
+                    verification.status == "quality_hypothesis"
+                    and not last.keep
+                    and not last.infrastructure_error
+                    and str(last.reason).startswith("target_delta")
+                ):
+                    affected_ids = (
+                        _candidate_confirmation_scope(
+                            source,
+                            candidate,
+                            stock,
+                            operation_hints,
+                            exam_ids,
+                        )
+                        or exam_ids
+                    )
+                    if affected_metric_moved(stock, patched, affected_ids):
                         last.keep = True
                         last.reason = "affected_metric_moved_pending_final"
                     else:
-                        last = global_decision
-                        global_protect_failed = True
-                        if revision >= max(1, max_revisions):
-                            safety_extension_granted = True
-            metric_reason = last.reason
-            correctness_confirmed = bool(
-                not last.keep
-                and not last.infrastructure_error
-                and verification.status == "verified_bug"
-                and reproduction.get("stock") == "failed_as_predicted"
-                and reproduction.get("patched") == "resolved"
-                and not metric_reason.startswith("regression")
-            )
-            maintenance_confirmed = bool(
-                maintenance_screen
-                and not last.keep
-                and not last.infrastructure_error
-                and not metric_reason.startswith("regression")
-                and last.regression_deltas
-                and all(
-                    delta is not None and delta >= -1e-12
-                    for delta in last.regression_deltas.values()
+                        last.reason = "no_affected_metric_signal"
+                record_stock = stock
+                global_protect_failed = False
+                if last.keep:
+                    global_decision, global_stock, global_patched = (
+                        enforce_global_dev_protect(
+                            experiment,
+                            stock,
+                            patched,
+                        )
+                    )
+                    record_stock = global_stock
+                    patched = global_patched
+                    if not global_decision.keep:
+                        if (
+                            verification.status == "quality_hypothesis"
+                            and str(global_decision.reason).startswith("target_delta")
+                        ):
+                            last.keep = True
+                            last.reason = "affected_metric_moved_pending_final"
+                        else:
+                            last = global_decision
+                            global_protect_failed = True
+                            if revision >= revision_limit:
+                                safety_extension_granted = True
+                metric_reason = last.reason
+                correctness_confirmed = bool(
+                    not last.keep
+                    and not last.infrastructure_error
+                    and verification.status == "verified_bug"
+                    and reproduction.get("stock") == "failed_as_predicted"
+                    and reproduction.get("patched") == "resolved"
+                    and not metric_reason.startswith("regression")
                 )
-            )
-            candidate_diff = _candidate_diff(experiment, source, candidate)
-            signal_confirmation: dict | None = None
-            small_metric_confirmed = False
-            if (
-                not last.keep
-                and not last.infrastructure_error
-                and last.target_delta is not None
-                and last.target_delta > 0
-                and last.reason.startswith("target_delta")
-                and signal_confirmations_used < config.max_signal_confirmations
-                and policy.confirm_small_signals
-            ):
-                signal_scope = (
-                    _candidate_confirmation_scope(
+                maintenance_confirmed = bool(
+                    maintenance_screen
+                    and not last.keep
+                    and not last.infrastructure_error
+                    and not metric_reason.startswith("regression")
+                    and last.regression_deltas
+                    and all(
+                        delta is not None and delta >= -1e-12
+                        for delta in last.regression_deltas.values()
+                    )
+                )
+                candidate_patch_text = _candidate_diff(experiment, source, candidate)
+                signal_confirmation: dict | None = None
+                small_metric_confirmed = False
+                if (
+                    not last.keep
+                    and not last.infrastructure_error
+                    and last.target_delta is not None
+                    and last.target_delta > 0
+                    and last.reason.startswith("target_delta")
+                    and signal_confirmations_used < config.max_signal_confirmations
+                    and policy.confirm_small_signals
+                ):
+                    signal_scope = (
+                        _candidate_confirmation_scope(
+                            source,
+                            candidate,
+                            stock,
+                            operation_hints,
+                            exam_ids,
+                        )
+                        or exam_ids
+                    )
+                    signal_lift = tuple(
+                        task_id for task_id in lift_ids if task_id in signal_scope
+                    )
+                    signal_protect = tuple(
+                        task_id for task_id in protect_ids if task_id in signal_scope
+                    )
+                    if not signal_lift:
+                        signal_lift = signal_scope
+                    if not signal_protect:
+                        signal_protect = signal_scope
+                    signal_confirmations_used += 1
+                    signal_confirmed, signal_confirmation = _confirm_dev(
+                        source,
+                        experiment,
+                        signal_scope,
+                        signal_lift,
+                        signal_protect,
+                        seeds=config.confirmation_seeds,
+                        evidence_only=True,
+                    )
+                    append_journal(
+                        journal,
+                        {
+                            "event": "metric_signal_confirmation",
+                            "candidate": candidate.candidate_id,
+                            "tasks": list(signal_scope),
+                            "confirmation_index": signal_confirmations_used,
+                            **signal_confirmation,
+                        },
+                    )
+                    if signal_confirmed:
+                        small_metric_confirmed = True
+                        save_patch_artifact("promising", candidate, candidate_patch_text)
+                if correctness_confirmed:
+                    # A reproduced correctness defect is useful even when it does
+                    # not move this frozen metric. It is a separate successful
+                    # outcome, not a weak metric candidate.
+                    affected_dev = affected_metric.get("dev_confirmation") or {}
+                    if affected_dev.get("confirmed"):
+                        # A small DEV signal is evidence attached to the
+                        # correctness finding, not permission to consume FINAL.
+                        # FINAL is reserved for the single broad DEV winner that
+                        # terminates the campaign.
+                        last.reason = "correctness_keep_with_metric_signal"
+                        last.stage = "correctness"
+                        (candidate_dir / "affected_metric.json").write_text(
+                            json.dumps(affected_metric, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    else:
+                        last.reason = "correctness_keep"
+                        last.stage = "correctness"
+                    last.correctness_keep = True
+                    correctness_path = save_patch_artifact("correctness_fixes", candidate, candidate_patch_text)
+                    append_journal(
+                        journal,
+                        {
+                            "event": "correctness_keep",
+                            "candidate": candidate.candidate_id,
+                            "path": str(correctness_path),
+                            "metric_reason": metric_reason,
+                            "target_delta": last.target_delta,
+                            "affected_metric_status": affected_metric.get("status"),
+                            "affected_dev_signal": bool(affected_dev.get("confirmed")),
+                        },
+                    )
+                    feedback = (
+                        f"outcome={last.reason}; the independent stock failure is "
+                        "resolved, comparative tests pass, and the complete DEV protect "
+                        "suite has no regression. Accept this as a library bug fix; "
+                        "metric improvement is a separate outcome."
+                    )
+                elif small_metric_confirmed:
+                    last.reason = "confirmed_small_metric_keep"
+                    last.stage = "metric_signal"
+                    last.metric_signal_keep = True
+                    metric_path = save_patch_artifact("metric_signal_fixes", candidate, candidate_patch_text)
+                    append_journal(
+                        journal,
+                        {
+                            "event": "metric_signal_keep",
+                            "candidate": candidate.candidate_id,
+                            "path": str(metric_path),
+                            "target_delta": last.target_delta,
+                            "confirmation": signal_confirmation,
+                        },
+                    )
+                    feedback = (
+                        "outcome=confirmed_small_metric_keep; the metric gain is below "
+                        "the single-run practical threshold, but it stayed positive "
+                        "across confirmation seeds and SHADOW with no protected regression."
+                    )
+                elif maintenance_confirmed:
+                    last.reason = "maintenance_keep"
+                    last.stage = "maintenance"
+                    last.maintenance_keep = True
+                    maintenance_path = save_patch_artifact("maintenance_fixes", candidate, candidate_patch_text)
+                    append_journal(
+                        journal,
+                        {
+                            "event": "maintenance_keep",
+                            "candidate": candidate.candidate_id,
+                            "path": str(maintenance_path),
+                            "metric_reason": metric_reason,
+                            "target_delta": last.target_delta,
+                            "behavior_probe_status": behavior_probe.get("status"),
+                        },
+                    )
+                    feedback = (
+                        "outcome=maintenance_keep; Verifier justified a general runtime "
+                        "improvement, the causal probe changed, comparative tests pass, "
+                        "DEV and SHADOW were neutral, and the complete DEV protect suite "
+                        "has no regression. Preserve it as a non-metric library improvement."
+                    )
+                else:
+                    feedback = _dev_feedback(
+                        last,
+                        patched,
+                        candidate,
+                        stock=record_stock,
+                    )
+                    if signal_confirmation is not None:
+                        shadow = signal_confirmation.get("shadow") or {}
+                        if signal_confirmation.get("confirmed"):
+                            feedback += (
+                                "\nThis is a confirmed small metric signal: it is positive "
+                                "across model seeds and SHADOW without a protected regression, "
+                                "but remains below the practical KEEP threshold. Preserve the "
+                                "causal mechanism and seek a larger effect."
+                            )
+                        else:
+                            feedback += (
+                                "\nThe small positive DEV signal did not generalize under the "
+                                "evidence gate. Diagnose the paired task trade-off before "
+                                "refining it. confirmation="
+                                + json.dumps(
+                                    {
+                                        "improved_seeds": signal_confirmation.get(
+                                            "improved_seeds"
+                                        ),
+                                        "regressed_task_seed_pairs": signal_confirmation.get(
+                                            "regressed_task_seed_pairs"
+                                        ),
+                                        "shadow": {
+                                            "keep": shadow.get("keep"),
+                                            "reason": shadow.get("reason"),
+                                            "target_delta": shadow.get("target_delta"),
+                                        },
+                                    },
+                                    sort_keys=True,
+                                )
+                            )
+                    if global_protect_failed:
+                        feedback += (
+                            "\nMandatory global protect suite rejected this focused KEEP. "
+                            "Narrow any shared-base edit to the operation named by the lead "
+                            "unless evidence shows sibling operations need the same behavior."
+                        )
+                feedback = push_feedback(feedback)
+                record_attempt(
+                    lead,
+                    candidate,
+                    record_stock,
+                    patched,
+                    last,
+                    revision,
+                    diff=candidate_patch_text,
+                    tests=after_tests,
+                    patch_hash=patch_hash,
+                    feedback=feedback,
+                    reproduction=reproduction,
+                    behavior_probe=behavior_probe,
+                    affected_metric=affected_metric,
+                )
+                logger.info(
+                    "evolve fix %s/%s revision %s %s %s",
+                    i,
+                    n_leads,
+                    revision,
+                    "KEEP"
+                    if (
+                        last.keep
+                        or last.correctness_keep
+                        or last.maintenance_keep
+                        or last.metric_signal_keep
+                    )
+                    else "drop",
+                    last.reason,
+                )
+                if maintenance_confirmed or small_metric_confirmed:
+                    # Confirmed secondary acceptance tracks do not consume FINAL.
+                    last.keep = True
+                    break
+                if last.keep:
+                    confirmation_scope = _candidate_confirmation_scope(
                         source,
                         candidate,
                         stock,
                         operation_hints,
                         exam_ids,
                     )
-                    or exam_ids
-                )
-                signal_lift = tuple(
-                    task_id for task_id in lift_ids if task_id in signal_scope
-                )
-                signal_protect = tuple(
-                    task_id for task_id in protect_ids if task_id in signal_scope
-                )
-                if not signal_lift:
-                    signal_lift = signal_scope
-                if not signal_protect:
-                    signal_protect = signal_scope
-                signal_confirmations_used += 1
-                signal_confirmed, signal_confirmation = _confirm_dev(
-                    source,
-                    experiment,
-                    signal_scope,
-                    signal_lift,
-                    signal_protect,
-                    seeds=config.confirmation_seeds,
-                    evidence_only=True,
-                )
-                append_journal(
-                    journal,
-                    {
-                        "event": "metric_signal_confirmation",
-                        "candidate": candidate.candidate_id,
-                        "tasks": list(signal_scope),
-                        "confirmation_index": signal_confirmations_used,
-                        **signal_confirmation,
-                    },
-                )
-                if signal_confirmed:
-                    small_metric_confirmed = True
-                    promising_dir = workspace / "promising"
-                    promising_dir.mkdir(parents=True, exist_ok=True)
-                    (promising_dir / f"{candidate.candidate_id}.patch").write_text(
-                        candidate_diff,
-                        encoding="utf-8",
+                    completed = finalize_dev_keep(
+                        experiment,
+                        candidate,
+                        last,
+                        confirmation_ids=confirmation_scope,
+                        verification_result=verification,
                     )
-            if correctness_confirmed:
-                # A reproduced correctness defect is useful even when it does
-                # not move this frozen metric. It is a separate successful
-                # outcome, not a weak metric candidate.
-                affected_dev = affected_metric.get("dev_confirmation") or {}
-                if affected_dev.get("confirmed"):
-                    # A small DEV signal is evidence attached to the
-                    # correctness finding, not permission to consume FINAL.
-                    # FINAL is reserved for the single broad DEV winner that
-                    # terminates the campaign.
-                    last.reason = "correctness_keep_with_metric_signal"
-                    last.stage = "correctness"
-                    (candidate_dir / "affected_metric.json").write_text(
-                        json.dumps(affected_metric, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
+                    if completed is not None:
+                        return completed
+                    confirmation_failure = confirmation_failures.pop(
+                        candidate.candidate_id,
+                        None,
                     )
-                else:
-                    last.reason = "correctness_keep"
-                    last.stage = "correctness"
-                last.correctness_keep = True
-                correctness_dir = workspace / "correctness_fixes"
-                correctness_dir.mkdir(parents=True, exist_ok=True)
-                correctness_path = correctness_dir / f"{candidate.candidate_id}.patch"
-                correctness_path.write_text(candidate_diff, encoding="utf-8")
-                append_journal(
-                    journal,
-                    {
-                        "event": "correctness_keep",
-                        "candidate": candidate.candidate_id,
-                        "path": str(correctness_path),
-                        "metric_reason": metric_reason,
-                        "target_delta": last.target_delta,
-                        "affected_metric_status": affected_metric.get("status"),
-                        "affected_dev_signal": bool(affected_dev.get("confirmed")),
-                    },
-                )
-                feedback = (
-                    f"outcome={last.reason}; the independent stock failure is "
-                    "resolved, comparative tests pass, and the complete DEV protect "
-                    "suite has no regression. Accept this as a library bug fix; "
-                    "metric improvement is a separate outcome."
-                )
-            elif small_metric_confirmed:
-                last.reason = "confirmed_small_metric_keep"
-                last.stage = "metric_signal"
-                last.metric_signal_keep = True
-                metric_dir = workspace / "metric_signal_fixes"
-                metric_dir.mkdir(parents=True, exist_ok=True)
-                metric_path = metric_dir / f"{candidate.candidate_id}.patch"
-                metric_path.write_text(candidate_diff, encoding="utf-8")
-                append_journal(
-                    journal,
-                    {
-                        "event": "metric_signal_keep",
-                        "candidate": candidate.candidate_id,
-                        "path": str(metric_path),
-                        "target_delta": last.target_delta,
-                        "confirmation": signal_confirmation,
-                    },
-                )
-                feedback = (
-                    "outcome=confirmed_small_metric_keep; the metric gain is below "
-                    "the single-run practical threshold, but it stayed positive "
-                    "across confirmation seeds and SHADOW with no protected regression."
-                )
-            elif maintenance_confirmed:
-                last.reason = "maintenance_keep"
-                last.stage = "maintenance"
-                last.maintenance_keep = True
-                maintenance_dir = workspace / "maintenance_fixes"
-                maintenance_dir.mkdir(parents=True, exist_ok=True)
-                maintenance_path = maintenance_dir / f"{candidate.candidate_id}.patch"
-                maintenance_path.write_text(candidate_diff, encoding="utf-8")
-                append_journal(
-                    journal,
-                    {
-                        "event": "maintenance_keep",
-                        "candidate": candidate.candidate_id,
-                        "path": str(maintenance_path),
-                        "metric_reason": metric_reason,
-                        "target_delta": last.target_delta,
-                        "behavior_probe_status": behavior_probe.get("status"),
-                    },
-                )
-                feedback = (
-                    "outcome=maintenance_keep; Verifier justified a general runtime "
-                    "improvement, the causal probe changed, comparative tests pass, "
-                    "DEV and SHADOW were neutral, and the complete DEV protect suite "
-                    "has no regression. Preserve it as a non-metric library improvement."
-                )
-            else:
-                feedback = _dev_feedback(
-                    last,
-                    patched,
-                    candidate,
-                    stock=record_stock,
-                )
-                if signal_confirmation is not None:
-                    shadow = signal_confirmation.get("shadow") or {}
-                    if signal_confirmation.get("confirmed"):
-                        feedback += (
-                            "\nThis is a confirmed small metric signal: it is positive "
-                            "across model seeds and SHADOW without a protected regression, "
-                            "but remains below the practical KEEP threshold. Preserve the "
-                            "causal mechanism and seek a larger effect."
+                    if confirmation_failure is not None and advance_revision(last.reason):
+                        shadow = confirmation_failure.get("shadow") or {}
+                        confirmation_feedback = (
+                            "outcome=dev_confirmation_failed; the patch improved initial "
+                            "DEV but did not survive independent confirmation. Refine the "
+                            "same causal mechanism; do not switch to an unrelated file.\n"
+                            f"improved_seeds={confirmation_failure.get('improved_seeds')}; "
+                            "regressed_task_seed_pairs="
+                            f"{confirmation_failure.get('regressed_task_seed_pairs')}; "
+                            f"infrastructure_failures={confirmation_failure.get('infrastructure_failures')}; "
+                            f"shadow_task_result={json.dumps(shadow, ensure_ascii=False, default=str)}\n\n"
+                            "Previous evaluated patch:\n" + _candidate_patch_text(candidate)
                         )
-                    else:
-                        feedback += (
-                            "\nThe small positive DEV signal did not generalize under the "
-                            "evidence gate. Diagnose the paired task trade-off before "
-                            "refining it. confirmation="
-                            + json.dumps(
-                                {
-                                    "improved_seeds": signal_confirmation.get(
-                                        "improved_seeds"
-                                    ),
-                                    "regressed_task_seed_pairs": signal_confirmation.get(
-                                        "regressed_task_seed_pairs"
-                                    ),
-                                    "shadow": {
-                                        "keep": shadow.get("keep"),
-                                        "reason": shadow.get("reason"),
-                                        "target_delta": shadow.get("target_delta"),
-                                    },
-                                },
-                                sort_keys=True,
-                            )
-                        )
-                if global_protect_failed:
-                    feedback += (
-                        "\nMandatory global protect suite rejected this focused KEEP. "
-                        "Narrow any shared-base edit to the operation named by the lead "
-                        "unless evidence shows sibling operations need the same behavior."
-                    )
-            feedback_history.append(feedback)
-            feedback = _revision_feedback_context(feedback_history)
-            record_attempt(
-                journal,
-                workspace,
-                lead,
-                candidate,
-                record_stock,
-                patched,
-                last,
-                loc(lead),
-                revision,
-                diff=candidate_diff,
-                tests=after_tests,
-                hypothesis_id=hypothesis.id,
-                patch_hash=patch_hash,
-                feedback=feedback,
-                reproduction=reproduction,
-                behavior_probe=behavior_probe,
-                affected_metric=affected_metric,
-                findings_path=findings_path,
-                run_number=run_number,
-                run_id=run_id,
-                source_commit_value=source_commit_value,
-                source_hash=source_hash,
-            )
-            logger.info(
-                "evolve fix %s/%s revision %s %s %s",
-                i,
-                n_leads,
-                revision,
-                "KEEP"
-                if (
-                    last.keep
-                    or last.correctness_keep
-                    or last.maintenance_keep
-                    or last.metric_signal_keep
-                )
-                else "drop",
-                last.reason,
-            )
-            if maintenance_confirmed or small_metric_confirmed:
-                # Confirmed secondary acceptance tracks do not consume FINAL.
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
-                last.keep = True
-                break
-            if last.keep:
-                confirmation_scope = _candidate_confirmation_scope(
-                    source,
-                    candidate,
-                    stock,
-                    operation_hints,
-                    exam_ids,
-                )
-                completed = finalize_dev_keep(
-                    experiment,
-                    candidate,
-                    last,
-                    confirmation_ids=confirmation_scope,
-                    verification_result=verification,
-                )
-                if completed is not None:
-                    return completed
-                confirmation_failure = confirmation_failures.pop(
-                    candidate.candidate_id,
-                    None,
-                )
-                if confirmation_failure is not None and revision < max_revisions:
-                    shadow = confirmation_failure.get("shadow") or {}
-                    confirmation_feedback = (
-                        "outcome=dev_confirmation_failed; the patch improved initial "
-                        "DEV but did not survive independent confirmation. Refine the "
-                        "same causal mechanism; do not switch to an unrelated file.\n"
-                        f"improved_seeds={confirmation_failure.get('improved_seeds')}; "
-                        "regressed_task_seed_pairs="
-                        f"{confirmation_failure.get('regressed_task_seed_pairs')}; "
-                        f"infrastructure_failures={confirmation_failure.get('infrastructure_failures')}; "
-                        f"shadow_task_result={json.dumps(shadow, ensure_ascii=False, default=str)}\n\n"
-                        "Previous evaluated patch:\n" + _candidate_patch_text(candidate)
-                    )
-                    feedback_history.append(confirmation_feedback)
-                    feedback = _revision_feedback_context(feedback_history)
-                    hypothesis = _start_revision(
-                        workspace,
-                        hypothesis,
-                        lead,
-                        revision + 1,
-                        last.reason,
-                    )
-                    continue
-                break
-
-            discard_experiment_checkout(experiment, workspace=workspace, source=source)
-            if last.infrastructure_error:
-                break
-            if last.reason == "no_affected_metric_signal":
-                break
-            if last.reason == "queued_for_fedot_quality":
-                break
-            if correctness_confirmed:
-                # Correctness and metric quality are separate acceptance tracks.
-                # Set campaign success only after bypassing metric finalization:
-                # a correctness patch must never consume the hidden FINAL split.
-                last.keep = True
-                break
-            if revision < max_revisions or (
-                safety_extension_granted and revision == max(1, max_revisions)
-            ):
-                hypothesis = _start_revision(
-                    workspace, hypothesis, lead, revision + 1, last.reason
-                )
+                        feedback = push_feedback(confirmation_feedback)
+                        continue
+                    break
+                if last.infrastructure_error:
+                    break
+                if last.reason == "no_affected_metric_signal":
+                    break
+                if last.reason == "queued_for_fedot_quality":
+                    break
+                if correctness_confirmed:
+                    # Correctness and metric quality are separate acceptance tracks.
+                    # Set campaign success only after bypassing metric finalization:
+                    # a correctness patch must never consume the hidden FINAL split.
+                    last.keep = True
+                    break
+                advance_revision(last.reason)
+            finally:
+                # One owner for the experiment tree: every gate above may
+                # continue, break or return without cleaning up.
+                discard_experiment_checkout(experiment, workspace=workspace, source=source)
     if last.reason != "queued_for_fedot_quality":
         _record_final_skipped(journal, reason=last.reason)
     return finish(last)
@@ -2667,7 +2486,6 @@ def _quick_quality_screen(*args, **kwargs):
     return quick_quality_screen(
         *args,
         **kwargs,
-        measure_stock_fn=measure_stock,
         measure_patched_fn=measure_patched,
         verdict_fn=verdict,
     )
@@ -2705,10 +2523,6 @@ def eval_contract(checkout: Path | None = None) -> dict:
         "guard_scorer": guard_path("fedotllm/agents/evolve/evaluation/scorer.py"),
         "scores": {key: _score_log(value) for key, value in results.items()},
     }
-
-
-def _record_final_skipped(journal: Path, *, reason: str) -> None:
-    record_final_skipped(journal, reason=reason)
 
 
 def _record_final(*args, **kwargs) -> Decision | None:

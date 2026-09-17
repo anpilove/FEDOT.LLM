@@ -6,7 +6,7 @@ from fedotllm.agents.evolve.controller import transfer
 from fedotllm.agents.evolve.controller.measurement_budget import MeasurementBudget
 from fedotllm.agents.evolve.evaluation import tasks
 from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL
-from fedotllm.agents.evolve.types import PatchSite, ScoreResult, TaskSpec
+from fedotllm.agents.evolve.types import MatchSite, ScoreResult, TaskSpec
 
 
 def test_transfer_uses_six_sources_not_temperature_variants():
@@ -31,7 +31,7 @@ def world(monkeypatch):
     monkeypatch.setattr(transfer, "load_task", specs.__getitem__)
     from fedotllm.agents.evolve.controller import metric_study
     monkeypatch.setattr(metric_study, "load_task", specs.__getitem__)
-    lead = PatchSite("execution", "fedot/a.py", 7)
+    lead = MatchSite("execution", "fedot/a.py", 7)
     effects = {name: .03 for name in specs}
     calls = []
     def score(task, **kwargs):
@@ -238,7 +238,7 @@ def test_neutral_default_and_improved_shifted_scenario_count_sources_once(world,
             result.score = .7
         return result
     monkeypatch.setattr(transfer, 'run_patched', patched)
-    plan = transfer.preregister_transfer(None, '0', PatchSite(**original['lead']), {})
+    plan = transfer.preregister_transfer(None, '0', MatchSite(**original['lead']), {})
     passed, report = transfer.evaluate_transfer(None, None, plan, split='dev')
     assert passed
     assert len(report['datasets']) == 8
@@ -267,7 +267,7 @@ def test_wall_clock_reserve_blocks_screen_but_keeps_final_available(monkeypatch)
 
 def test_traced_stock_crash_recovered_on_multiple_sources_is_accepted(world, monkeypatch):
     plan, _, _ = world
-    lead = PatchSite(**plan["lead"])
+    lead = MatchSite(**plan["lead"])
     original_stock = transfer.run_stock
 
     def crash_at_lead(task, **kwargs):
@@ -289,7 +289,7 @@ def test_traced_stock_crash_recovered_on_multiple_sources_is_accepted(world, mon
 
 def test_stock_crash_outside_planned_line_remains_incomplete(world, monkeypatch):
     plan, _, _ = world
-    lead = PatchSite(**plan["lead"])
+    lead = MatchSite(**plan["lead"])
     original_stock = transfer.run_stock
 
     def crash_elsewhere(task, **kwargs):
@@ -305,7 +305,7 @@ def test_stock_crash_outside_planned_line_remains_incomplete(world, monkeypatch)
 
 def test_identical_traced_crash_is_neutral_guard_not_regression(world, monkeypatch):
     plan, _, _ = world
-    lead = PatchSite(**plan["lead"])
+    lead = MatchSite(**plan["lead"])
     original_stock = transfer.run_stock
     original_patched = transfer.run_patched
 
@@ -337,7 +337,7 @@ def test_json_default_is_reached_by_matching_runtime_operation(world, monkeypatc
     config = tmp_path / "fedot/defaults.json"
     config.parent.mkdir(parents=True)
     config.write_text('{\n  "logit": {"C": 1}\n}\n')
-    lead = PatchSite("configuration", "fedot/defaults.json", 2)
+    lead = MatchSite("configuration", "fedot/defaults.json", 2)
     original_stock = transfer.run_stock
 
     def operation_trace(task, **kwargs):
@@ -356,7 +356,7 @@ def test_json_default_reachability_is_rechecked_during_transfer(world, monkeypat
     config = tmp_path / "fedot/defaults.json"
     config.parent.mkdir(parents=True)
     config.write_text('{\n  "logit": {"C": 1}\n}\n')
-    lead = PatchSite("configuration", "fedot/defaults.json", 2)
+    lead = MatchSite("configuration", "fedot/defaults.json", 2)
     original_stock = transfer.run_stock
 
     def operation_trace(task, **kwargs):

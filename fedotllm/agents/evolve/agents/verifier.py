@@ -21,12 +21,11 @@ from fedotllm.agents.evolve.discovery.research_tools import (
     docs_runtime,
     format_snippet_feedback,
     focused_test,
-    search_runtime,
-    symbol_runtime,
+    run_research_tool,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.types import (
-    PatchSite,
+    MatchSite,
     VerificationAction,
     VerificationResult,
 )
@@ -39,6 +38,14 @@ MAX_VERIFY_STEPS = 10
 MAX_VERIFY_PROBE_CORRECTIONS = 2
 QUALITY_CONFIRMATION_STEPS = 2
 MAX_QUALITY_CHALLENGE_FAILURES = 2
+_RESEARCH_ACTIONS = frozenset(
+    {
+        VerificationAction.SEARCH,
+        VerificationAction.SYMBOL,
+        VerificationAction.CALLERS,
+        VerificationAction.DOCS,
+    }
+)
 MAX_VERDICT_CORRECTIONS = 1
 MAX_VERIFY_CONTEXT = 24_000
 CONTROLLER_OBSERVED_CRASH = "controller_observed_frozen_workload_crash"
@@ -158,10 +165,6 @@ def _target_contract_context(
     return symbol, source, docs
 
 
-def _enclosing_symbol(checkout: Path, file_path: str, line: int) -> str:
-    return _target_contract_context(checkout, file_path, line)[0]
-
-
 def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
     """Bounded AST-resolved types/bases, not a global same-name symbol search.
 
@@ -243,7 +246,7 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
 
 def _audit_contract_support(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     proposal: VerificationProposal,
     *,
     inference,
@@ -333,7 +336,7 @@ Possible repository call sites (not resolved references; check target identity):
     return audited
 
 
-def verification_from_observed_crash(lead: PatchSite) -> VerificationResult | None:
+def verification_from_observed_crash(lead: MatchSite) -> VerificationResult | None:
     """Promote an actual frozen-workload crash without asking LLM to recreate data.
 
     The evaluator already executed a valid frozen workload and captured exact
@@ -599,7 +602,7 @@ def _grounded_public_exception(
 
 def verify_lead(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     inference,
     workspace: Path | None = None,
@@ -781,20 +784,15 @@ def verify_lead(
                 int(parsed.line or 1)
             )
         valid_quality_challenge = False
-        if action is VerificationAction.SEARCH:
-            output = search_runtime(checkout, parsed.query)
+        if action in _RESEARCH_ACTIONS:
+            _, output = run_research_tool(
+                checkout, action.value, query=parsed.query, symbol=parsed.symbol
+            )
             investigative_actions += 1
-        elif action is VerificationAction.SYMBOL:
-            output = symbol_runtime(checkout, parsed.query or parsed.symbol)
-            investigative_actions += 1
-            valid_quality_challenge = bool(output.strip()) and not output.lstrip().startswith("<")
-        elif action is VerificationAction.CALLERS:
-            output = callers_runtime(checkout, parsed.symbol or parsed.query)
-            investigative_actions += 1
-        elif action is VerificationAction.DOCS:
-            output = docs_runtime(checkout, parsed.query)
-            investigative_actions += 1
-            valid_quality_challenge = bool(output.strip()) and not output.lstrip().startswith("<")
+            if action in (VerificationAction.SYMBOL, VerificationAction.DOCS):
+                valid_quality_challenge = (
+                    bool(output.strip()) and not output.lstrip().startswith("<")
+                )
         elif action is VerificationAction.READ:
             output = open_runtime(checkout, parsed.file_path, line=parsed.line)
             investigative_actions += 1
@@ -1063,6 +1061,10 @@ def verify_lead(
                     detail = f"probe infrastructure status: {stock.status}"
                 elif "AssertionError" not in stock.stderr:
                     detail = "probe crashed before its contract assertion"
+                    if exception_detail:
+                        # Tell the model why the crash was not accepted as
+                        # evidence (e.g. no public FEDOT entry point reached).
+                        detail = f"{detail}: {exception_detail}"
                     if (
                         not correctness_only
                         and probe_corrections < MAX_VERIFY_PROBE_CORRECTIONS
@@ -1187,7 +1189,7 @@ def verification_context(result: VerificationResult) -> str:
 
 def _write_verification(
     workspace: Path | None,
-    lead: PatchSite,
+    lead: MatchSite,
     result: VerificationResult,
 ) -> None:
     if workspace is None:

@@ -13,7 +13,7 @@ from typing import Any
 
 from fedotllm.agents.evolve.discovery.discover import discover_leads, static_leads
 from fedotllm.agents.evolve.storage.journal import append_journal
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.types import MatchSite
 
 # Frozen unique files from local historical replacements. Eval-only.
 _GOLD_FILES: tuple[str, ...] = (
@@ -55,7 +55,7 @@ def split_gold(files: tuple[str, ...] = _GOLD_FILES) -> dict[str, list[str]]:
     return {"dev": dev, "test": test}
 
 
-def unique_files(leads: list[PatchSite]) -> list[str]:
+def unique_files(leads: list[MatchSite]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for lead in leads:

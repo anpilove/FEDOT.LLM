@@ -117,16 +117,3 @@ def build_model_contract(
     }
 
 
-def model_contract_diagnostics(
-    clients: Mapping[str, Any],
-    *,
-    required_model_name: str = REQUIRED_MODEL_NAME,
-    environ: Mapping[str, str] | None = None,
-) -> list[str]:
-    """Return only human-readable contract violations."""
-
-    return build_model_contract(
-        clients,
-        required_model_name=required_model_name,
-        environ=environ,
-    )["diagnostics"]

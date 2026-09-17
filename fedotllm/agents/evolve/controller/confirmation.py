@@ -58,7 +58,6 @@ def _deterministic_patch_failure(
 
 
 def quick_quality_screen(
-    source: Path,
     experiment: Path,
     exam_ids: tuple[str, ...],
     lift_ids: tuple[str, ...],
@@ -66,7 +65,6 @@ def quick_quality_screen(
     stock_dev: dict[str, ScoreResult],
     *,
     seed: int = 42,
-    measure_stock_fn: ScoreRunner,
     measure_patched_fn: ScoreRunner,
     verdict_fn: VerdictRunner,
 ) -> tuple[bool, dict]:
@@ -75,11 +73,9 @@ def quick_quality_screen(
     Reject only a deterministic launch failure: stock succeeded and the patch
     crashed, timed out, or returned an invalid score. A missing or negative
     short-horizon delta only annotates queue priority. Quality KEEP/DROP is
-    reserved for the closed FINAL batch. ``measure_stock_fn`` stays in the
-    signature for call-site compatibility; this stage does not open SHADOW.
+    reserved for the closed FINAL batch; this stage does not open SHADOW.
     """
 
-    del source, measure_stock_fn
     local_lift = tuple(task_id for task_id in lift_ids if task_id in exam_ids) or exam_ids
     local_protect = (
         tuple(task_id for task_id in protect_ids if task_id in exam_ids) or exam_ids

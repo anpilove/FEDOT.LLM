@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -24,9 +23,8 @@ def calibrate_stock(
     if workspace is not None:
         workspace.mkdir(parents=True, exist_ok=True)
     for seed in seeds:
-        os.environ["EVOLVE_AGENT_SEED"] = str(seed)
         for task_id in task_ids:
-            result = run_stock(task_id, checkout=checkout)
+            result = run_stock(task_id, checkout=checkout, seed=seed)
             row = _row(result, seed)
             rows.append(row)
             if journal is not None:

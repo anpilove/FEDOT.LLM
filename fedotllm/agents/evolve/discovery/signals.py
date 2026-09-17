@@ -7,131 +7,25 @@ import os
 import re
 import shlex
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 from fedotllm.agents.evolve.discovery.context import inspect_trace
-from fedotllm.agents.evolve.execution.guard import deny_write
 from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python
-from fedotllm.agents.evolve.types import PatchSite, TestResult
+from fedotllm.agents.evolve.types import MatchSite, TestResult
 
-COSMETIC_PREFIXES = (
-    "Q",
-    "E",
-    "W",
-    "D",
-    "ANN",
-    "COM",
-    "I",
-    "TID",
-    "TD",
-    "FIX",
-    "ERA",
-    "N",
-    "FA",
-    "UP",
-    "PTH",
-    "EM",
-    "RSE",
-    "ICN",
-    "INP",
-)
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-_LINT_NOISE = re.compile(r"^(F(401|403|404|405|541|811|841)|RUF010)\b")
 _FAILED = re.compile(r"^(FAILED|ERROR) (test/\S+)", re.MULTILINE)
-_LINT_LIMIT = 40
 _TEST_LEAD_LIMIT = 8
 
 
-def parse_lint(line: str) -> dict | None:
-    try:
-        location, rest = line.split(": ", 1)
-        file_rel, line_no, column = location.split(":")[:3]
-        rule, message = rest.split(" ", 1)
-        letters = re.match(r"[A-Z]+", rule)
-        cosmetic = bool(letters) and letters.group(0) in COSMETIC_PREFIXES
-        return {
-            "file": file_rel,
-            "line": int(line_no),
-            "column": int(column),
-            "rule": rule,
-            "message": message,
-            "cosmetic": cosmetic,
-        }
-    except (ValueError, IndexError):
-        return None
-
-
-def collect_lint(repo: Path, rules: str = "ALL") -> list[str]:
-    unavailable = []
-    for command in (["ruff"], [sys.executable, "-m", "ruff"], ["uvx", "ruff"]):
-        try:
-            result = subprocess.run(
-                [
-                    *command,
-                    "check",
-                    "fedot/",
-                    f"--select={rules}",
-                    "--output-format=concise",
-                    "--no-fix",
-                    "--isolated",
-                    "--exclude=*.ipynb",
-                ],
-                cwd=repo,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError as exc:
-            unavailable.append(f"{command[0]}: {exc}")
-            continue
-        stdout = _ANSI.sub("", result.stdout or "")
-        if stdout.strip():
-            return [ln for ln in stdout.splitlines() if ln.strip()]
-        if result.returncode == 0:
-            return []
-        unavailable.append(
-            f"{command[0]} exited {result.returncode}: {(result.stderr or '')[:200]}"
-        )
-    raise RuntimeError("ruff scan unavailable: " + "; ".join(unavailable))
-
-
-def lint_leads(checkout: Path, *, limit: int = _LINT_LIMIT) -> list[PatchSite]:
-    rows = [parse_lint(line) for line in collect_lint(checkout)]
-    leads: list[PatchSite] = []
-    for row in rows:
-        if row is None or row["cosmetic"] or _LINT_NOISE.match(row["rule"]):
-            continue
-        if deny_write(checkout / row["file"], checkout=checkout):
-            continue
-        leads.append(
-            PatchSite(
-                channel="lint",
-                file_path=row["file"],
-                line=row["line"],
-                why=f"{row['rule']} {row['message']}",
-            )
-        )
-        if len(leads) >= limit:
-            break
-    return leads
-
-
-def format_lint_for_llm(leads: list[PatchSite]) -> str:
-    useful = [lead for lead in leads if lead.channel == "lint"]
-    if not useful:
-        return "(no non-cosmetic ruff hits)"
-    return "\n".join(f"{lead.file_path}:{lead.line} {lead.why}" for lead in useful)
-
-
-def parse_pytest_output(text: str, checkout: Path) -> list[PatchSite]:
+def parse_pytest_output(text: str, checkout: Path) -> list[MatchSite]:
     """Leads from FEDOT checkout pytest output. Ignores frames outside fedot/."""
 
     nodes = [match.group(2) for match in _FAILED.finditer(text or "")]
     frames = inspect_trace(text or "", checkout=checkout)
     why = nodes[0] if nodes else "pytest failure"
-    leads: list[PatchSite] = []
+    leads: list[MatchSite] = []
     seen: set[tuple[str, int]] = set()
     for frame in reversed(frames):
         if not frame["file"].startswith("fedot/"):
@@ -141,7 +35,7 @@ def parse_pytest_output(text: str, checkout: Path) -> list[PatchSite]:
             continue
         seen.add(key)
         leads.append(
-            PatchSite(
+            MatchSite(
                 channel="fedot_test",
                 file_path=frame["file"],
                 line=int(frame["line"]),

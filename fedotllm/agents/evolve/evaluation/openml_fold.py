@@ -79,11 +79,14 @@ def _official_indices(dataset: QualityDataset, *, n_rows: int) -> tuple[list[int
     cached = cache_root() / f"task-{dataset.openml_task}-r{dataset.repeat}-f{dataset.fold}.json"
     if cached.is_file():
         payload = json.loads(cached.read_text(encoding="utf-8"))
-        return list(payload["train"]), list(payload["test"])
+        # Older caches were written with rowid shifted by one (row 0 duplicated,
+        # last row dropped). Only trust files that record the 0-based origin.
+        if payload.get("rowid_base") == 0:
+            return list(payload["train"]), list(payload["test"])
     train_idx, test_idx = _download_split_indices(dataset, n_rows=n_rows)
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_text(
-        json.dumps({"train": train_idx, "test": test_idx}),
+        json.dumps({"train": train_idx, "test": test_idx, "rowid_base": 0}),
         encoding="utf-8",
     )
     return train_idx, test_idx
@@ -114,7 +117,8 @@ def _download_split_indices(dataset: QualityDataset, *, n_rows: int) -> tuple[li
         kind, rowid, repeat, fold = parsed
         if repeat != dataset.repeat or fold != dataset.fold:
             continue
-        index = rowid - 1 if rowid >= 1 else rowid
+        # OpenML split files use 0-based rowid (same as openml-python).
+        index = rowid
         if index < 0 or index >= n_rows:
             continue
         if kind == "TRAIN":
@@ -201,7 +205,3 @@ def load_fedot_public_ts(dataset: QualityDataset) -> dict:
     }
 
 
-def describe_task(task_id: int) -> dict:
-    url = f"{_OPENML_JSON}/task/{int(task_id)}"
-    with urllib.request.urlopen(url, timeout=60) as response:
-        return json.loads(response.read().decode("utf-8"))

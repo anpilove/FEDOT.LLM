@@ -21,7 +21,7 @@ from fedotllm.agents.evolve.agents.failures import (
     classify_model_failure,
 )
 from fedotllm.agents.evolve.agents.propose import propose_patch
-from fedotllm.agents.evolve.types import PatchCandidate, PatchSite, SnippetResult
+from fedotllm.agents.evolve.types import MatchSite, PatchCandidate, PatchEdit, SnippetResult
 
 
 _OBSERVATION_PREFIX = "EVOLVE_OBSERVATION="
@@ -61,7 +61,7 @@ def _frozen_patch_text(candidate: PatchCandidate) -> str:
 def _candidate_payload(
     candidate: PatchCandidate,
     *,
-    lead: PatchSite,
+    lead: MatchSite,
     hypothesis_id: str,
     status: str,
 ) -> dict:
@@ -87,7 +87,7 @@ def _candidate_payload(
 
 
 def configuration_behavior_probe(
-    lead: PatchSite,
+    lead: MatchSite,
     candidate: PatchCandidate,
 ) -> str:
     """Canonical public-API probe for an operation-default repository edit."""
@@ -180,7 +180,7 @@ def _direct_subclasses(tree: ast.AST, base_name: str) -> set[str]:
 
 def _regression_scope_diagnostics(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     candidate: PatchCandidate,
     feedback: str,
 ) -> list[str]:
@@ -274,9 +274,19 @@ def _regression_scope_diagnostics(
     return diagnostics
 
 
+def _edits_json(edits: list[PatchEdit]) -> str:
+    return json.dumps(
+        [
+            {"file_path": edit.file_path, "old_code": edit.old_code, "new_code": edit.new_code}
+            for edit in edits
+        ],
+        indent=2,
+    )
+
+
 def fix_lead(
     checkout: Path,
-    lead: PatchSite,
+    lead: MatchSite,
     *,
     inference,
     workspace: Path | None = None,
@@ -298,8 +308,25 @@ def fix_lead(
     if feedback.strip():
         ctx += f"\n\nPrevious experiment feedback (DEV only):\n{feedback.strip()}\n"
     slug = f"{Path(lead.file_path).stem}-{lead.line}"
+
+    def note(name: str, text: str) -> None:
+        """Lead-level artifact under ``context/<slug>``; no-op without a workspace."""
+        if workspace is not None:
+            write_artifact(workspace / "context" / slug, name, text)
+
+    def candidate_note(candidate: PatchCandidate, name: str, text: str) -> None:
+        if workspace is not None:
+            write_artifact(workspace / "candidates" / candidate.candidate_id, name, text)
+
+    def candidate_payload_json(candidate: PatchCandidate, status: str) -> str:
+        return json.dumps(
+            _candidate_payload(candidate, lead=lead, hypothesis_id=hypothesis_id, status=status),
+            ensure_ascii=False,
+            indent=2,
+        )
+
     if workspace is not None:
-        write_artifact(workspace / "context" / slug, "llm_context.txt", ctx)
+        note("llm_context.txt", ctx)
         target = checkout / lead.file_path
         n_lines = 0
         if target.is_file():
@@ -307,8 +334,7 @@ def fix_lead(
                 target.read_text(encoding="utf-8", errors="replace").splitlines()
             )
         mode = "full_file" if n_lines <= _WHOLE_FILE_LINES else "sliced"
-        write_artifact(
-            workspace / "context" / slug,
+        note(
             "context_meta.json",
             json.dumps(
                 {
@@ -344,17 +370,8 @@ def fix_lead(
                     },
                 )
             except AgentModelFailure as exc:
-                if workspace is not None:
-                    write_artifact(
-                        workspace / "context" / slug,
-                        "propose_error.txt",
-                        "\n".join([*all_errors, *errors, str(exc)]),
-                    )
-                    write_artifact(
-                        workspace / "context" / slug,
-                        "fix_status.txt",
-                        exc.category,
-                    )
+                note("propose_error.txt", "\n".join([*all_errors, *errors, str(exc)]))
+                note("fix_status.txt", exc.category)
                 raise
         all_errors.extend(errors)
         if candidate is None:
@@ -363,14 +380,9 @@ def fix_lead(
                 if any("cannot_fix" in item for item in errors)
                 else "no_patch"
             )
-            if workspace is not None:
-                if all_errors:
-                    write_artifact(
-                        workspace / "context" / slug,
-                        "propose_error.txt",
-                        "\n".join(all_errors),
-                    )
-                write_artifact(workspace / "context" / slug, "fix_status.txt", reason)
+            if all_errors:
+                note("propose_error.txt", "\n".join(all_errors))
+            note("fix_status.txt", reason)
             return None
         automatic_probe = configuration_behavior_probe(lead, candidate)
         if automatic_probe:
@@ -390,36 +402,15 @@ def fix_lead(
                 all_errors.append(
                     f"behavior_probe_preflight_invalid: {probe_diagnostic}"
                 )
-                if workspace is not None:
-                    rejected = workspace / "candidates" / candidate.candidate_id
-                    write_artifact(
-                        rejected, "behavior_probe.py", candidate.behavior_probe
-                    )
-                    write_artifact(
-                        rejected, "probe_preflight_failed.txt", probe_diagnostic
-                    )
-                    # Preserve the already useful source proposal before the
-                    # optional probe-only LLM call. A provider timeout must not
-                    # erase a patch that can be replayed and validated offline.
-                    write_artifact(
-                        rejected,
-                        "frozen_source_patch.txt",
-                        _frozen_patch_text(candidate),
-                    )
-                    write_artifact(
-                        rejected,
-                        "candidate.json",
-                        json.dumps(
-                            _candidate_payload(
-                                candidate,
-                                lead=lead,
-                                hypothesis_id=hypothesis_id,
-                                status="awaiting_probe_repair",
-                            ),
-                            ensure_ascii=False,
-                            indent=2,
-                        ),
-                    )
+                candidate_note(candidate, "behavior_probe.py", candidate.behavior_probe)
+                candidate_note(candidate, "probe_preflight_failed.txt", probe_diagnostic)
+                # Preserve the already useful source proposal before the
+                # optional probe-only LLM call. A provider timeout must not
+                # erase a patch that can be replayed and validated offline.
+                candidate_note(candidate, "frozen_source_patch.txt", _frozen_patch_text(candidate))
+                candidate_note(
+                    candidate, "candidate.json", candidate_payload_json(candidate, "awaiting_probe_repair")
+                )
                 try:
                     repaired_probe = repair_behavior_probe(
                         checkout,
@@ -440,125 +431,44 @@ def fix_lead(
                         if isinstance(exc, AgentModelFailure)
                         else classify_model_failure(exc)
                     )
-                    if workspace is not None:
-                        write_artifact(
-                            rejected,
-                            "probe_repair_error.txt",
-                            str(failure),
-                        )
-                        write_artifact(
-                            workspace / "context" / slug,
-                            "fix_status.txt",
-                            failure.category,
-                        )
+                    candidate_note(candidate, "probe_repair_error.txt", str(failure))
+                    note("fix_status.txt", failure.category)
                     raise failure from exc
                 if repaired_probe:
                     candidate.behavior_probe = repaired_probe
-                    if workspace is not None:
-                        write_artifact(
-                            rejected, "behavior_probe_repaired.py", repaired_probe
-                        )
+                    candidate_note(candidate, "behavior_probe_repaired.py", repaired_probe)
                 else:
-                    if workspace is not None:
-                        write_artifact(
-                            workspace / "context" / slug,
-                            "fix_status.txt",
-                            "behavior_probe_repair_failed",
-                        )
+                    note("fix_status.txt", "behavior_probe_repair_failed")
                     return None
-        folder = None
-        if workspace is not None:
-            folder = workspace / "candidates" / candidate.candidate_id
-            write_artifact(
-                folder,
-                "candidate.json",
-                json.dumps(
-                    _candidate_payload(
-                        candidate,
-                        lead=lead,
-                        hypothesis_id=hypothesis_id,
-                        status="ready_to_apply",
-                    ),
-                    ensure_ascii=False,
-                    indent=2,
-                ),
+        candidate_note(candidate, "candidate.json", candidate_payload_json(candidate, "ready_to_apply"))
+        candidate_note(candidate, "rationale.txt", candidate.rationale)
+        candidate_note(candidate, "contract.txt", candidate.contract)
+        candidate_note(candidate, "behavior_probe.py", candidate.behavior_probe)
+        candidate_note(candidate, "old.py", candidate.old_code)
+        candidate_note(candidate, "new.py", candidate.new_code)
+        candidate_note(candidate, "edits.json", _edits_json(candidate.edits))
+        if candidate.proposed_test_edits:
+            candidate_note(
+                candidate, "proposed_test_edits.json", _edits_json(candidate.proposed_test_edits)
             )
-            write_artifact(folder, "rationale.txt", candidate.rationale)
-            write_artifact(folder, "contract.txt", candidate.contract)
-            write_artifact(folder, "behavior_probe.py", candidate.behavior_probe)
-            write_artifact(folder, "old.py", candidate.old_code)
-            write_artifact(folder, "new.py", candidate.new_code)
-            write_artifact(
-                folder,
-                "edits.json",
-                json.dumps(
-                    [
-                        {
-                            "file_path": edit.file_path,
-                            "old_code": edit.old_code,
-                            "new_code": edit.new_code,
-                        }
-                        for edit in candidate.edits
-                    ],
-                    indent=2,
-                ),
-            )
-            if candidate.proposed_test_edits:
-                write_artifact(
-                    folder,
-                    "proposed_test_edits.json",
-                    json.dumps(
-                        [
-                            {
-                                "file_path": edit.file_path,
-                                "old_code": edit.old_code,
-                                "new_code": edit.new_code,
-                            }
-                            for edit in candidate.proposed_test_edits
-                        ],
-                        indent=2,
-                    ),
-                )
         diagnostics = _regression_scope_diagnostics(checkout, lead, candidate, feedback)
         try:
             applied = not diagnostics and apply_patch(
                 checkout, candidate, diagnostics=diagnostics
             )
         except (PermissionError, OSError) as exc:
-            if folder is not None:
-                write_artifact(
-                    folder, "apply_error.txt", f"{type(exc).__name__}: {exc}"
-                )
-            if workspace is not None:
-                write_artifact(
-                    workspace / "context" / slug, "fix_status.txt", "apply_error"
-                )
+            candidate_note(candidate, "apply_error.txt", f"{type(exc).__name__}: {exc}")
+            note("fix_status.txt", "apply_error")
             return None
         if applied:
-            if workspace is not None:
-                write_artifact(
-                    folder,
-                    "candidate.json",
-                    json.dumps(
-                        _candidate_payload(
-                            candidate,
-                            lead=lead,
-                            hypothesis_id=hypothesis_id,
-                            status="applied_awaiting_decision",
-                        ),
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                )
-                write_artifact(
-                    workspace / "context" / slug, "fix_status.txt", "applied"
-                )
+            candidate_note(
+                candidate, "candidate.json", candidate_payload_json(candidate, "applied_awaiting_decision")
+            )
+            note("fix_status.txt", "applied")
             return candidate
         detail = "; ".join(diagnostics) or "patch validation failed"
-        if folder is not None:
-            write_artifact(folder, "apply_failed.txt", detail)
-        if workspace is not None:
-            write_artifact(workspace / "context" / slug, "apply_failed.txt", detail)
+        candidate_note(candidate, "apply_failed.txt", detail)
+        note("apply_failed.txt", detail)
         if apply_revision < max_apply_revisions:
             working_ctx = (
                 ctx
@@ -568,9 +478,6 @@ def fix_lead(
                 + "include neighboring source lines when needed.\n"
             )
             continue
-        if workspace is not None:
-            write_artifact(
-                workspace / "context" / slug, "fix_status.txt", "apply_failed"
-            )
+        note("fix_status.txt", "apply_failed")
         return None
     return None

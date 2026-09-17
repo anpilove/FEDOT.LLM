@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
-from fedotllm.agents.evolve.types import PatchSite, SnippetResult, VerificationResult
+from fedotllm.agents.evolve.types import MatchSite, SnippetResult, VerificationResult
 
 
 CONTRACT_PROBE_MARKER = "controller public contract probe:\n"
@@ -173,10 +173,6 @@ assert observation['stable'], observation"""),
 )
 
 
-def public_contracts() -> tuple[PublicContract, ...]:
-    return _CONTRACTS
-
-
 def supports_public_contracts(checkout: Path) -> bool:
     """Return whether *checkout* looks like a complete FEDOT source tree.
 
@@ -209,10 +205,10 @@ def discover_contract_violations(
     checkout: Path,
     *,
     run_fn: Callable[[Path, str], SnippetResult] = run_fedot_snippet,
-) -> tuple[list[PatchSite], list[dict]]:
+) -> tuple[list[MatchSite], list[dict]]:
     """Return only observed assertion failures from stable public contracts."""
 
-    leads: list[PatchSite] = []
+    leads: list[MatchSite] = []
     rows: list[dict] = []
     for contract in _CONTRACTS:
         result = run_fn(checkout, contract.probe)
@@ -233,7 +229,7 @@ def discover_contract_violations(
         if not existing:
             continue
         leads.append(
-            PatchSite(
+            MatchSite(
                 channel="public_contract",
                 file_path=existing[0],
                 line=1,
@@ -253,7 +249,7 @@ def discover_contract_violations(
     return leads, rows
 
 
-def verification_from_contract_lead(lead: PatchSite) -> VerificationResult | None:
+def verification_from_contract_lead(lead: MatchSite) -> VerificationResult | None:
     """Recover the exact controller-owned stock-failing probe from a lead."""
 
     code = next(

@@ -52,13 +52,11 @@ class TaskSpec:
     right: str | None = None
     join: str | None = None
     tail: tuple[str, ...] = ()
-    role: str = ""
     metric: str = "holdout_roc_auc"
     higher_is_better: bool = True
     sentinel: float = 0.5
     min_delta: float = 0.01
     timeout_s: float = 600.0
-    must_not_regress: tuple[str, ...] = ()
     dataset: str = "scoring"
     problem: str = "classification"
     target: str = "target"
@@ -121,7 +119,7 @@ class TestResult:
     output: str = ""
     duration_s: float = 0.0
     cmd: str = ""
-    leads: list["PatchSite"] = field(default_factory=list)
+    leads: list["MatchSite"] = field(default_factory=list)
 
     @property
     def completed(self) -> bool:
@@ -200,11 +198,12 @@ class PatchCandidate:
 
 
 @dataclass(frozen=True)
-class PatchSite:
+class MatchSite:
     """Candidate file+line for a patch. Not a found bug.
 
-    LLM reads source around this site (file or method). That context is not a
-    separate type; SiteProposal is only the pick of which PatchSite to try first.
+    The LLM reads source around this site (file or method); that context is not
+    a separate type. Scout returns up to ``max_picks`` of these per campaign.
+    Historically called ``lead`` throughout the code and journal rows.
     """
 
     channel: str

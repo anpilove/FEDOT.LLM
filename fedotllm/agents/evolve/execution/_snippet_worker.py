@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 
 
+from fedotllm.agents.evolve.execution.snippet_policy import snippet_runtime_guards
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkout", type=Path, required=True)
@@ -30,7 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     def trace(frame, event, arg):
         nonlocal reached
         if event == "call" and frame.f_code.co_filename == target_file:
-            symbol = getattr(frame.f_code, "co_qualname", frame.f_code.co_name).replace(".<locals>", "")
+            qualname = getattr(frame.f_code, "co_qualname", None)
+            if qualname is None:
+                # Python < 3.11 has no co_qualname; fall back to the bare name so a
+                # ``Class.method`` target still matches instead of silently never firing.
+                qualname = args.target_symbol if frame.f_code.co_name == args.target_symbol.rsplit(".", 1)[-1] else frame.f_code.co_name
+            symbol = qualname.replace(".<locals>", "")
             if symbol == args.target_symbol or symbol.startswith(args.target_symbol + "."):
                 reached = True
                 sys.settrace(None)
@@ -39,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if target_file and args.target_symbol:
             sys.settrace(trace)
-        runpy.run_path(str(args.script), run_name="__main__")
+        with snippet_runtime_guards(checkout):
+            runpy.run_path(str(args.script), run_name="__main__")
     finally:
         sys.settrace(None)
         if args.target_result:

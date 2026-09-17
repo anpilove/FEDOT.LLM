@@ -11,23 +11,6 @@ from fedotllm.agents.evolve.benchmark.micro import (
 from fedotllm.agents.evolve.types import SnippetResult
 
 
-def test_micro_discovery_pools_hide_balanced_target_positions():
-    from fedotllm.agents.evolve.benchmark.micro import micro_cases
-    from fedotllm.agents.evolve.benchmark.micro_discovery import discovery_pools
-
-    pools = discovery_pools()
-    positions = []
-    for case in micro_cases():
-        pool = pools[case.prompt.case_id]
-        assert len(pool) == len(set(pool)) == 4
-        assert pool.count(case.prompt.file_path) == 1
-        positions.append(pool.index(case.prompt.file_path))
-    assert positions[:4] == [0, 1, 2, 3]
-    assert positions[4] == 0
-    assert positions[5] == 1
-    assert positions[6] == 1
-
-
 def test_micro_localization_accepts_combined_symbol_answer():
     from fedotllm.agents.evolve.benchmark.micro import micro_cases
     from fedotllm.agents.evolve.benchmark.micro_agent import (

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from fedotllm.agents.evolve.discovery.repo_map import Symbol, in_metric_scan, iter_symbols
-from fedotllm.agents.evolve.types import PatchSite
+from fedotllm.agents.evolve.types import MatchSite
 
 _META = re.compile(r".+(_idx|_index|_indices|_indexes|_types)$", re.I)
 _MATRIX = frozenset({"features", "predict", "predict_for_fit"})
@@ -23,11 +23,11 @@ _ROW_IDENTITY_WHY = (
 )
 
 
-def invariant_leads(checkout: Path, symbols: list[Symbol] | None = None) -> list[PatchSite]:
+def invariant_leads(checkout: Path, symbols: list[Symbol] | None = None) -> list[MatchSite]:
     items = symbols if symbols is not None else [
         item for item in iter_symbols(checkout) if item.kind in {"method", "function"}
     ]
-    out: list[PatchSite] = []
+    out: list[MatchSite] = []
     seen: set[tuple[str, int]] = set()
     for item in items:
         if not in_metric_scan(item.file_path):
@@ -41,7 +41,7 @@ def invariant_leads(checkout: Path, symbols: list[Symbol] | None = None) -> list
         seen.add(key)
         name = f"{item.parent + '.' if item.parent else ''}{item.name}"
         out.append(
-            PatchSite(
+            MatchSite(
                 channel="invariant",
                 file_path=item.file_path,
                 line=item.line,
@@ -52,7 +52,7 @@ def invariant_leads(checkout: Path, symbols: list[Symbol] | None = None) -> list
     return [*row_identity_leads(checkout), *out]
 
 
-def row_identity_leads(checkout: Path) -> list[PatchSite]:
+def row_identity_leads(checkout: Path) -> list[MatchSite]:
     """Find positional multi-parent joins that do not align rows by identity.
 
     Membership masks preserve the local order of every input.  Applying such a
@@ -62,7 +62,7 @@ def row_identity_leads(checkout: Path) -> list[PatchSite]:
     restores a canonical order.
     """
 
-    leads: list[PatchSite] = []
+    leads: list[MatchSite] = []
     fedot_root = checkout / "fedot"
     if not fedot_root.is_dir():
         return leads
@@ -81,7 +81,7 @@ def row_identity_leads(checkout: Path) -> list[PatchSite]:
     return leads
 
 
-def _row_identity_lead(file_path: str, cls: ast.ClassDef) -> PatchSite | None:
+def _row_identity_lead(file_path: str, cls: ast.ClassDef) -> MatchSite | None:
     methods = [
         node
         for node in cls.body
@@ -103,7 +103,7 @@ def _row_identity_lead(file_path: str, cls: ast.ClassDef) -> PatchSite | None:
         # canonical identity order instead of merely filtered in local order.
         if any(isinstance(node, ast.DictComp) for node in ast.walk(method)):
             continue
-        return PatchSite(
+        return MatchSite(
             channel="invariant",
             file_path=file_path,
             line=method.lineno,

@@ -63,7 +63,6 @@ class QualityRegistry:
     portfolio: bool
     cpu_quota: int
     n_jobs_per_job: int
-    starter_task_ids: tuple[str, ...]
     datasets: tuple[QualityDataset, ...]
     selection_study: int
     selection_rule: str
@@ -148,14 +147,10 @@ def load_quality_registry() -> QualityRegistry:
         portfolio=bool(raw["portfolio"]),
         cpu_quota=int(raw["cpu_quota"]),
         n_jobs_per_job=int(raw["n_jobs_per_job"]),
-        starter_task_ids=tuple(str(item) for item in raw.get("starter_task_ids") or ids),
         datasets=datasets,
         selection_study=int(selection.get("study") or 99),
         selection_rule=str(selection.get("rule") or ""),
     )
-    missing = [task_id for task_id in registry.starter_task_ids if task_id not in set(ids)]
-    if missing:
-        raise ValueError("starter_task_ids not in registry: " + ",".join(missing))
     return registry
 
 
@@ -170,16 +165,6 @@ def get_dataset(task_id: str, registry: QualityRegistry | None = None) -> Qualit
 def list_quality_task_ids(registry: QualityRegistry | None = None) -> tuple[str, ...]:
     registry = registry or load_quality_registry()
     return tuple(item.task_id for item in registry.datasets)
-
-
-def list_tabular_task_ids(registry: QualityRegistry | None = None) -> tuple[str, ...]:
-    registry = registry or load_quality_registry()
-    return tuple(item.task_id for item in registry.datasets if item.problem == "classification")
-
-
-def list_ts_task_ids(registry: QualityRegistry | None = None) -> tuple[str, ...]:
-    registry = registry or load_quality_registry()
-    return tuple(item.task_id for item in registry.datasets if item.problem == "ts_forecasting")
 
 
 def is_ts_dataset(dataset: QualityDataset) -> bool:
@@ -235,13 +220,6 @@ def select_task_ids_for_job(
             continue
         chosen.append(task_id)
     return tuple(chosen)
-
-
-def list_starter_task_ids(registry: QualityRegistry | None = None) -> tuple[str, ...]:
-    """Default starter/drain set: the whole frozen registry, not a post-score subset."""
-
-    registry = registry or load_quality_registry()
-    return registry.starter_task_ids or list_quality_task_ids(registry)
 
 
 def job_spec(

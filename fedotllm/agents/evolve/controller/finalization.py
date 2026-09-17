@@ -60,42 +60,36 @@ def record_final(
     if not exam_ids:
         record_final_skipped(journal, reason="empty_final")
         return None
+    if not seeds:
+        record_final_skipped(journal, reason="no_confirmation_seeds")
+        return None
+    first_seed = seeds[0]
     final_tree = create_experiment_checkout(
         source,
         workspace,
         run_id=run_id,
         candidate_id=f"final-{candidate.candidate_id}",
     )
-    if not seeds:
-        record_final_skipped(journal, reason="no_confirmation_seeds")
+    try:
+        # Check the patch applies before spending any exposure of the hidden split.
+        if not apply_patch(final_tree, candidate):
+            record_final_skipped(journal, reason="reapply_failed")
+            return None
+        stock = measure_stock_fn(exam_ids, checkout=source, split="final", seed=first_seed)
+        patched = measure_patched_fn(exam_ids, checkout=final_tree, split="final", seed=first_seed)
+        decision = verdict_fn(stock, patched, lift_ids=lift_ids, protect_ids=protect_ids)
+        transfer_report = None
+        if decision.keep:
+            transferred, transfer_report = evaluate_transfer(
+                source, final_tree, transfer_plan, params=operation_params, split="final",
+                budget=measurement_budget,
+            )
+            decision.keep = transferred
+            if not transferred:
+                decision.reason = transfer_report["reason"]
+    finally:
         discard_experiment_checkout(final_tree, workspace=workspace, source=source)
-        return None
-    first_seed = seeds[0]
-    stock = measure_stock_fn(exam_ids, checkout=source, split="final", seed=first_seed)
-    if not apply_patch(final_tree, candidate):
-        record_final_skipped(journal, reason="reapply_failed")
-        discard_experiment_checkout(final_tree, workspace=workspace, source=source)
-        return None
-    patched = measure_patched_fn(exam_ids, checkout=final_tree, split="final", seed=first_seed)
-    decision = verdict_fn(stock, patched, lift_ids=lift_ids, protect_ids=protect_ids)
-    transfer_report = None
-    if decision.keep:
-        transferred, transfer_report = evaluate_transfer(
-            source, final_tree, transfer_plan, params=operation_params, split="final",
-            budget=measurement_budget,
-        )
-        decision.keep = transferred
-        if not transferred:
-            decision.reason = transfer_report["reason"]
-    seed_rows = [
-        {
-            "seed": first_seed,
-            "keep": decision.keep,
-            "reason": decision.reason,
-            "target_delta": decision.target_delta,
-        }
-    ]
-    improved = int(decision.keep)
+    failure_reason = decision.reason
     regressed = int(decision.reason.startswith("regression"))
     infrastructure = int(decision.infrastructure_error)
     # FINAL is a one-shot holdout. Seed robustness has already been established
@@ -111,6 +105,8 @@ def record_final(
         "keep_dev": last.keep,
         "keep_final": decision.keep,
         "reason": decision.reason,
+        # The verdict/transfer reason behind a failed FINAL, kept for diagnosis.
+        "detail": failure_reason,
         "target_delta": decision.target_delta,
         "regression_deltas": decision.regression_deltas,
         "candidate": candidate.candidate_id,
@@ -120,13 +116,19 @@ def record_final(
         "stock": {key: _score_log(value) for key, value in stock.items()},
         "patched": {key: _score_log(value) for key, value in patched.items()},
         "confirmation": {
-            "improved_seeds": improved,
+            "improved_seeds": int(decision.keep),
             "regressed_task_seed_pairs": regressed,
             "infrastructure_failures": infrastructure,
-            "seeds": seed_rows,
+            "seeds": [
+                {
+                    "seed": first_seed,
+                    "keep": decision.keep,
+                    "reason": failure_reason,
+                    "target_delta": decision.target_delta,
+                }
+            ],
         },
     }
     append_journal(journal, row)
     append_final(workspace, decision=decision, stock=stock, patched=patched)
-    discard_experiment_checkout(final_tree, workspace=workspace, source=source)
     return decision

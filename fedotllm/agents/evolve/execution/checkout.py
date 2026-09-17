@@ -53,13 +53,17 @@ def source_fingerprint(source: Path) -> str:
 def source_commit(source: Path) -> str:
     if not (source / ".git").exists():
         return ""
-    proc = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=source,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
@@ -80,7 +84,13 @@ def create_experiment_checkout(
     if experiments not in dest.parents:
         raise ValueError("experiment escaped workspace")
     if dest.exists():
-        discard_experiment_checkout(dest, workspace=workspace, source=source)
+        if (dest / MARKER).is_file():
+            discard_experiment_checkout(dest, workspace=workspace, source=source)
+        else:
+            # An interrupted copytree leaves a marker-less tree that
+            # discard_experiment_checkout refuses to touch; it lives inside
+            # this run's own experiments directory, so it is safe to replace.
+            shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(
         source,

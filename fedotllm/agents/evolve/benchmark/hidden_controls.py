@@ -10,7 +10,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -33,7 +33,7 @@ from fedotllm.agents.evolve.execution.checkout import (
 from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.types import (
-    EvolveRunPolicy, PatchCandidate, PatchEdit, PatchSite, SnippetResult,
+    EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite, SnippetResult,
 )
 
 
@@ -53,11 +53,6 @@ class HiddenControl:
 class FileShortlist(BaseModel):
     selected_indices: list[int] = Field(default_factory=list, min_length=1, max_length=3)
     rationale: str = ""
-
-
-class HealthyDecision(BaseModel):
-    action: Literal["no_change", "repair"]
-    evidence: str = ""
 
 
 _COMMON_IMPORTS = """import json
@@ -440,18 +435,6 @@ _FRESH_V2_CATALOG: tuple[str, ...] = tuple(
 )
 
 
-def hidden_controls() -> tuple[HiddenControl, ...]:
-    return _CONTROLS
-
-
-def fresh_hidden_controls() -> tuple[HiddenControl, ...]:
-    return _FRESH_CONTROLS
-
-
-def fresh_v2_hidden_controls() -> tuple[HiddenControl, ...]:
-    return _FRESH_V2_CONTROLS
-
-
 def _observation(result: SnippetResult) -> str | None:
     if result.status != "ok":
         return None
@@ -467,12 +450,6 @@ def _cards(source: Path, catalog: tuple[str, ...] = _CATALOG) -> str:
     return architecture_cards(source, catalog, max_chars_per_file=1_500)
 
 
-def _healthy_decision_prompt(control: HiddenControl, observation: str | None) -> str:
-    # Kept for compatibility with old diagnostic artifacts, not used to accept
-    # or reject healthy cases in the production-controller benchmark.
-    return f"Public contract:\n{control.public_contract}\nObserved behavior:\n{observation}"
-
-
 class ControllerLeadSelection(FileSelection):
     line: int = Field(ge=1)
 
@@ -480,7 +457,7 @@ class ControllerLeadSelection(FileSelection):
 def _public_lead(
     source: Path, calls: _Calls, contract: str, observed: SnippetResult,
     catalog: tuple[str, ...],
-) -> PatchSite:
+) -> MatchSite:
     """The same localization protocol for healthy and mutated checkouts."""
     evidence = json.dumps({
         "status": observed.status,
@@ -512,7 +489,7 @@ def _public_lead(
     )
     if not 0 <= selected.selected_index < len(catalog):
         raise ValueError("localizer returned an invalid catalog index")
-    return PatchSite(
+    return MatchSite(
         "execution", catalog[selected.selected_index], selected.line,
         why=f"Check the public contract; it may already hold: {contract}",
         evidence=(f"Observed public execution: {evidence}",),
@@ -526,7 +503,7 @@ def _accepted_decisions(workspace: Path) -> list[dict]:
     path = workspace / "journal.jsonl"
     if not path.is_file():
         raise ValueError("main controller did not persist a decision journal")
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     accepted = []
     for row in rows:
         # DEV keeps are provisional. FINAL may reject or ablate that patch.

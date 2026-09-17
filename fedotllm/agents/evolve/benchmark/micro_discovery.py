@@ -121,12 +121,6 @@ Complete selected source file:
 {source}"""
 
 
-def discovery_pools() -> dict[str, tuple[str, ...]]:
-    """Expose immutable pool metadata for offline integrity tests."""
-
-    return dict(_POOLS)
-
-
 def _case_repaired(stages: list[dict[str, Any]]) -> bool:
     """Behavioral repair is authoritative; symbol naming is diagnostic only."""
 

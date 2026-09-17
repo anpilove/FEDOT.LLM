@@ -53,7 +53,7 @@ def run_doctor(
                 "path": interpreter,
                 "controller_python": sys.executable,
             }
-        except (OSError, FileNotFoundError) as exc:
+        except OSError as exc:
             checks["interpreter"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
         snippet = run_fedot_snippet(
@@ -85,7 +85,13 @@ def run_doctor(
         else:
             checks["evaluator"] = {"ok": True, "skipped": True}
     except Exception as exc:
-        checks["checkout"] = {
+        # Attribute the failure to the first check that has not reported yet
+        # instead of overwriting an already successful checkout check.
+        failed = next(
+            (name for name in ("checkout", "interpreter", "fedot_import", "evaluator") if name not in checks),
+            "doctor",
+        )
+        checks[failed] = {
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",
         }

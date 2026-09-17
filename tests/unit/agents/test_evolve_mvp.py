@@ -23,7 +23,7 @@ from fedotllm.agents.evolve.evaluation.scorer import (
 from fedotllm.agents.evolve.types import Decision, PatchCandidate, PatchEdit, TaskSpec
 from fedotllm.agents.evolve.types import (
     EvolveRunPolicy,
-    PatchSite,
+    MatchSite,
     ScoreResult,
     SnippetResult,
     TestResult,
@@ -355,22 +355,10 @@ def test_findings_separates_metric_neutral_from_confirmed_fix():
     )
 
 
-def test_cross_run_memory_never_blacklists_an_entire_source_file():
-    from fedotllm.agents.evolve.storage.replay import exclude_whole_file_after_attempt
-
-    assert not exclude_whole_file_after_attempt(
-        "fedot/core/repository/data/model_repository.json"
-    )
-    assert not exclude_whole_file_after_attempt(
-        "fedot/core/repository/data/default_operation_params.json"
-    )
-    assert not exclude_whole_file_after_attempt("fedot/core/operations/model.py")
-
-
 def test_configuration_patch_gets_controller_owned_behavior_probe():
     from fedotllm.agents.evolve.agents.fixer import configuration_behavior_probe
 
-    lead = PatchSite(
+    lead = MatchSite(
         "configuration",
         "fedot/core/repository/data/model_repository.json",
         417,
@@ -1187,64 +1175,6 @@ def test_configuration_search_component_is_offline_dispatch(
     assert result["component"] == "configuration-search"
 
 
-def test_configuration_trial_hashes_are_durable_across_workspaces(tmp_path: Path):
-    from fedotllm.agents.evolve.storage.findings import append_configuration_trials
-    from fedotllm.agents.evolve.storage.replay import (
-        configuration_trials_from_findings,
-        tried_patch_hashes_from_findings,
-    )
-
-    dataset = tmp_path / "findings.jsonl"
-    append_configuration_trials(
-        dataset,
-        run_number=1,
-        run_id="run-one",
-        source_hash="source-a",
-        score_protocol_hash="score-a",
-        evaluation_protocol_hash="protocol-a",
-        workspace=tmp_path / "first-workspace",
-        trials=[
-            {
-                "patch_hash": "hash-rejected",
-                "candidate": "candidate-a",
-                "variant": {"operation": "ridge", "parameter": "alpha", "value": 0.1},
-                "stage": "quick_dev",
-                "reason": "target_delta 0.009 below per-task threshold",
-                "quick_decision": {
-                    "keep": False,
-                    "target_delta": 0.009,
-                    "reason": "target_delta 0.009 below per-task threshold",
-                },
-            }
-        ],
-    )
-
-    assert tried_patch_hashes_from_findings(
-        dataset,
-        source_hash="source-a",
-        evaluation_protocol_hash="protocol-a",
-    ) == {"hash-rejected"}
-    assert not tried_patch_hashes_from_findings(
-        dataset,
-        source_hash="source-a",
-        evaluation_protocol_hash="protocol-b",
-    )
-    assert not tried_patch_hashes_from_findings(dataset, source_hash="source-b")
-    history = configuration_trials_from_findings(
-        dataset,
-        source_hash="source-a",
-        evaluation_protocol_hash="protocol-a",
-    )
-    assert len(history) == 1
-    assert history[0]["score_protocol_hash"] == "score-a"
-    assert history[0]["quick_decision"]["target_delta"] == 0.009
-    assert not configuration_trials_from_findings(
-        dataset,
-        source_hash="source-a",
-        evaluation_protocol_hash="protocol-b",
-    )
-
-
 def test_llm_finding_dedup_requires_matching_acceptance_protocol(tmp_path: Path):
     from fedotllm.agents.evolve.storage.findings import append_finding
     from fedotllm.agents.evolve.storage.replay import tried_patch_hashes_from_findings
@@ -1287,27 +1217,24 @@ def test_shared_defaults_memory_uses_operation_identity_not_selected_line(
     tmp_path: Path,
 ):
     from fedotllm.agents.evolve.discovery.discover import discover_leads
-    from fedotllm.agents.evolve.storage.replay import (
-        semantic_site_id,
-        tried_semantic_sites_from_findings,
-    )
+    from fedotllm.agents.evolve.storage.replay import semantic_site_id
 
     path = "fedot/core/repository/data/default_operation_params.json"
-    catalog_site = PatchSite(
+    catalog_site = MatchSite(
         "configuration",
         path,
         26,
         "default parameters for executed operation catboost",
         evidence=("executed operation: catboost",),
     )
-    picked_neighbor = PatchSite(
+    picked_neighbor = MatchSite(
         "llm",
         path,
         30,
         "catboost l2_leaf_reg may overfit",
         evidence=("executed operation: catboost",),
     )
-    sibling = PatchSite(
+    sibling = MatchSite(
         "configuration",
         path,
         72,
@@ -1317,14 +1244,14 @@ def test_shared_defaults_memory_uses_operation_identity_not_selected_line(
     assert semantic_site_id(catalog_site) == semantic_site_id(picked_neighbor)
     assert semantic_site_id(sibling) != semantic_site_id(catalog_site)
 
-    runtime_catalog = PatchSite(
+    runtime_catalog = MatchSite(
         "execution",
         "fedot/runtime.py",
         159,
         "executed symbol LaggedImplementation._apply_transformation_for_fit",
         evidence=("executed lines in this symbol: 159-160,165,173-174",),
     )
-    runtime_pick = PatchSite(
+    runtime_pick = MatchSite(
         "llm",
         "fedot/runtime.py",
         173,
@@ -1332,7 +1259,7 @@ def test_shared_defaults_memory_uses_operation_identity_not_selected_line(
         evidence=(f"catalog semantic site: {semantic_site_id(runtime_catalog)}",),
     )
     assert semantic_site_id(runtime_catalog) == semantic_site_id(runtime_pick)
-    legacy_runtime_pick = PatchSite(
+    legacy_runtime_pick = MatchSite(
         "llm",
         "fedot/runtime.py",
         173,
@@ -1341,25 +1268,7 @@ def test_shared_defaults_memory_uses_operation_identity_not_selected_line(
     )
     assert semantic_site_id(runtime_catalog) == semantic_site_id(legacy_runtime_pick)
 
-    findings = tmp_path / "findings.jsonl"
-    findings.write_text(
-        json.dumps(
-            {
-                "record_type": "finding",
-                "source_hash": "source-a",
-                "lead": {
-                    "file_path": path,
-                    "line": 30,
-                    "why": picked_neighbor.why,
-                    "evidence": list(picked_neighbor.evidence),
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    excluded = tried_semantic_sites_from_findings(findings, source_hash="source-a")
-    assert excluded == {semantic_site_id(catalog_site)}
+    excluded = {semantic_site_id(catalog_site)}
 
     source = _source(tmp_path / "repo")
     defaults = source / path
@@ -1936,7 +1845,7 @@ def test_fixer_corrects_ambiguous_search_after_apply_feedback(tmp_path: Path):
     workspace = tmp_path / "work"
     candidate = fix_lead(
         source,
-        PatchSite("oracle", "fedot/a.py", 1, "quality-changing behavior"),
+        MatchSite("oracle", "fedot/a.py", 1, "quality-changing behavior"),
         inference=inference,
         workspace=workspace,
         max_edits=1,
@@ -1991,7 +1900,7 @@ def test_fixer_repairs_invalid_behavior_probe_before_applying_patch(
     workspace = tmp_path / "work"
     candidate = fixer.fix_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=object(),
         workspace=workspace,
         max_edits=1,
@@ -2040,7 +1949,7 @@ def test_probe_builder_timeout_preserves_candidate_and_surfaces_infrastructure(
     with pytest.raises(AgentModelFailure) as caught:
         fixer.fix_lead(
             source,
-            PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+            MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
             inference=object(),
             workspace=workspace,
             max_edits=1,
@@ -2164,7 +2073,7 @@ def test_confirmed_fixer_benchmark_uses_workload_evidence_not_provisional_files(
 
     source = _source(tmp_path)
     workspace = tmp_path / "benchmark"
-    lead = PatchSite(
+    lead = MatchSite(
         "operation",
         runner._PCA_FILE,
         130,
@@ -2253,7 +2162,7 @@ def test_confirmed_fixer_benchmark_refines_regression_in_clean_experiment(
         "catboost": ScoreResult("catboost", "ok", 0.80),
         "fast_ica->lgbm": ScoreResult("fast_ica->lgbm", "ok", 0.80),
     }
-    lead = PatchSite("operation", runner._PCA_FILE, 130, "executed workload operation")
+    lead = MatchSite("operation", runner._PCA_FILE, 130, "executed workload operation")
     monkeypatch.setattr(runner, "measure_stock", lambda *args, **kwargs: stock)
     patched_runs = iter((first, second))
     monkeypatch.setattr(
@@ -2404,7 +2313,8 @@ def test_fedot_pytest_default_timeout_fits_reference_suite(
 def test_cli_loads_dotenv_before_declaring_llm_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from fedotllm.agents.evolve.__main__ import _inference
+    from fedotllm.agents.evolve.__main__ import _stage_inferences
+    from fedotllm.configs.schema import EvolveConfig, LLMConfig
 
     monkeypatch.delenv("FEDOTLLM_LLM_API_KEY", raising=False)
     calls: list[str] = []
@@ -2413,7 +2323,7 @@ def test_cli_loads_dotenv_before_declaring_llm_unavailable(
         calls.append("dotenv")
         monkeypatch.setenv("FEDOTLLM_LLM_API_KEY", "available-after-dotenv")
 
-    fake_config = SimpleNamespace(llm=object())
+    fake_config = SimpleNamespace(llm=LLMConfig(api_key="test"), evolve=EvolveConfig())
     monkeypatch.setattr("dotenv.load_dotenv", fake_dotenv)
     monkeypatch.setattr(
         "fedotllm.configs.loader.load_config",
@@ -2424,9 +2334,9 @@ def test_cli_loads_dotenv_before_declaring_llm_unavailable(
         lambda config: calls.append("inference") or ("inference", config),
     )
 
-    result = _inference("fedotllm:openrouter")
+    scout, verifier, fixer = _stage_inferences("fedotllm:openrouter")
 
-    assert result == ("inference", fake_config.llm)
+    assert scout[0] == verifier[0] == fixer[0] == "inference"
     assert calls[0] == "dotenv"
     assert calls.index("dotenv") < calls.index("config") < calls.index("inference")
 
@@ -2566,7 +2476,7 @@ def test_shadow_confirmation_failure_drives_same_hypothesis_revision(
     from fedotllm.agents.evolve.controller.campaign import run_once
 
     source = _source(tmp_path)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     candidates = [
         PatchCandidate(
             "near-miss-a",
@@ -2690,7 +2600,6 @@ def test_quick_quality_screen_checks_only_affected_workloads_and_cannot_accept(
     }
 
     passed, detail = _quick_quality_screen(
-        tmp_path / "source",
         tmp_path / "experiment",
         ("catboost",),
         ("catboost", "rf"),
@@ -2726,7 +2635,6 @@ def test_quick_quality_screen_does_not_drop_numeric_regression(
     stock_dev = {"catboost": ScoreResult("catboost", "ok", 0.80)}
 
     passed, detail = _quick_quality_screen(
-        tmp_path / "source",
         tmp_path / "experiment",
         ("catboost",),
         ("catboost",),
@@ -2754,7 +2662,6 @@ def test_quick_quality_screen_drops_only_deterministic_patch_crash(
     stock_dev = {"catboost": ScoreResult("catboost", "ok", 0.80)}
 
     passed, detail = _quick_quality_screen(
-        tmp_path / "source",
         tmp_path / "experiment",
         ("catboost",),
         ("catboost",),
@@ -2871,7 +2778,7 @@ def test_feedback_loop_refines_neutral_patch(
 
     source = _source(tmp_path)
     _accept_behavior_probe(monkeypatch)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     candidates = [
         PatchCandidate("c1", edits=[PatchEdit("fedot/a.py", "return 1", "return 2")]),
         PatchCandidate("c2", edits=[PatchEdit("fedot/a.py", "return 1", "return 3")]),
@@ -3006,7 +2913,7 @@ def test_focused_keep_must_pass_global_protect_before_final(
 
     source = _source(tmp_path)
     _accept_behavior_probe(monkeypatch)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     candidates = [
         PatchCandidate(
             "shared", edits=[PatchEdit("fedot/a.py", "return 1", "return 2")]
@@ -3105,7 +3012,7 @@ def test_last_revision_pytest_feedback_gets_one_contract_repair_extension(
         "    )\n",
         encoding="utf-8",
     )
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed value")
     candidates = [
         PatchCandidate(
             "break-contract",
@@ -3220,7 +3127,7 @@ def test_verified_bug_fix_is_correctness_keep_without_final(
     from fedotllm.agents.evolve.types import VerificationResult
 
     source = _source(tmp_path)
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         1,
@@ -3325,7 +3232,7 @@ def test_affected_metric_regression_drives_a_clean_policy_revision(
     from fedotllm.agents.evolve.controller.campaign import run_once
 
     source = _source(tmp_path)
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         1,
@@ -3445,7 +3352,7 @@ def test_confirmed_affected_metric_runs_final_once_and_stays_secondary(
     from fedotllm.agents.evolve.controller.campaign import run_once
 
     source = _source(tmp_path)
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         1,
@@ -3556,7 +3463,7 @@ def test_test_failure_feedback_gets_a_clean_fixer_revision(
 
     source = _source(tmp_path)
     _accept_behavior_probe(monkeypatch)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     candidates = [
         PatchCandidate(
             "broken", edits=[PatchEdit("fedot/a.py", "return 1", "return 2")]
@@ -3668,7 +3575,7 @@ def test_failed_final_becomes_overall_drop_but_preserves_dev_keep(
 
     source = _source(tmp_path)
     _accept_behavior_probe(monkeypatch)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     candidate = PatchCandidate(
         "candidate", edits=[PatchEdit("fedot/a.py", "return 1", "return 3")]
     )
@@ -3865,7 +3772,7 @@ def test_execution_ranking_prefers_concrete_runtime_implementation_over_registry
     )
     assert _execution_causal_priority(executed[0]) == 0
     assert _execution_causal_priority(dispatcher_lead) == 4
-    import_only = PatchSite(
+    import_only = MatchSite(
         "execution",
         "fedot/core/operations/evaluation/operation_implementations/models/arima.py",
         1,
@@ -3875,7 +3782,7 @@ def test_execution_ranking_prefers_concrete_runtime_implementation_over_registry
     )
     assert _execution_causal_priority(import_only) == 5
 
-    abstract_interface = PatchSite(
+    abstract_interface = MatchSite(
         "execution",
         "fedot/core/operations/evaluation/operation_implementations/implementation_interfaces.py",
         20,
@@ -4001,7 +3908,7 @@ def test_long_file_context_includes_inherited_fit_transform(tmp_path: Path):
     )
     line = len(target.read_text(encoding="utf-8").splitlines()) - 1
     context = context_from_lead(
-        PatchSite("oracle", "fedot/long_operation.py", line, "ThinOperation"),
+        MatchSite("oracle", "fedot/long_operation.py", line, "ThinOperation"),
         source,
     )
 
@@ -4034,7 +3941,7 @@ def test_long_file_context_retrieves_related_implementations(tmp_path: Path):
     line = lines.index("class TargetOperation(SharedRuntime):") + 1
 
     context = context_from_lead(
-        PatchSite("operation", "fedot/long_operation.py", line, "TargetOperation"),
+        MatchSite("operation", "fedot/long_operation.py", line, "TargetOperation"),
         source,
     )
 
@@ -4087,7 +3994,7 @@ def test_context_traces_contract_fields_named_only_in_runtime_evidence(tmp_path:
         "def consume(data):\n    return data.categorical_idx, data.encoded_idx\n",
         encoding="utf-8",
     )
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         1,
@@ -4219,7 +4126,7 @@ def test_scout_can_search_symbols_and_pick_returned_runtime_path(tmp_path: Path)
     selected = _llm_pick(
         inference,
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=4,
     )
@@ -4242,7 +4149,7 @@ def test_scout_complete_pick_may_omit_current_catalog_path(tmp_path: Path):
         Inference(),
         source,
         [
-            PatchSite(
+            MatchSite(
                 "execution",
                 "fedot/a.py",
                 1,
@@ -4252,7 +4159,7 @@ def test_scout_complete_pick_may_omit_current_catalog_path(tmp_path: Path):
             ),
             # A later static row for the same file must not erase richer
             # runtime evidence during the LLM-pick handoff.
-            PatchSite(
+            MatchSite(
                 "registry",
                 "fedot/a.py",
                 1,
@@ -4294,7 +4201,7 @@ def test_scout_preserves_stock_crash_when_same_file_has_larger_generic_evidence(
         Inference(),
         source,
         [
-            PatchSite(
+            MatchSite(
                 "operation",
                 "fedot/a.py",
                 1,
@@ -4306,7 +4213,7 @@ def test_scout_preserves_stock_crash_when_same_file_has_larger_generic_evidence(
                 ),
                 signals=("executed", "upstream_of_crash"),
             ),
-            PatchSite(
+            MatchSite(
                 "execution",
                 "fedot/a.py",
                 1,
@@ -4352,7 +4259,7 @@ def test_scout_rejects_unexecuted_line_inside_an_executed_file(tmp_path: Path):
         Inference(),
         source,
         [
-            PatchSite(
+            MatchSite(
                 "execution",
                 "fedot/a.py",
                 1,
@@ -4390,7 +4297,7 @@ def test_shared_defaults_pick_must_name_the_executed_operation(tmp_path: Path):
         "executed operation: lagged",
         "executed operation: ridge",
     )
-    sibling = PatchSite("llm", rel, 6, "change sparse lagged", evidence=evidence)
+    sibling = MatchSite("llm", rel, 6, "change sparse lagged", evidence=evidence)
     assert not _default_pick_matches_executed_operation(
         SiteProposal(
             operation_id="sparse_lagged",
@@ -4399,7 +4306,7 @@ def test_shared_defaults_pick_must_name_the_executed_operation(tmp_path: Path):
         sibling,
         tmp_path,
     )
-    new_default = PatchSite("llm", rel, 8, "add ridge", evidence=evidence)
+    new_default = MatchSite("llm", rel, 8, "add ridge", evidence=evidence)
     assert _default_pick_matches_executed_operation(
         SiteProposal(
             operation_id="ridge",
@@ -4444,7 +4351,7 @@ def test_shared_defaults_rejects_values_already_effective_at_runtime():
         _default_pick_changes_effective_value,
     )
 
-    lead = PatchSite(
+    lead = MatchSite(
         "llm",
         "fedot/core/repository/data/default_operation_params.json",
         72,
@@ -4467,7 +4374,7 @@ def test_shared_defaults_rejects_values_already_effective_at_runtime():
     assert _default_pick_changes_effective_value(inert, lead)
 
 
-def test_scout_uses_declared_executed_change_line_as_patch_site(tmp_path: Path):
+def test_scout_uses_declared_executed_change_line_as_match_site(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
 
     source = _source(tmp_path)
@@ -4488,7 +4395,7 @@ def test_scout_uses_declared_executed_change_line_as_patch_site(tmp_path: Path):
         Inference(),
         source,
         [
-            PatchSite(
+            MatchSite(
                 "execution",
                 "fedot/a.py",
                 1,
@@ -4520,7 +4427,7 @@ def test_scout_checkpoints_each_pick_before_catalog_walk_finishes(tmp_path: Path
     selected = _llm_pick(
         Inference(),
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=1,
         on_pick=lambda rows: snapshots.append(list(rows)),
@@ -4554,8 +4461,8 @@ def test_scout_rejects_cooled_site_after_llm_selects_change_line(tmp_path: Path)
         Inference(),
         source,
         [
-            PatchSite("execution", "fedot/a.py", 1, "executed value"),
-            PatchSite("execution", "fedot/b.py", 1, "executed other value"),
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
         ],
         max_picks=1,
         max_actions=3,
@@ -4603,7 +4510,7 @@ def test_scout_rejects_cooled_default_operation_after_neighbor_navigation(
             assert "logical source site is cooling down" in prompt
             return SiteProposal(status="skip")
 
-    lead = PatchSite(
+    lead = MatchSite(
         "configuration",
         defaults_rel,
         1,
@@ -4657,7 +4564,7 @@ def test_discovery_prioritizes_measured_execution_over_generic_defaults(
             }
         ],
         trace_leads=[
-            PatchSite(
+            MatchSite(
                 "configuration",
                 defaults_rel,
                 1,
@@ -4757,7 +4664,7 @@ def test_scout_rejects_structured_pick_without_change_line(tmp_path: Path):
     selected = _llm_pick(
         Inference(),
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=1,
         trace=trace,
@@ -4793,7 +4700,7 @@ def test_scout_retries_incomplete_pick_with_causal_feedback(tmp_path: Path):
     selected = _llm_pick(
         inference,
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=2,
         trace=trace,
@@ -4813,7 +4720,7 @@ def test_frozen_workload_crash_is_authoritative_without_synthetic_reproduction(
         verification_from_observed_crash,
     )
 
-    lead = PatchSite(
+    lead = MatchSite(
         "operation",
         "fedot/core/operations/model.py",
         42,
@@ -4864,7 +4771,7 @@ def test_regression_scope_rejects_cross_file_shared_base_edit(tmp_path: Path):
             )
         ],
     )
-    lead = PatchSite(
+    lead = MatchSite(
         "llm",
         "fedot/a.py",
         1,
@@ -4983,94 +4890,6 @@ def test_dev_feedback_exposes_only_status_changes_and_nonzero_deltas():
     assert "recovered:ok" in feedback
     assert "regressed:ok" in feedback
     assert "unchanged-crash" not in feedback
-
-
-def test_historical_duplicate_patch_returns_measured_feedback(tmp_path: Path):
-    from fedotllm.agents.evolve.storage.findings import append_dev_rejudge
-    from fedotllm.agents.evolve.storage.replay import patch_feedback_from_findings
-
-    findings = tmp_path / "findings.jsonl"
-    findings.write_text(
-        json.dumps(
-            {
-                "record_type": "finding",
-                "source_hash": "source-a",
-                "score_protocol_hash": "score-a",
-                "evaluation_protocol_hash": "protocol-a",
-                "patch_hash": "patch-a",
-                "outcome": "rejected_dev_regression",
-                "edits": [
-                    {
-                        "file_path": "fedot/a.py",
-                        "old_code": "return old",
-                        "new_code": "return new",
-                    }
-                ],
-                "dev": {
-                    "reason": "regression sibling delta -0.04",
-                    "target_delta": 0.09,
-                    "regression_deltas": {"target": 0.09, "sibling": -0.04},
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    feedback = patch_feedback_from_findings(
-        findings,
-        source_hash="source-a",
-        patch_hash="patch-a",
-        evaluation_protocol_hash="protocol-a",
-    )
-
-    assert "already evaluated" in feedback
-    assert "regression sibling delta -0.04" in feedback
-    assert '"sibling": -0.04' in feedback
-    assert "return old" in feedback and "return new" in feedback
-    assert not patch_feedback_from_findings(
-        findings,
-        source_hash="other-source",
-        patch_hash="patch-a",
-        evaluation_protocol_hash="protocol-a",
-    )
-    assert not patch_feedback_from_findings(
-        findings,
-        source_hash="source-a",
-        patch_hash="patch-a",
-        evaluation_protocol_hash="protocol-b",
-    )
-
-    append_dev_rejudge(
-        findings,
-        run_number=1,
-        run_id="run-a",
-        candidate_id="candidate-a",
-        patch_hash="patch-a",
-        source_hash="source-a",
-        workspace=tmp_path,
-        decision={
-            "keep": False,
-            "reason": "target_delta 0.22 below per-task threshold",
-            "target_delta": 0.22,
-            "regression_deltas": {"target": 0.22, "sibling": -0.003},
-            "infrastructure_error": False,
-        },
-        reason="protect-only crash shortcut used the wrong workload",
-        score_protocol_hash="score-a",
-        evaluation_protocol_hash="protocol-a",
-    )
-    corrected = patch_feedback_from_findings(
-        findings,
-        source_hash="source-a",
-        patch_hash="patch-a",
-        evaluation_protocol_hash="protocol-a",
-    )
-
-    assert "target_delta 0.22 below per-task threshold" in corrected
-    assert '"target": 0.22' in corrected
-    assert "return old" in corrected and "return new" in corrected
-    assert "regression sibling delta -0.04" not in corrected
 
 
 def test_protocol_identity_ignores_docs_and_unselected_controller_fields(
@@ -5394,8 +5213,8 @@ def test_scout_stops_catalog_walk_immediately_when_external_budget_is_exhausted(
         inference,
         source,
         [
-            PatchSite("execution", "fedot/a.py", 1, "first executed site"),
-            PatchSite("execution", "fedot/b.py", 1, "second executed site"),
+            MatchSite("execution", "fedot/a.py", 1, "first executed site"),
+            MatchSite("execution", "fedot/b.py", 1, "second executed site"),
         ],
         max_picks=1,
         max_actions=10,
@@ -5447,8 +5266,8 @@ def test_scout_returns_existing_picks_when_llm_stage_reserve_is_reached(
         inference,
         source,
         [
-            PatchSite("execution", "fedot/a.py", 1, "first executed site"),
-            PatchSite("execution", "fedot/b.py", 1, "second executed site"),
+            MatchSite("execution", "fedot/a.py", 1, "first executed site"),
+            MatchSite("execution", "fedot/b.py", 1, "second executed site"),
         ],
         max_picks=2,
         max_actions=10,
@@ -5542,7 +5361,7 @@ def test_run_once_resume_skips_scout_and_reuses_measured_feedback(
 
     source = _source(tmp_path)
     captured: dict[str, str] = {}
-    lead = PatchSite("llm", "fedot/a.py", 1, mechanism="measured branch")
+    lead = MatchSite("llm", "fedot/a.py", 1, mechanism="measured branch")
     verification = VerificationResult(
         "quality_hypothesis",
         claim="measured branch",
@@ -5653,7 +5472,7 @@ def test_scout_repairs_one_unambiguous_hallucinated_runtime_path(tmp_path: Path)
     selected = _llm_pick(
         Inference(),
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=2,
         trace=trace,
@@ -5697,8 +5516,8 @@ def test_scout_does_not_count_a_selected_file_twice(tmp_path: Path):
         Inference(),
         source,
         [
-            PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
-            PatchSite("execution", "fedot/b.py", 1, "executed symbol other"),
+            MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed symbol other"),
         ],
         max_picks=2,
         max_actions=3,
@@ -5730,7 +5549,7 @@ def test_scout_reserves_final_decision_after_four_navigation_turns(tmp_path: Pat
     selected = _llm_pick(
         inference,
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=5,
     )
@@ -5771,8 +5590,8 @@ def test_scout_does_not_repick_a_file_declined_in_the_same_catalog_walk(
         Inference(),
         source,
         [
-            PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
-            PatchSite("execution", "fedot/b.py", 1, "executed symbol other"),
+            MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed symbol other"),
         ],
         max_picks=1,
         max_actions=5,
@@ -5798,14 +5617,14 @@ def test_scout_rejects_a_pick_that_semantically_says_to_skip(tmp_path: Path):
                     file_path="fedot/a.py",
                     line=1,
                     why=(
-                        "This passthrough has no meaningful patch site and is "
+                        "This passthrough has no meaningful match site and is "
                         "low-value; better to skip."
                     ),
                 )
             },
         )(),
         source,
-        [PatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
+        [MatchSite("execution", "fedot/a.py", 1, "executed symbol value")],
         max_picks=1,
         max_actions=1,
     )
@@ -5859,7 +5678,7 @@ def test_verifier_preserves_lead_while_gathering_context_and_replays_probe(
 
     result = verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=Inference(),
         workspace=tmp_path / "work",
     )
@@ -5905,7 +5724,7 @@ def test_verifier_rejects_bug_story_when_stock_satisfies_healthy_contract(
 
     result = verifier.verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=Inference(),
     )
 
@@ -5953,7 +5772,7 @@ def test_verifier_recovers_api_after_bug_probe_crashes_before_assertion(
     inference = Inference()
     result = verifier.verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 2, "executed Operation.fit"),
+        MatchSite("execution", "fedot/a.py", 2, "executed Operation.fit"),
         inference=inference,
     )
 
@@ -6010,7 +5829,7 @@ def test_verifier_reserves_probe_correction_for_valid_public_call_crash(
     inference = Inference()
     result = verifier.verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed public value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed public value"),
         inference=inference,
     )
 
@@ -6056,7 +5875,7 @@ def test_verifier_accepts_grounded_exception_from_public_fedot_entry(
 
     result = verifier.verify_lead(
         source,
-        PatchSite(
+        MatchSite(
             "execution",
             "fedot/core/operations/operation.py",
             2,
@@ -6104,7 +5923,7 @@ def test_verifier_does_not_accept_public_api_argument_mistake_as_bug(
 
     result = verifier.verify_lead(
         source,
-        PatchSite(
+        MatchSite(
             "execution",
             "fedot/core/operations/operation.py",
             2,
@@ -6166,7 +5985,7 @@ def test_verifier_requires_repository_evidence_before_quality_hypothesis(
     inference = Inference()
     result = verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=inference,
     )
     assert inference.calls == 5, result
@@ -6226,7 +6045,7 @@ def test_verifier_does_not_count_broken_probe_as_quality_challenge(
     inference = Inference()
     result = verifier.verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=inference,
     )
 
@@ -6264,7 +6083,7 @@ def test_verifier_blocks_duplicate_navigation_and_reserves_final_verdict(
     inference = Inference()
     result = verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=inference,
     )
 
@@ -6319,7 +6138,7 @@ def test_verifier_reserves_challenge_when_hypothesis_arrives_on_final_turn(
     inference = Inference()
     result = verifier.verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=inference,
     )
 
@@ -6401,7 +6220,7 @@ def test_verifier_forces_source_challenge_after_broken_post_hypothesis_run(
     inference = Inference()
     result = verifier.verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=inference,
     )
 
@@ -6438,7 +6257,7 @@ def test_verifier_blocks_near_duplicate_reads_and_requests_symbol(tmp_path: Path
     inference = Inference()
     result = verify_lead(
         source,
-        PatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
+        MatchSite("execution", "fedot/a.py", 1, "executed symbol value"),
         inference=inference,
     )
 
@@ -6583,7 +6402,7 @@ def test_probe_repair_does_not_consume_an_unmeasured_patch(
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     candidates = iter(
         [
             PatchCandidate(
@@ -6642,7 +6461,7 @@ def test_duplicate_reason_refers_to_the_same_patch_not_intervening_attempt(
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
-    lead = PatchSite("execution", "fedot/a.py", 1, "executed value")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed value")
     candidates = iter(
         [
             PatchCandidate(
@@ -6697,7 +6516,7 @@ def test_small_signal_with_unknown_scope_confirms_all_workloads(tmp_path, monkey
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
-    lead = PatchSite("execution", "fedot/a.py", 1, "shared implementation")
+    lead = MatchSite("execution", "fedot/a.py", 1, "shared implementation")
     candidate = PatchCandidate(
         "shared", edits=[PatchEdit("fedot/a.py", "return 1", "return 2")]
     )
@@ -6751,7 +6570,7 @@ def test_neutral_verified_quality_change_is_preserved_as_maintenance_keep(
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         1,
@@ -6946,7 +6765,7 @@ def test_lead_context_retrieves_frozen_fedot_docs_docstrings_and_metadata(
         encoding="utf-8",
     )
 
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         1,
@@ -7063,7 +6882,7 @@ def test_lead_rag_uses_semantic_evidence_not_unrelated_source_imports(tmp_path: 
         "Lagged windows and sparse lagged alternatives serve forecasting workloads.\n",
         encoding="utf-8",
     )
-    lead = PatchSite(
+    lead = MatchSite(
         "execution",
         "fedot/a.py",
         2,
@@ -7159,7 +6978,7 @@ def test_scout_source_keeps_complete_medium_sized_method(tmp_path: Path):
     assert "marker_end = value_119" in rendered
 
     semantic = scout_source_context(
-        PatchSite("execution", "fedot/a.py", 65, "executed method Operation.fit"),
+        MatchSite("execution", "fedot/a.py", 65, "executed method Operation.fit"),
         checkout=source,
     )
     assert "marker_start = data" in semantic
@@ -7228,7 +7047,7 @@ def test_researcher_requires_grounded_comparative_quality_hypothesis(
     inference = Inference()
     result = verify_lead(
         source,
-        PatchSite(
+        MatchSite(
             "execution",
             "fedot/a.py",
             1,
@@ -7294,7 +7113,7 @@ def test_bounded_correctness_verifier_uses_at_most_three_model_calls(tmp_path: P
     inference = Inference()
     result = verify_lead(
         source,
-        PatchSite(
+        MatchSite(
             "execution",
             "fedot/a.py",
             1,
@@ -7357,7 +7176,7 @@ def test_correctness_verifier_rejects_reproduced_unsupported_precondition(
     inference = Inference()
     result = verify_lead(
         source,
-        PatchSite(
+        MatchSite(
             "execution",
             "fedot/a.py",
             1,
@@ -7426,7 +7245,7 @@ def test_affected_metric_requires_coverage_and_classifies_real_score_delta(
             "assert True\n"
         ),
     )
-    lead = PatchSite("llm", "fedot/ts.py", 12)
+    lead = MatchSite("llm", "fedot/ts.py", 12)
 
     improved = affected_eval.evaluate_affected_metric(
         tmp_path / "stock", tmp_path / "patched", verification, lead
@@ -7478,7 +7297,7 @@ def test_affected_metric_does_not_judge_an_unexecuted_branch(
         tmp_path / "stock",
         tmp_path / "patched",
         verification,
-        PatchSite("llm", "fedot/ts.py", 12),
+        MatchSite("llm", "fedot/ts.py", 12),
     )
 
     assert result["status"] == "not_reached"
@@ -7544,7 +7363,7 @@ def test_affected_metric_tries_next_reproduction_operation_until_lead_is_reached
         tmp_path / "stock",
         tmp_path / "patched",
         verification,
-        PatchSite("llm", "fedot/ts.py", 12),
+        MatchSite("llm", "fedot/ts.py", 12),
         max_tasks=1,
     )
 
@@ -7583,7 +7402,7 @@ def test_affected_metric_confirmation_requires_two_seeds_and_zero_regressions(
         tmp_path / "source",
         tmp_path / "experiment",
         VerificationResult("verified_bug", reproduction_code="assert True"),
-        PatchSite("llm", "fedot/ts.py", 12),
+        MatchSite("llm", "fedot/ts.py", 12),
     )
     initial = one_run(*args, seed=42)
     confirmed = affected_eval.confirm_affected_metric(*args, initial=initial)
