@@ -73,9 +73,17 @@ fedotllm = [
 python = "./.venv"
 
 [tool.ruff]
+line-length = 88
 exclude = [
     "user_data/*",
     "fedotllm/**/templates/**",
     "examples",
     "kaggle_comp",
 ]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
