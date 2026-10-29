@@ -764,5 +764,3 @@ def discover_leads(
         selected = {(lead.file_path, lead.line) for lead in found}
         pooled = [lead for lead in pooled if (lead.file_path, lead.line) in selected]
     return pooled[: max(1, limit)]
-
-

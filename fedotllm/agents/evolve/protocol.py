@@ -16,9 +16,7 @@ import hashlib
 from pathlib import Path
 
 SCORE_PROTOCOL_SCHEMA = "score-v1"
-ACCEPTANCE_PROTOCOL_SCHEMA = (
-    "acceptance-v2:full-dev-protect+2of3-dev+shadow+single-final+signal-not-keep+resume-evidence+shared-signal-full-scope"
-)
+ACCEPTANCE_PROTOCOL_SCHEMA = "acceptance-v2:full-dev-protect+2of3-dev+shadow+single-final+signal-not-keep+resume-evidence+shared-signal-full-scope"
 
 
 class _StripDocstrings(ast.NodeTransformer):
@@ -51,7 +49,9 @@ def semantic_python_fingerprint(
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, SyntaxError, UnicodeError) as exc:
-        return hashlib.sha256(f"missing-or-invalid:{path.name}:{exc}".encode()).hexdigest()
+        return hashlib.sha256(
+            f"missing-or-invalid:{path.name}:{exc}".encode()
+        ).hexdigest()
     if names:
         selected = [
             node
@@ -62,7 +62,9 @@ def semantic_python_fingerprint(
         missing = sorted(set(names) - {node.name for node in selected})
         tree = ast.Module(body=selected, type_ignores=[])
         if missing:
-            tree.body.append(ast.Expr(value=ast.Constant(value=f"missing:{','.join(missing)}")))
+            tree.body.append(
+                ast.Expr(value=ast.Constant(value=f"missing:{','.join(missing)}"))
+            )
     tree = _StripDocstrings().visit(tree)
     ast.fix_missing_locations(tree)
     payload = ast.dump(tree, annotate_fields=True, include_attributes=False)
@@ -177,9 +179,13 @@ def acceptance_protocol_fingerprint() -> str:
             (
                 "probe-deduplication",
                 "storage/replay.py",
-                ("_matching_patch_findings", "_probe_only_rejection",
-                 "_cheap_screen_not_quality_verdict",
-                 "tried_patch_hashes_from_findings", "rejected_probe_hashes_from_findings"),
+                (
+                    "_matching_patch_findings",
+                    "_probe_only_rejection",
+                    "_cheap_screen_not_quality_verdict",
+                    "tried_patch_hashes_from_findings",
+                    "rejected_probe_hashes_from_findings",
+                ),
             ),
             (
                 "resume-verification",
@@ -199,7 +205,11 @@ def acceptance_protocol_fingerprint() -> str:
             (
                 "quality-queue",
                 "controller/quality_queue.py",
-                ("enqueue_quality_job", "queue_priority", "cheap_screen_not_quality_verdict"),
+                (
+                    "enqueue_quality_job",
+                    "queue_priority",
+                    "cheap_screen_not_quality_verdict",
+                ),
             ),
             (
                 "controller-final",

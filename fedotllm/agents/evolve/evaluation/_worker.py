@@ -33,7 +33,10 @@ def _index_summary(value, *, width: int | None) -> dict | None:
     maximum = int(items.max()) if items.size else None
     valid = bool(
         width is not None
-        and (items.size == 0 or (minimum is not None and minimum >= 0 and maximum < width))
+        and (
+            items.size == 0
+            or (minimum is not None and minimum >= 0 and maximum < width)
+        )
     )
     return {
         "count": int(items.size),
@@ -46,7 +49,9 @@ def _index_summary(value, *, width: int | None) -> dict | None:
 def _data_snapshot(data, *, output: bool = False) -> dict:
     features_shape = _shape(getattr(data, "features", None))
     predict_shape = _shape(getattr(data, "predict", None)) if output else None
-    active_shape = predict_shape if output and predict_shape is not None else features_shape
+    active_shape = (
+        predict_shape if output and predict_shape is not None else features_shape
+    )
     width = None
     if active_shape:
         width = active_shape[-1] if len(active_shape) > 1 else 1
@@ -61,7 +66,9 @@ def _data_snapshot(data, *, output: bool = False) -> dict:
         "numerical_idx": numerical,
         "categorical_idx": categorical,
         "encoded_idx": encoded,
-        "metadata_within_width": all(bool(item.get("within_width")) for item in summaries),
+        "metadata_within_width": all(
+            bool(item.get("within_width")) for item in summaries
+        ),
     }
 
 
@@ -81,8 +88,13 @@ def _public_params(value) -> dict:
     for key, item in value.items():
         if isinstance(item, (str, int, float, bool)) or item is None:
             out[str(key)] = item
-        elif isinstance(item, (list, tuple)) and len(item) <= 12 and all(
-            isinstance(part, (str, int, float, bool)) or part is None for part in item
+        elif (
+            isinstance(item, (list, tuple))
+            and len(item) <= 12
+            and all(
+                isinstance(part, (str, int, float, bool)) or part is None
+                for part in item
+            )
         ):
             out[str(key)] = list(item)
     return out
@@ -135,7 +147,9 @@ def _line_ranges(lines: set[int]) -> list[list[int]]:
     return ranges
 
 
-def _qualified_symbol(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> tuple[str, str]:
+def _qualified_symbol(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> tuple[str, str]:
     if isinstance(node, ast.ClassDef):
         return node.name, "class"
     owner = parents.get(node)
@@ -211,7 +225,9 @@ def _install_dataflow_trace(rows: list[dict]) -> None:
         if not supported_parameters:
             # FEDOT CatBoost/LightGBM wrappers create their concrete estimator
             # during fit. Inspect it only after the original operation returns.
-            supported_parameters, estimator_defaults = _parameter_surface(fitted_operation)
+            supported_parameters, estimator_defaults = _parameter_surface(
+                fitted_operation
+            )
             row["supported_parameters"] = supported_parameters
             row["estimator_defaults"] = estimator_defaults
         row["output"] = _data_snapshot(output, output=True)
@@ -291,12 +307,12 @@ def main(argv: list[str] | None = None) -> int:
                 for child in ast.iter_child_nodes(parent)
             }
             for node in ast.walk(tree):
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if not isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
                     continue
                 end = int(getattr(node, "end_lineno", node.lineno) or node.lineno)
-                symbol_lines = {
-                    line for line in executed if node.lineno <= line <= end
-                }
+                symbol_lines = {line for line in executed if node.lineno <= line <= end}
                 if symbol_lines:
                     symbol, kind = _qualified_symbol(node, parents)
                     rows.append(

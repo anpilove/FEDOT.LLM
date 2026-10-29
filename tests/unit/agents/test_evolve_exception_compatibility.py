@@ -18,7 +18,10 @@ class LegacyWriteError(OSError):
 class ExceptionCompatibilityTests(unittest.TestCase):
     def test_partial_journal_write_error_survives_failed_rollback(self):
         for error_class in (OSError, LegacyWriteError):
-            with self.subTest(error_class=error_class.__name__), tempfile.TemporaryDirectory() as root:
+            with (
+                self.subTest(error_class=error_class.__name__),
+                tempfile.TemporaryDirectory() as root,
+            ):
                 path = Path(root) / "quality_jobs.jsonl"
                 history = b'{"event":"previous durable result"}\n'
                 path.write_bytes(history)
@@ -33,8 +36,13 @@ class ExceptionCompatibilityTests(unittest.TestCase):
                         return real_write(descriptor, data[:8])
                     raise original
 
-                with patch.object(journal.os, "write", side_effect=partial_write), patch.object(
-                    journal.os, "ftruncate", side_effect=OSError("rollback unavailable")
+                with (
+                    patch.object(journal.os, "write", side_effect=partial_write),
+                    patch.object(
+                        journal.os,
+                        "ftruncate",
+                        side_effect=OSError("rollback unavailable"),
+                    ),
                 ):
                     with self.assertRaises(error_class) as caught:
                         journal.append_journal(path, {"event": "new result"})
@@ -44,6 +52,7 @@ class ExceptionCompatibilityTests(unittest.TestCase):
                 self.assertGreater(path.stat().st_size, len(history))
                 if hasattr(original, "add_note"):
                     self.assertIn("rollback unavailable", original.__notes__[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

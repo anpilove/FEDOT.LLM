@@ -35,7 +35,9 @@ def test_shared_pair_scheduler_never_exceeds_seven_slots_and_uses_all_available_
 
     try:
         result = scheduler.submit_group(tuple(range(10)), run_one)
-        assert seven_started.wait(3), "scheduler did not fill its configured pair budget"
+        assert seven_started.wait(3), (
+            "scheduler did not fill its configured pair budget"
+        )
         with lock:
             assert active == 7
             assert started == 7
@@ -86,7 +88,9 @@ def test_shared_pair_scheduler_round_robins_waiting_proposal_after_slot_release(
         release_a_first.set()
         assert a_third_started.wait(2)
         release_a_second.set()
-        assert b_started.wait(2), "queued proposal did not receive the next released slot"
+        assert b_started.wait(2), (
+            "queued proposal did not receive the next released slot"
+        )
         release_a_third.set()
 
         assert b_result.result(timeout=2) == ["b0"]
@@ -117,12 +121,16 @@ def test_shared_pair_scheduler_waits_for_initial_proposals_before_dispatching():
     try:
         a_group = scheduler.register_group()
         a_result = scheduler.submit_group(("a0", "a1"), run_a, group_id=a_group)
-        assert not a_started.wait(0.05), "first proposal dispatched before its peers were ready"
+        assert not a_started.wait(0.05), (
+            "first proposal dispatched before its peers were ready"
+        )
 
         b_group = scheduler.register_group()
         b_result = scheduler.submit_group(("b0",), run_b, group_id=b_group)
         assert a_started.wait(2)
-        assert b_started.wait(2), "initial dispatch did not share slots across proposals"
+        assert b_started.wait(2), (
+            "initial dispatch did not share slots across proposals"
+        )
 
         release.set()
         assert a_result.result(timeout=2) == ["a0", "a1"]
@@ -149,7 +157,9 @@ def test_shared_pair_scheduler_skipped_initial_proposal_releases_dispatch_barrie
 
         skipped_group = scheduler.register_group()
         scheduler.skip_group(skipped_group)
-        assert a_started.wait(2), "a proposal that produces no evaluation kept the barrier closed"
+        assert a_started.wait(2), (
+            "a proposal that produces no evaluation kept the barrier closed"
+        )
 
         release.set()
         assert a_result.result(timeout=2) == ["a0"]
@@ -158,7 +168,9 @@ def test_shared_pair_scheduler_skipped_initial_proposal_releases_dispatch_barrie
         scheduler.shutdown()
 
 
-def test_shared_pair_scheduler_handles_task_completed_before_callback_registration(monkeypatch):
+def test_shared_pair_scheduler_handles_task_completed_before_callback_registration(
+    monkeypatch,
+):
     import fedotllm.agents.evolve.evaluation.pair_scheduler as scheduler_module
 
     class ImmediateExecutor:
@@ -180,13 +192,17 @@ def test_shared_pair_scheduler_handles_task_completed_before_callback_registrati
     scheduler = SharedPairScheduler[str, str](max_pairs=1)
     result: list[list[str]] = []
     runner = threading.Thread(
-        target=lambda: result.append(scheduler.run_group(("instant",), lambda item: item)),
+        target=lambda: result.append(
+            scheduler.run_group(("instant",), lambda item: item)
+        ),
         daemon=True,
     )
 
     runner.start()
     runner.join(timeout=0.5)
-    assert not runner.is_alive(), "completed future callback deadlocked trying to reacquire scheduler lock"
+    assert not runner.is_alive(), (
+        "completed future callback deadlocked trying to reacquire scheduler lock"
+    )
     assert result == [["instant"]]
     scheduler.shutdown()
 
@@ -203,12 +219,16 @@ def test_shared_pair_scheduler_dispatches_when_initial_peer_has_no_work():
 
     try:
         active_group = scheduler.register_group()
-        active_result = scheduler.submit_group(("work",), run_one, group_id=active_group)
+        active_result = scheduler.submit_group(
+            ("work",), run_one, group_id=active_group
+        )
         empty_group = scheduler.register_group()
         empty_result = scheduler.submit_group((), run_one, group_id=empty_group)
 
         assert empty_result.result(timeout=1) == []
-        assert started.wait(1), "empty initial group opened the barrier without dispatching ready work"
+        assert started.wait(1), (
+            "empty initial group opened the barrier without dispatching ready work"
+        )
         release.set()
         assert active_result.result(timeout=1) == ["work"]
     finally:
@@ -261,16 +281,22 @@ def test_shared_pair_scheduler_waits_until_running_compute_callback_exits():
 
         waiter = threading.Thread(target=wait_for_idle, daemon=True)
         waiter.start()
-        assert not waiter_done.wait(0.05), "idle barrier returned while a worker still used its checkout"
+        assert not waiter_done.wait(0.05), (
+            "idle barrier returned while a worker still used its checkout"
+        )
         release.set()
-        assert waiter_done.wait(1), "idle barrier did not wake after the worker completed"
+        assert waiter_done.wait(1), (
+            "idle barrier did not wake after the worker completed"
+        )
         assert future.result(timeout=1) == "finished"
     finally:
         release.set()
         scheduler.shutdown()
 
 
-def test_shared_pair_scheduler_does_not_start_admitted_task_after_fail_closed(monkeypatch):
+def test_shared_pair_scheduler_does_not_start_admitted_task_after_fail_closed(
+    monkeypatch,
+):
     import fedotllm.agents.evolve.evaluation.pair_scheduler as scheduler_module
 
     class DeferredExecutor:
@@ -286,7 +312,9 @@ def test_shared_pair_scheduler_does_not_start_admitted_task_after_fail_closed(mo
             return None
 
     executor = DeferredExecutor()
-    monkeypatch.setattr(scheduler_module, "ThreadPoolExecutor", lambda **_kwargs: executor)
+    monkeypatch.setattr(
+        scheduler_module, "ThreadPoolExecutor", lambda **_kwargs: executor
+    )
     scheduler = SharedPairScheduler[str, str](max_pairs=1, initial_groups=1)
     started: list[str] = []
     error = OSError(28, "No space left on device")
@@ -326,7 +354,9 @@ def test_shared_pair_scheduler_opens_start_barrier_after_bounded_wait():
     try:
         group_id = scheduler.register_group()
         result = scheduler.submit_group(("ready-work",), run_one, group_id=group_id)
-        assert started.wait(1), "missing initial proposal prevented the bounded start gate from opening"
+        assert started.wait(1), (
+            "missing initial proposal prevented the bounded start gate from opening"
+        )
         release.set()
         assert result.result(timeout=1) == ["ready-work"]
     finally:
@@ -366,7 +396,9 @@ def test_pair_scheduler_fails_closed_after_worker_exception():
         deadline = time.monotonic() + 2
         while scheduler.fatal_error is None and time.monotonic() < deadline:
             time.sleep(0.001)
-        assert scheduler.fatal_error is not None, "scheduler did not observe the worker failure"
+        assert scheduler.fatal_error is not None, (
+            "scheduler did not observe the worker failure"
+        )
         release_sibling.set()
 
         with pytest.raises(RuntimeError, match="durable event write failed"):
@@ -435,12 +467,18 @@ def test_fail_closed_cooperatively_cancels_compute_and_prevents_queued_start():
         fatal = OSError(28, "journal persistence failed")
         scheduler.fail_closed(fatal)
 
-        assert cancellation_observed.wait(2), "active compute did not see fatal cancellation"
+        assert cancellation_observed.wait(2), (
+            "active compute did not see fatal cancellation"
+        )
         assert active.result(timeout=1) == "stopped"
         assert queued.cancelled(), "queued compute was not best-effort cancelled"
         assert not queued_started.is_set(), "queued compute started after fail-closed"
-        assert not user_cancel.is_set(), "scheduler mutated a caller-owned cancellation event"
-        rejected = scheduler.submit_compute(lambda _cancel: "late", cooperative_cancellation=True)
+        assert not user_cancel.is_set(), (
+            "scheduler mutated a caller-owned cancellation event"
+        )
+        rejected = scheduler.submit_compute(
+            lambda _cancel: "late", cooperative_cancellation=True
+        )
         with pytest.raises(OSError, match="journal persistence failed"):
             rejected.result(timeout=1)
     finally:

@@ -252,9 +252,16 @@ _rmse(
 
 for _task_name, _offset in (("ar->ridge", 0), ("ar-shifted-index->ridge", 1000)):
     _rmse(
-        _task_name, "ar", "ridge", dataset="temperature", problem="ts",
-        train_file="time_series/temperature.csv", target="value",
-        forecast_horizon=24, history_size=2000, index_offset=_offset,
+        _task_name,
+        "ar",
+        "ridge",
+        dataset="temperature",
+        problem="ts",
+        train_file="time_series/temperature.csv",
+        target="value",
+        forecast_horizon=24,
+        history_size=2000,
+        index_offset=_offset,
     )
 
 
@@ -265,7 +272,9 @@ def load_task(task_id: str) -> TaskSpec:
     return spec
 
 
-def workload_on_dataset(dataset_task: str, pipeline_task: str | None = None) -> TaskSpec:
+def workload_on_dataset(
+    dataset_task: str, pipeline_task: str | None = None
+) -> TaskSpec:
     """Keep the dataset contract, transplant only a registered pipeline."""
     data = load_task(dataset_task)
     if pipeline_task is None:
@@ -273,10 +282,21 @@ def workload_on_dataset(dataset_task: str, pipeline_task: str | None = None) -> 
     pipeline = load_task(pipeline_task)
     if data.problem != pipeline.problem or data.metric != pipeline.metric:
         raise ValueError("pipeline and dataset have incompatible task types")
-    return replace(data, **{
-        name: getattr(pipeline, name)
-        for name in ("kind", "nodes", "left", "right", "join", "tail", "index_offset")
-    })
+    return replace(
+        data,
+        **{
+            name: getattr(pipeline, name)
+            for name in (
+                "kind",
+                "nodes",
+                "left",
+                "right",
+                "join",
+                "tail",
+                "index_offset",
+            )
+        },
+    )
 
 
 def all_tasks() -> list[TaskSpec]:
@@ -284,7 +304,11 @@ def all_tasks() -> list[TaskSpec]:
 
 
 def _csv_env(name: str, default: str) -> tuple[str, ...]:
-    return tuple(part.strip() for part in os.environ.get(name, default).split(",") if part.strip())
+    return tuple(
+        part.strip()
+        for part in os.environ.get(name, default).split(",")
+        if part.strip()
+    )
 
 
 def quality_suite() -> tuple[str, ...]:

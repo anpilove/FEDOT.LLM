@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fedotllm.agents.evolve.discovery.repo_map import Symbol, iter_symbols, search_callers
+from fedotllm.agents.evolve.discovery.repo_map import (
+    Symbol,
+    iter_symbols,
+    search_callers,
+)
 from fedotllm.agents.evolve.execution.guard import deny_write
 
 _LIFECYCLE_METHODS = frozenset(
@@ -81,7 +85,9 @@ class FedotSourceContext:
         if self.operations:
             rows = []
             for operation in self.operations:
-                defaults = json.dumps(dict(operation.defaults), sort_keys=True, default=str)
+                defaults = json.dumps(
+                    dict(operation.defaults), sort_keys=True, default=str
+                )
                 declared = ", ".join(operation.declared_params) or "none found"
                 rows.append(
                     f"- {operation.operation_id}: implementation={operation.implementation}; "
@@ -189,7 +195,9 @@ def _symbols_in_tree(rel: str, tree: ast.Module) -> list[tuple[Symbol, ast.AST]]
             rows.append((Symbol(rel, node.name, "class", node.lineno), node))
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    rows.append((Symbol(rel, item.name, "method", item.lineno, node.name), item))
+                    rows.append(
+                        (Symbol(rel, item.name, "method", item.lineno, node.name), item)
+                    )
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             rows.append((Symbol(rel, node.name, "function", node.lineno), node))
     return rows
@@ -203,7 +211,11 @@ def _select_symbol(rel: str, tree: ast.Module, query: str) -> Symbol | None:
     exact = [item for item in rows if _qualified_name(item) == query]
     if not exact:
         exact = [item for item in rows if item.name == query]
-    return sorted(exact, key=lambda item: (item.line, item.kind, item.parent))[0] if exact else None
+    return (
+        sorted(exact, key=lambda item: (item.line, item.kind, item.parent))[0]
+        if exact
+        else None
+    )
 
 
 def _qualified_name(symbol: Symbol | None) -> str:
@@ -255,8 +267,10 @@ def _target_classes(
     bases_by_class: dict[str, tuple[str, ...]],
 ) -> set[str]:
     declared = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
-    owner = selected.parent if selected and selected.parent else (
-        selected.name if selected and selected.kind == "class" else ""
+    owner = (
+        selected.parent
+        if selected and selected.parent
+        else (selected.name if selected and selected.kind == "class" else "")
     )
     roots = {owner} if owner else declared
     related = set(roots)
@@ -278,13 +292,19 @@ def _base_chain(
     *,
     depth: int = 4,
 ) -> tuple[str, ...]:
-    owner = selected.parent if selected and selected.parent else (
-        selected.name if selected and selected.kind == "class" else ""
+    owner = (
+        selected.parent
+        if selected and selected.parent
+        else (selected.name if selected and selected.kind == "class" else "")
     )
     if not owner:
         return ()
     start = next(
-        (item for item in class_index.get(owner, ()) if item.file_path == selected.file_path),
+        (
+            item
+            for item in class_index.get(owner, ())
+            if item.file_path == selected.file_path
+        ),
         None,
     )
     if start is None:
@@ -357,7 +377,9 @@ def _strategy_mappings(checkout: Path) -> list[tuple[str, str, str, int]]:
                     continue
                 implementation = _ast_name(value)
                 if implementation:
-                    rows.append((key.value, implementation, f"{rel}:{owner}", node.lineno))
+                    rows.append(
+                        (key.value, implementation, f"{rel}:{owner}", node.lineno)
+                    )
     return rows
 
 
@@ -391,10 +413,14 @@ def _default_params(checkout: Path) -> dict[str, dict]:
         payload = json.loads((checkout / _DEFAULTS).read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return {}
-    return {str(key): value for key, value in payload.items() if isinstance(value, dict)}
+    return {
+        str(key): value for key, value in payload.items() if isinstance(value, dict)
+    }
 
 
-def _declared_params(checkout: Path, operation_ids: set[str]) -> dict[str, tuple[str, ...]]:
+def _declared_params(
+    checkout: Path, operation_ids: set[str]
+) -> dict[str, tuple[str, ...]]:
     tree = _parse(checkout / _SEARCH_SPACE)
     if tree is None:
         return {}
@@ -462,8 +488,7 @@ def _caller_context(
         rel, _, owner = operation.strategy.partition(":")
         refs.append(ContextReference(rel, 1, owner, "operation_dispatch"))
     unique = {
-        (item.file_path, item.line, item.symbol, item.kind): item
-        for item in refs
+        (item.file_path, item.line, item.symbol, item.kind): item for item in refs
     }
     return tuple(unique[key] for key in sorted(unique))[:limit]
 
@@ -556,12 +581,13 @@ def _compact_source(
     if node is None:
         return ""
     start = max(0, node.lineno - 1)
-    end = min(len(lines), int(getattr(node, "end_lineno", node.lineno)), start + max_lines)
+    end = min(
+        len(lines), int(getattr(node, "end_lineno", node.lineno)), start + max_lines
+    )
     return "\n".join(f"{index + 1:5d}|{lines[index]}" for index in range(start, end))
 
 
 def _render_refs(refs: tuple[ContextReference, ...]) -> str:
     return "\n".join(
-        f"- {item.file_path}:{item.line} {item.kind} {item.symbol}"
-        for item in refs
+        f"- {item.file_path}:{item.line} {item.kind} {item.symbol}" for item in refs
     )

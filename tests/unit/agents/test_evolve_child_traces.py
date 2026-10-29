@@ -12,7 +12,7 @@ import sys
 import pytest
 
 
-_FIXTURE = '''
+_FIXTURE = """
 import ctypes
 import json
 import multiprocessing
@@ -75,7 +75,7 @@ if __name__ == "__main__":
         finally:
             parent_sampler.__exit__(None, None, None)
     print(json.dumps({"parent_pid": os.getpid(), "compute_pids": pids}))
-'''
+"""
 
 
 def _run_compute_fixture(tmp_path, mode, *, python_line_trace=False):
@@ -100,21 +100,32 @@ def _run_compute_fixture(tmp_path, mode, *, python_line_trace=False):
     env["PYTHONPATH"] = str(repo_root)
     env["OPENBLAS_NUM_THREADS"] = "1"
     if python_line_trace:
-        env.update({
-            "EVOLVE_TRACE_PYTHON_LINES": "1",
-            "EVOLVE_TRACE_LINE_INTERVAL_SECONDS": "0.03",
-            "FEDOTLLM_REPO_PATH": str(fedot_root),
-            "PYTHONPATH": os.pathsep.join((str(fedot_root), env["PYTHONPATH"])),
-        })
+        env.update(
+            {
+                "EVOLVE_TRACE_PYTHON_LINES": "1",
+                "EVOLVE_TRACE_LINE_INTERVAL_SECONDS": "0.03",
+                "FEDOTLLM_REPO_PATH": str(fedot_root),
+                "PYTHONPATH": os.pathsep.join((str(fedot_root), env["PYTHONPATH"])),
+            }
+        )
     completed = subprocess.run(
-        [sys.executable, str(script), str(directory), mode], env=env,
-        text=True, capture_output=True, timeout=30,
+        [sys.executable, str(script), str(directory), mode],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     payload = json.loads(completed.stdout.splitlines()[-1])
     payload["stderr"] = completed.stderr
-    manifest = ([json.loads(line) for line in (directory / "manifest.jsonl").read_text().splitlines()]
-                if (directory / "manifest.jsonl").is_file() else [])
+    manifest = (
+        [
+            json.loads(line)
+            for line in (directory / "manifest.jsonl").read_text().splitlines()
+        ]
+        if (directory / "manifest.jsonl").is_file()
+        else []
+    )
     return directory, payload, manifest
 
 
@@ -135,13 +146,17 @@ def test_context_restores_existing_environment_after_exception(tmp_path, monkeyp
     monkeypatch.setenv("PYTHONPATH", "/existing/path")
     before = dict(os.environ)
     with pytest.raises(RuntimeError, match="fixture"):
-        with traced_children(tmp_path, attempt_id="inner-attempt", interval_seconds=0.03) as status:
+        with traced_children(
+            tmp_path, attempt_id="inner-attempt", interval_seconds=0.03
+        ) as status:
             assert status["enabled"] is True
             assert os.environ["EVOLVE_TRACE_ATTEMPT_ID"] == "inner-attempt"
             assert os.environ["PYTHONPATH"].split(os.pathsep)[-1] == "/existing/path"
             raise RuntimeError("fixture")
     assert dict(os.environ) == before
-    assert not (tmp_path / "manifest.jsonl").exists(), "root must use its existing sampler"
+    assert not (tmp_path / "manifest.jsonl").exists(), (
+        "root must use its existing sampler"
+    )
 
 
 @pytest.mark.parametrize("mode", ["loky", "spawn", "fork", "forkserver"])
@@ -152,7 +167,9 @@ def test_compute_children_have_own_active_line_while_parent_waits(tmp_path, mode
     if mode == "loky":
         assert len(set(payload["compute_pids"])) == 2
 
-    compute_records = [record for record in manifest if record["pid"] in payload["compute_pids"]]
+    compute_records = [
+        record for record in manifest if record["pid"] in payload["compute_pids"]
+    ]
     assert {record["pid"] for record in compute_records} == set(payload["compute_pids"])
     for record in compute_records:
         assert record["pid"] != payload["parent_pid"]
@@ -167,7 +184,9 @@ def test_compute_children_have_own_active_line_while_parent_waits(tmp_path, mode
         sleep_line = _FIXTURE.splitlines().index("    time.sleep(0.4)") + 1
         assert f"line {sleep_line} in active_compute_line" in stack
         assert str(tmp_path / "compute_fixture.py") in stack
-    available = [record["stack_trace_path"] for record in manifest if record["stack_trace_path"]]
+    available = [
+        record["stack_trace_path"] for record in manifest if record["stack_trace_path"]
+    ]
     assert len(set(available)) == len(available)
     parent_stack = (directory / "parent.stacks.txt").read_text()
     assert "--- stack dump at " in parent_stack
@@ -181,35 +200,58 @@ def test_compute_children_have_own_active_line_while_parent_waits(tmp_path, mode
 
 def test_native_call_keeps_duration_and_documents_gil_sampling_limit(tmp_path):
     directory, payload, manifest = _run_compute_fixture(tmp_path, "native")
-    assert float((directory / "native.elapsed").read_text()) >= 0.85, "diagnostic timer interrupted native task"
-    record = next(record for record in manifest if record["pid"] in payload["compute_pids"])
+    assert float((directory / "native.elapsed").read_text()) >= 0.85, (
+        "diagnostic timer interrupted native task"
+    )
+    record = next(
+        record for record in manifest if record["pid"] in payload["compute_pids"]
+    )
     assert "native_call_holding_gil" in record["limitations"]
     assert record["capture_method"] == "python_thread"
     stack = Path(record["stack_trace_path"]).read_text()
-    snapshot_times = [datetime.fromisoformat(value).timestamp()
-                      for value in re.findall(r"--- stack dump at ([^ ]+) ---", stack)]
-    assert snapshot_times, "sampler did not resume after the native call released the GIL"
-    assert not any((directory / "native.started").stat().st_mtime + 0.15 < snapshot <
-                   (directory / "native.finished").stat().st_mtime - 0.15
-                   for snapshot in snapshot_times), "Python sampler claimed to run with the GIL held"
+    snapshot_times = [
+        datetime.fromisoformat(value).timestamp()
+        for value in re.findall(r"--- stack dump at ([^ ]+) ---", stack)
+    ]
+    assert snapshot_times, (
+        "sampler did not resume after the native call released the GIL"
+    )
+    assert not any(
+        (directory / "native.started").stat().st_mtime + 0.15
+        < snapshot
+        < (directory / "native.finished").stat().st_mtime - 0.15
+        for snapshot in snapshot_times
+    ), "Python sampler claimed to run with the GIL held"
 
 
 def test_loky_child_records_exact_fedot_python_line(tmp_path):
     directory, payload, manifest = _run_compute_fixture(
-        tmp_path, "loky", python_line_trace=True,
+        tmp_path,
+        "loky",
+        python_line_trace=True,
     )
-    record = next(record for record in manifest if record["pid"] in payload["compute_pids"])
+    record = next(
+        record for record in manifest if record["pid"] in payload["compute_pids"]
+    )
     line_trace = record.get("python_line_trace_path")
     assert line_trace, "child manifest omitted the Python line trace path"
     samples = [json.loads(line) for line in Path(line_trace).read_text().splitlines()]
-    blocked = [sample for sample in samples if any(
-        frame["function"] == "active_compute"
-        and frame["filename"].endswith("/fedot/fixture.py")
-        for frame in sample["fedot_frames"]
-    )]
+    blocked = [
+        sample
+        for sample in samples
+        if any(
+            frame["function"] == "active_compute"
+            and frame["filename"].endswith("/fedot/fixture.py")
+            for frame in sample["fedot_frames"]
+        )
+    ]
     assert blocked, "compute child did not record frames from the FEDOT source tree"
-    assert any(frame["lineno"] == 5 for sample in blocked for frame in sample["fedot_frames"]
-               if frame["function"] == "active_compute"), "trace did not identify the active source line"
+    assert any(
+        frame["lineno"] == 5
+        for sample in blocked
+        for frame in sample["fedot_frames"]
+        if frame["function"] == "active_compute"
+    ), "trace did not identify the active source line"
 
 
 def test_child_manifest_failure_does_not_interrupt_compute(tmp_path):
@@ -240,21 +282,32 @@ def _run_startup_fixture(tmp_path, hook_source, *, bootstrap, tracing):
     hook_directory = tmp_path / "original-hook"
     hook_directory.mkdir(exist_ok=True)
     (hook_directory / "sitecustomize.py").write_text(hook_source, encoding="utf-8")
-    env = {key: value for key, value in os.environ.items() if not key.startswith("EVOLVE_TRACE_")}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("EVOLVE_TRACE_")
+    }
     paths = [str(hook_directory), str(repo)]
     if bootstrap:
-        paths.insert(0, str(repo / "fedotllm/agents/evolve/evaluation/_trace_bootstrap"))
+        paths.insert(
+            0, str(repo / "fedotllm/agents/evolve/evaluation/_trace_bootstrap")
+        )
     env["PYTHONPATH"] = os.pathsep.join(paths)
     if tracing:
-        env.update({
-            "EVOLVE_TRACE_DIRECTORY": str(tmp_path / "trace"),
-            "EVOLVE_TRACE_ATTEMPT_ID": "startup-fixture",
-            "EVOLVE_TRACE_OWNER_PID": "999999999",
-            "EVOLVE_TRACE_INTERVAL_SECONDS": "0.03",
-        })
+        env.update(
+            {
+                "EVOLVE_TRACE_DIRECTORY": str(tmp_path / "trace"),
+                "EVOLVE_TRACE_ATTEMPT_ID": "startup-fixture",
+                "EVOLVE_TRACE_OWNER_PID": "999999999",
+                "EVOLVE_TRACE_INTERVAL_SECONDS": "0.03",
+            }
+        )
     return subprocess.run(
         [sys.executable, "-c", "import sys; print('startup-complete')"],
-        env=env, text=True, capture_output=True, timeout=10,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
     )
 
 
@@ -268,20 +321,31 @@ def test_bootstrap_preserves_existing_sitecustomize_and_self_import(tmp_path, tr
         f"with Path({str(marker)!r}).open('a') as stream:\n"
         "    stream.write('original-hook-ran\\n')\n"
     )
-    completed = _run_startup_fixture(tmp_path, hook_source, bootstrap=True, tracing=tracing)
+    completed = _run_startup_fixture(
+        tmp_path, hook_source, bootstrap=True, tracing=tracing
+    )
     assert completed.returncode == 0, completed.stderr
     assert completed.stderr == ""
     assert marker.read_text() == "original-hook-ran\n"
 
 
-@pytest.mark.parametrize("hook_source", [
-    "raise RuntimeError('original-hook-fixture-error')\n",
-    "raise ImportError('original-hook-fixture-error', name='missing_original_dependency')\n",
-])
+@pytest.mark.parametrize(
+    "hook_source",
+    [
+        "raise RuntimeError('original-hook-fixture-error')\n",
+        "raise ImportError('original-hook-fixture-error', name='missing_original_dependency')\n",
+    ],
+)
 @pytest.mark.parametrize("tracing", [False, True])
-def test_bootstrap_preserves_standard_sitecustomize_exception_reporting(tmp_path, hook_source, tracing):
-    baseline = _run_startup_fixture(tmp_path, hook_source, bootstrap=False, tracing=tracing)
-    wrapped = _run_startup_fixture(tmp_path, hook_source, bootstrap=True, tracing=tracing)
+def test_bootstrap_preserves_standard_sitecustomize_exception_reporting(
+    tmp_path, hook_source, tracing
+):
+    baseline = _run_startup_fixture(
+        tmp_path, hook_source, bootstrap=False, tracing=tracing
+    )
+    wrapped = _run_startup_fixture(
+        tmp_path, hook_source, bootstrap=True, tracing=tracing
+    )
     assert wrapped.returncode == baseline.returncode
     assert wrapped.stdout == baseline.stdout
     assert wrapped.stderr == baseline.stderr

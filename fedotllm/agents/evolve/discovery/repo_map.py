@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import deny_write
+
 EXCLUDED_DIR_PARTS = {
     ".git",
     "__pycache__",
@@ -25,7 +26,15 @@ EXCLUDED_DIR_PARTS = {
 _SKIP_FILES = frozenset({"visualisation.py", "visualization.py"})
 _MAP_LIMIT = 24
 _FIT_NAMES = frozenset(
-    {"fit", "transform", "predict", "fit_transform", "inverse_transform", "predict_proba", "fit_predict"}
+    {
+        "fit",
+        "transform",
+        "predict",
+        "fit_transform",
+        "inverse_transform",
+        "predict_proba",
+        "fit_predict",
+    }
 )
 _TREE_CAP = 400
 _NOISE_IN_NAME = ("timer", "plot", "visual", "logger")
@@ -72,7 +81,11 @@ def iter_symbols(checkout: Path, *, root: str = "fedot") -> list[Symbol]:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         if _stub_method(item):
                             continue
-                        out.append(Symbol(rel, item.name, "method", item.lineno, parent=node.name))
+                        out.append(
+                            Symbol(
+                                rel, item.name, "method", item.lineno, parent=node.name
+                            )
+                        )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if _stub_method(node):
                     continue
@@ -196,7 +209,10 @@ def _rank_field_hits(hits: list[Symbol]) -> list[Symbol]:
 def format_map(symbols: list[Symbol], *, limit: int = 20) -> str:
     if not symbols:
         return "(empty repo map)"
-    lines = [f"{item.file_path}:{item.line} {item.kind} {item.parent + '.' if item.parent else ''}{item.name}" for item in symbols[:limit]]
+    lines = [
+        f"{item.file_path}:{item.line} {item.kind} {item.parent + '.' if item.parent else ''}{item.name}"
+        for item in symbols[:limit]
+    ]
     return "\n".join(lines)
 
 
@@ -301,11 +317,15 @@ def reachable_from_fit(checkout: Path, *, limit: int = _TREE_CAP) -> list[Symbol
     return list(seen.values())
 
 
-def fit_neighborhood(checkout: Path, *, limit: int = _TREE_CAP) -> list[tuple[Symbol, tuple[str, ...]]]:
+def fit_neighborhood(
+    checkout: Path, *, limit: int = _TREE_CAP
+) -> list[tuple[Symbol, tuple[str, ...]]]:
     """Reachable training pipeline, plus the rest of fedot/ AST may miss (dynamic dispatch)."""
 
     tree = reachable_from_fit(checkout, limit=limit)
-    tagged: list[tuple[Symbol, tuple[str, ...]]] = [(item, ("reachable",)) for item in tree]
+    tagged: list[tuple[Symbol, tuple[str, ...]]] = [
+        (item, ("reachable",)) for item in tree
+    ]
     seen = {(item.file_path, item.line) for item in tree}
     classes = {(item.file_path, item.parent) for item in tree if item.parent}
     files = {item.file_path for item in tree}
@@ -313,7 +333,11 @@ def fit_neighborhood(checkout: Path, *, limit: int = _TREE_CAP) -> list[tuple[Sy
         if item.kind not in {"method", "function"}:
             continue
         key = (item.file_path, item.line)
-        if key in seen or skip_metric_noise(item.file_path) or not in_metric_scan(item.file_path):
+        if (
+            key in seen
+            or skip_metric_noise(item.file_path)
+            or not in_metric_scan(item.file_path)
+        ):
             continue
         if any(bit in item.name.lower() for bit in _NOISE_IN_NAME):
             continue
@@ -353,10 +377,16 @@ def _fit_roots(symbols: list[Symbol]) -> list[Symbol]:
             roots.append(item)
     if roots:
         return roots
-    return [item for item in symbols if item.name in _FIT_NAMES and in_metric_scan(item.file_path)]
+    return [
+        item
+        for item in symbols
+        if item.name in _FIT_NAMES and in_metric_scan(item.file_path)
+    ]
 
 
-def _resolve_call(called: str, current: Symbol, by_name: dict[str, list[Symbol]]) -> list[Symbol]:
+def _resolve_call(
+    called: str, current: Symbol, by_name: dict[str, list[Symbol]]
+) -> list[Symbol]:
     hits = by_name.get(called) or []
     if not hits:
         return []
@@ -370,7 +400,8 @@ def _resolve_call(called: str, current: Symbol, by_name: dict[str, list[Symbol]]
     core = [
         item
         for item in hits
-        if in_metric_scan(item.file_path) or "/operation_implementations/" in item.file_path
+        if in_metric_scan(item.file_path)
+        or "/operation_implementations/" in item.file_path
     ]
     return core[:6] if core else hits[:3]
 

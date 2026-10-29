@@ -13,18 +13,24 @@ from fedotllm.agents.evolve.execution.snippet_policy import (
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
-def test_snippet_rejects_unbounded_or_nonpositive_deadline_before_selecting_python(tmp_path, monkeypatch, timeout):
+def test_snippet_rejects_unbounded_or_nonpositive_deadline_before_selecting_python(
+    tmp_path, monkeypatch, timeout
+):
     from fedotllm.agents.evolve.execution import run_code
 
     def must_not_start(_checkout):
-        raise AssertionError("invalid timeout must be rejected before interpreter selection")
+        raise AssertionError(
+            "invalid timeout must be rejected before interpreter selection"
+        )
 
     monkeypatch.setattr(run_code, "fedot_python", must_not_start)
     with pytest.raises(ValueError, match="timeout_s must be finite and positive"):
         run_code.run_fedot_snippet(tmp_path, "print(1)", timeout_s=timeout)
 
 
-def test_real_snippet_preserves_redacted_streams_and_runtime_error(tmp_path, monkeypatch):
+def test_real_snippet_preserves_redacted_streams_and_runtime_error(
+    tmp_path, monkeypatch
+):
     import sys
     from fedotllm.agents.evolve.execution import run_code
 
@@ -32,10 +38,12 @@ def test_real_snippet_preserves_redacted_streams_and_runtime_error(tmp_path, mon
     package.mkdir()
     (package / "__init__.py").write_text("")
     monkeypatch.setattr(run_code, "fedot_python", lambda _: sys.executable)
-    result = run_code.run_fedot_snippet(tmp_path,
+    result = run_code.run_fedot_snippet(
+        tmp_path,
         "import sys\nprint('token=fixturesecret', flush=True)\n"
         "print('password=fixturesecret', file=sys.stderr, flush=True)\nraise RuntimeError('fixture crash')",
-        timeout_s=5)
+        timeout_s=5,
+    )
     assert result.status == "runtime_error"
     assert result.exit_code != 0
     assert "REDACTED" in result.stdout and "fixturesecret" not in result.stdout
@@ -70,7 +78,9 @@ def test_snippet_runtime_guards_block_outside_checkout(tmp_path: Path):
             open(outside, encoding="utf-8").read()
 
 
-def test_snippet_runtime_guards_allow_package_resource_reads_from_that_package(tmp_path: Path):
+def test_snippet_runtime_guards_allow_package_resource_reads_from_that_package(
+    tmp_path: Path,
+):
     import importlib.util
 
     checkout = tmp_path / "exp"

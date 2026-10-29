@@ -68,13 +68,23 @@ class SharedPairScheduler(Generic[T, R]):
         initial_groups: int = 0,
         initial_group_wait_seconds: float = 10.0,
     ) -> None:
-        if isinstance(max_pairs, bool) or not isinstance(max_pairs, int) or max_pairs <= 0:
+        if (
+            isinstance(max_pairs, bool)
+            or not isinstance(max_pairs, int)
+            or max_pairs <= 0
+        ):
             raise ValueError("max_pairs must be a positive integer")
-        if isinstance(initial_groups, bool) or not isinstance(initial_groups, int) or initial_groups < 0:
+        if (
+            isinstance(initial_groups, bool)
+            or not isinstance(initial_groups, int)
+            or initial_groups < 0
+        ):
             raise ValueError("initial_groups must be a non-negative integer")
-        if (isinstance(initial_group_wait_seconds, bool)
-                or not isinstance(initial_group_wait_seconds, (int, float))
-                or initial_group_wait_seconds < 0):
+        if (
+            isinstance(initial_group_wait_seconds, bool)
+            or not isinstance(initial_group_wait_seconds, (int, float))
+            or initial_group_wait_seconds < 0
+        ):
             raise ValueError("initial_group_wait_seconds must be a non-negative number")
         self.max_pairs = max_pairs
         self.initial_groups = initial_groups
@@ -171,10 +181,14 @@ class SharedPairScheduler(Generic[T, R]):
                 return result
             key = self._register_group_locked() if group_id is None else group_id
             if key in self._submitted_ids:
-                result.set_exception(ValueError(f"proposal group {key} was already submitted"))
+                result.set_exception(
+                    ValueError(f"proposal group {key} was already submitted")
+                )
                 return result
             if key not in self._registered_ids:
-                result.set_exception(ValueError(f"proposal group {key} was not registered"))
+                result.set_exception(
+                    ValueError(f"proposal group {key} was not registered")
+                )
                 return result
             self._submitted_ids.add(key)
             self._mark_initial_ready_locked(key)
@@ -194,7 +208,9 @@ class SharedPairScheduler(Generic[T, R]):
             self._dispatch_locked()
         return result
 
-    def run_group(self, items: tuple[T, ...] | list[T], run_one: Callable[[T], R]) -> list[R]:
+    def run_group(
+        self, items: tuple[T, ...] | list[T], run_one: Callable[[T], R]
+    ) -> list[R]:
         """Run one proposal-scoped list, preserving its task order."""
 
         return self.submit_group(items, run_one).result()

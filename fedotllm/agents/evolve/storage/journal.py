@@ -105,7 +105,11 @@ def repair_incomplete_jsonl_tail(path: Path) -> dict[str, Any] | None:
         handle.write(b"\n")
         handle.flush()
         os.fsync(handle.fileno())
-    return {"action": "terminated_complete_tail", "offset": boundary, "bytes": len(tail)}
+    return {
+        "action": "terminated_complete_tail",
+        "offset": boundary,
+        "bytes": len(tail),
+    }
 
 
 def resolve_run_workspace(workspace: Path) -> Path:
@@ -129,15 +133,20 @@ def resolve_run_workspace(workspace: Path) -> Path:
     return target.resolve()
 
 
-def read_jsonl(path: Path, *, strict: bool = False,
-               ignore_incomplete_tail: bool = False) -> list[dict[str, Any]]:
+def read_jsonl(
+    path: Path, *, strict: bool = False, ignore_incomplete_tail: bool = False
+) -> list[dict[str, Any]]:
     """Read JSON object rows; strict mode refuses malformed durable history."""
     if not path.is_file():
         return []
     rows: list[dict[str, Any]] = []
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     for line_number, line in enumerate(lines, 1):
-        if ignore_incomplete_tail and line_number == len(lines) and not line.endswith("\n"):
+        if (
+            ignore_incomplete_tail
+            and line_number == len(lines)
+            and not line.endswith("\n")
+        ):
             continue
         if not line.strip():
             continue
@@ -145,12 +154,16 @@ def read_jsonl(path: Path, *, strict: bool = False,
             row = json.loads(line)
         except json.JSONDecodeError as exc:
             if strict:
-                raise JournalCorruptionError(f"invalid journal event at {path}:{line_number}: {exc.msg}") from exc
+                raise JournalCorruptionError(
+                    f"invalid journal event at {path}:{line_number}: {exc.msg}"
+                ) from exc
             continue
         if isinstance(row, dict):
             rows.append(row)
         elif strict:
-            raise JournalCorruptionError(f"invalid journal event at {path}:{line_number}: expected object")
+            raise JournalCorruptionError(
+                f"invalid journal event at {path}:{line_number}: expected object"
+            )
     return rows
 
 
@@ -183,7 +196,9 @@ def append_journal(path: Path, event: dict[str, Any]) -> None:
                     os.fsync(descriptor)
                 except OSError as cleanup_error:
                     if hasattr(original, "add_note"):
-                        original.add_note(f"journal append rollback failed: {cleanup_error}")
+                        original.add_note(
+                            f"journal append rollback failed: {cleanup_error}"
+                        )
                 raise
         finally:
             os.close(descriptor)

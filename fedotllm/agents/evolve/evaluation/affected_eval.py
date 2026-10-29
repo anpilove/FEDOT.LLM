@@ -48,7 +48,11 @@ def extract_operation_overlays(code: str) -> dict[str, dict]:
         operation_node = node.args[0] if node.args else None
         if operation_node is None:
             operation_node = next(
-                (item.value for item in node.keywords if item.arg in {"operation_type", "operation"}),
+                (
+                    item.value
+                    for item in node.keywords
+                    if item.arg in {"operation_type", "operation"}
+                ),
                 None,
             )
         params_node = next(
@@ -131,7 +135,11 @@ def evaluate_affected_metric(
         return {"status": "not_applicable", "rows": []}
     overlays = extract_operation_overlays(verification.reproduction_code)
     if not overlays:
-        return {"status": "unavailable", "reason": "no_literal_operation_params", "rows": []}
+        return {
+            "status": "unavailable",
+            "reason": "no_literal_operation_params",
+            "rows": [],
+        }
 
     catalog = all_tasks()
     eligible = [
@@ -144,7 +152,10 @@ def evaluate_affected_metric(
             "operations": sorted(overlays),
             "rows": [],
         }
-    wants_ts = "ts_forecasting" in verification.reproduction_code or "TsForecastingParams" in verification.reproduction_code
+    wants_ts = (
+        "ts_forecasting" in verification.reproduction_code
+        or "TsForecastingParams" in verification.reproduction_code
+    )
     attempted_rows: list[dict] = []
     operation = ""
     rows: list[dict] = []
@@ -173,9 +184,7 @@ def evaluate_affected_metric(
                     seed=seed,
                     task_override=override,
                 )
-                classification, delta = _normalized_delta(
-                    spec.task_id, stock, patched
-                )
+                classification, delta = _normalized_delta(spec.task_id, stock, patched)
                 patched_row = {"status": patched.status, "score": patched.score}
             else:
                 classification, delta = "not_reached", None
@@ -267,13 +276,10 @@ def confirm_affected_metric(
         if row.get("lead_reached")
     )
     infrastructure_failures = sum(
-        run.get("status") in {"invalid", "unavailable", "not_reached"}
-        for run in runs
+        run.get("status") in {"invalid", "unavailable", "not_reached"} for run in runs
     )
     confirmed = bool(
-        improved_seeds >= 2
-        and regressed_pairs == 0
-        and infrastructure_failures == 0
+        improved_seeds >= 2 and regressed_pairs == 0 and infrastructure_failures == 0
     )
     return {
         "confirmed": confirmed,

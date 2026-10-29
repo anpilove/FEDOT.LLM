@@ -42,8 +42,8 @@ _LOG_TAIL_BYTES = 1024 * 1024
 _GUARDIAN_WATCHDOG_EXIT = 124
 _RESOURCE_CHECK_INTERVAL = 1.0
 _RESOURCE_CHECK_QUEUE_CAPACITY = 7
-_resource_check_requests: queue.Queue[tuple[Future, Callable[[], object]]] = queue.Queue(
-    maxsize=_RESOURCE_CHECK_QUEUE_CAPACITY
+_resource_check_requests: queue.Queue[tuple[Future, Callable[[], object]]] = (
+    queue.Queue(maxsize=_RESOURCE_CHECK_QUEUE_CAPACITY)
 )
 _resource_check_thread: threading.Thread | None = None
 _resource_check_thread_lock = threading.Lock()
@@ -93,7 +93,9 @@ class _AsyncResourceCheck:
             _resource_check_requests.put_nowait((self.future, self.callback))
         except queue.Full:
             self.future.set_exception(
-                RuntimeError("storage probe queue is full; an earlier probe is still blocked")
+                RuntimeError(
+                    "storage probe queue is full; an earlier probe is still blocked"
+                )
             )
 
     def poll(self) -> bool:
@@ -132,7 +134,11 @@ def _bounded_worker_output(proc: subprocess.Popen) -> tuple[str, str]:
         # TimeoutExpired carries the complete partial capture, possibly bytes
         # even for text=True. Do not append the earlier timeout's duplicate data.
         def _text(value):
-            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+            return (
+                value.decode("utf-8", errors="replace")
+                if isinstance(value, bytes)
+                else value or ""
+            )
 
         return _text(exc.stdout), _text(exc.stderr)
     finally:
@@ -146,7 +152,9 @@ def _bounded_worker_output(proc: subprocess.Popen) -> tuple[str, str]:
 
 
 def _start_lifetime_guard(
-    proc: subprocess.Popen, *, watchdog_timeout: float | None = None,
+    proc: subprocess.Popen,
+    *,
+    watchdog_timeout: float | None = None,
 ) -> tuple[subprocess.Popen, int]:
     """Bind a fixed guardian to this worker and a controller-owned pipe."""
     if watchdog_timeout is not None and watchdog_timeout <= 0:
@@ -157,15 +165,23 @@ def _start_lifetime_guard(
         parent_read, parent_write = os.pipe()
         ready_read, ready_write = os.pipe()
         command = [
-            sys.executable, "-I", str(Path(__file__).with_name("_worker_lifetime_guard.py")),
-            "--worker-pgid", str(proc.pid), "--parent-fd", str(parent_read),
-            "--ready-fd", str(ready_write),
+            sys.executable,
+            "-I",
+            str(Path(__file__).with_name("_worker_lifetime_guard.py")),
+            "--worker-pgid",
+            str(proc.pid),
+            "--parent-fd",
+            str(parent_read),
+            "--ready-fd",
+            str(ready_write),
         ]
         if watchdog_timeout is not None:
             command.extend(("--watchdog-timeout-seconds", str(watchdog_timeout)))
         guardian = subprocess.Popen(
             command,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             pass_fds=(parent_read, ready_write),
             start_new_session=True,
         )
@@ -186,7 +202,9 @@ def _start_lifetime_guard(
                 _finish_lifetime_guard(guardian, None, completed=False)
             except Exception as cleanup_error:
                 if hasattr(original, "add_note"):
-                    original.add_note(f"Guardian {guardian.pid} cleanup failed: {cleanup_error}")
+                    original.add_note(
+                        f"Guardian {guardian.pid} cleanup failed: {cleanup_error}"
+                    )
         raise
     finally:
         for descriptor in (parent_read, ready_read, ready_write):
@@ -195,7 +213,10 @@ def _start_lifetime_guard(
 
 
 def _finish_lifetime_guard(
-    guardian: subprocess.Popen, parent_write: int | None, *, completed: bool,
+    guardian: subprocess.Popen,
+    parent_write: int | None,
+    *,
+    completed: bool,
 ) -> int | None:
     """Disarm on normal completion; otherwise EOF requests group termination."""
     if parent_write is not None:
@@ -275,7 +296,11 @@ def run_worker(
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     return WorkerOutcome(
-                        None, "", "", timed_out=True, timeout_kind="task_timeout",
+                        None,
+                        "",
+                        "",
+                        timed_out=True,
+                        timeout_kind="task_timeout",
                     )
                 time.sleep(0.05 if remaining is None else min(0.05, remaining))
         proc = subprocess.Popen(
@@ -292,7 +317,8 @@ def run_worker(
         completed = False
         try:
             guardian, parent_write = _start_lifetime_guard(
-                proc, watchdog_timeout=watchdog_timeout,
+                proc,
+                watchdog_timeout=watchdog_timeout,
             )
             if on_spawned is not None:
                 on_spawned(proc.pid)
@@ -310,7 +336,9 @@ def run_worker(
                     out, err = _bounded_worker_output(proc)
                     outcome = WorkerOutcome(None, out, err, cancelled=True)
                     break
-                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                remaining = (
+                    None if deadline is None else max(0.0, deadline - time.monotonic())
+                )
                 poll_timeout = remaining
                 if cancellation_event is not None or resource_check is not None:
                     poll_timeout = 0.2 if remaining is None else min(0.2, remaining)
@@ -318,12 +346,18 @@ def run_worker(
                     out, err = proc.communicate(timeout=poll_timeout)
                     break
                 except subprocess.TimeoutExpired:
-                    if (cancellation_event is not None or resource_check is not None) and (deadline is None or time.monotonic() < deadline):
+                    if (
+                        cancellation_event is not None or resource_check is not None
+                    ) and (deadline is None or time.monotonic() < deadline):
                         continue
                     completed = _kill_worker_group(proc)
                     out, err = _bounded_worker_output(proc)
                     outcome = WorkerOutcome(
-                        None, out, err, timed_out=True, timeout_kind="task_timeout",
+                        None,
+                        out,
+                        err,
+                        timed_out=True,
+                        timeout_kind="task_timeout",
                     )
                     break
             # File redirects let communicate return while same-group children
@@ -338,21 +372,30 @@ def run_worker(
                 _kill_worker_group(proc)
             except Exception as cleanup_error:
                 if hasattr(original, "add_note"):
-                    original.add_note(f"Worker group {proc.pid} cleanup failed: {cleanup_error}")
+                    original.add_note(
+                        f"Worker group {proc.pid} cleanup failed: {cleanup_error}"
+                    )
             try:
                 _bounded_worker_output(proc)
             except Exception as cleanup_error:
                 if hasattr(original, "add_note"):
-                    original.add_note(f"Worker {proc.pid} output cleanup failed: {cleanup_error}")
+                    original.add_note(
+                        f"Worker {proc.pid} output cleanup failed: {cleanup_error}"
+                    )
             raise
         finally:
             if guardian is not None:
                 original = sys.exc_info()[1]
                 try:
                     guardian_status = _finish_lifetime_guard(
-                        guardian, parent_write, completed=completed,
+                        guardian,
+                        parent_write,
+                        completed=completed,
                     )
-                    if guardian_status == _GUARDIAN_WATCHDOG_EXIT and outcome is not None:
+                    if (
+                        guardian_status == _GUARDIAN_WATCHDOG_EXIT
+                        and outcome is not None
+                    ):
                         outcome = dataclasses.replace(
                             outcome,
                             returncode=None,
@@ -363,7 +406,9 @@ def run_worker(
                     if original is None:
                         raise
                     if hasattr(original, "add_note"):
-                        original.add_note(f"Guardian {guardian.pid} cleanup failed: {cleanup_error}")
+                        original.add_note(
+                            f"Guardian {guardian.pid} cleanup failed: {cleanup_error}"
+                        )
         if outcome is None:
             raise RuntimeError("worker ended without producing an outcome")
         return outcome
@@ -377,8 +422,14 @@ def run_worker(
             handle.seek(0, os.SEEK_END)
             handle.seek(max(0, handle.tell() - _LOG_TAIL_BYTES))
             text = handle.read(_LOG_TAIL_BYTES).decode("utf-8", errors="replace")
-        return WorkerOutcome(outcome.returncode, text, "", timed_out=outcome.timed_out,
-                             cancelled=outcome.cancelled, timeout_kind=outcome.timeout_kind)
+        return WorkerOutcome(
+            outcome.returncode,
+            text,
+            "",
+            timed_out=outcome.timed_out,
+            cancelled=outcome.cancelled,
+            timeout_kind=outcome.timeout_kind,
+        )
     finally:
         for monitor in resource_monitors:
             monitor.cancel()
@@ -405,8 +456,11 @@ _SAFE_ENV_NAMES = {
 }
 
 _THREAD_ENV_NAMES = (
-    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
 )
 
 

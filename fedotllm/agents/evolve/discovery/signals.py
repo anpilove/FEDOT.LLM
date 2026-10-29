@@ -156,7 +156,10 @@ def pytest_contract_source(
             continue
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
-            from fedotllm.agents.evolve.evaluation.test_contracts import TEST_PATH, repaired_contract_source
+            from fedotllm.agents.evolve.evaluation.test_contracts import (
+                TEST_PATH,
+                repaired_contract_source,
+            )
 
             if parts[0] == TEST_PATH:
                 source = repaired_contract_source(source)

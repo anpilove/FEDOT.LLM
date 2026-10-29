@@ -88,7 +88,9 @@ def mean_reciprocal_rank(ranks: list[int | None]) -> float:
 def metrics(ranks: list[int | None], *, ks: tuple[int, ...] = _KS) -> dict[str, float]:
     row = {f"recall@{k}": recall_at(ranks, k) for k in ks}
     row["mrr"] = mean_reciprocal_rank(ranks)
-    row["covered"] = sum(rank is not None for rank in ranks) / len(ranks) if ranks else 0.0
+    row["covered"] = (
+        sum(rank is not None for rank in ranks) / len(ranks) if ranks else 0.0
+    )
     return row
 
 
@@ -101,7 +103,9 @@ def _score_ranked(ranked: list[str], gold: list[str]) -> dict[str, Any]:
     }
 
 
-def _random_metrics(pool: list[str], gold: list[str], *, draws: int, seed: int) -> dict[str, Any]:
+def _random_metrics(
+    pool: list[str], gold: list[str], *, draws: int, seed: int
+) -> dict[str, Any]:
     rng = random.Random(seed)
     acc = {f"recall@{k}": 0.0 for k in _KS}
     acc["mrr"] = 0.0
@@ -112,7 +116,10 @@ def _random_metrics(pool: list[str], gold: list[str], *, draws: int, seed: int) 
         part = metrics([file_rank(shuffled, path) for path in gold])
         for key, value in part.items():
             acc[key] += value
-    return {key: value / draws for key, value in acc.items()} | {"n": len(gold), "draws": draws}
+    return {key: value / draws for key, value in acc.items()} | {
+        "n": len(gold),
+        "draws": draws,
+    }
 
 
 def measure_localization(
@@ -136,7 +143,9 @@ def measure_localization(
     llm_pick = None
     if inference is not None:
         trace: dict[str, Any] = {}
-        plus_llm = unique_files(discover_leads(checkout, inference=inference, limit=200, trace=trace))
+        plus_llm = unique_files(
+            discover_leads(checkout, inference=inference, limit=200, trace=trace)
+        )
         variants["structural_invariant_llm"] = plus_llm
         llm_pick = trace.get("llm_pick")
     out: dict[str, Any] = {
@@ -150,7 +159,9 @@ def measure_localization(
     }
     for split_name, gold in splits.items():
         row: dict[str, Any] = {
-            "random_reachable": _random_metrics(structural, gold, draws=draws, seed=seed),
+            "random_reachable": _random_metrics(
+                structural, gold, draws=draws, seed=seed
+            ),
         }
         for name, ranked in variants.items():
             if ranked is None:

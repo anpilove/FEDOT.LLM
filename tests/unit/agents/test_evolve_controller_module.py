@@ -8,15 +8,25 @@ from fedotllm.agents.evolve.execution.guard import repo_root
 
 
 def test_controller_help_works_without_llm_or_ml_dependencies():
-    result = subprocess.run([sys.executable, "-S", "-m", "fedotllm.agents.evolve.controller", "--help"],
-                            cwd=repo_root(), text=True, capture_output=True, timeout=10)
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "fedotllm.agents.evolve.controller", "--help"],
+        cwd=repo_root(),
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stderr
     assert "serve" in result.stdout and "status" in result.stdout
 
 
 def test_controller_info_identifies_the_actual_module():
-    result = subprocess.run([sys.executable, "-S", "-m", "fedotllm.agents.evolve.controller", "info"],
-                            cwd=repo_root(), text=True, capture_output=True, timeout=10)
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "fedotllm.agents.evolve.controller", "info"],
+        cwd=repo_root(),
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["name"] == "FEDOT.LLM Evolve Controller"
@@ -30,9 +40,21 @@ def test_status_does_not_create_or_modify_a_run(tmp_path):
     original = '{"state":"running","heartbeat_at":"old"}\n'
     (workspace / "logs").mkdir()
     (workspace / "logs/service_status.json").write_text(original)
-    result = subprocess.run([sys.executable, "-S", "-m", "fedotllm.agents.evolve.controller", "status",
-                             "--workspace", str(workspace)], cwd=repo_root(),
-                            text=True, capture_output=True, timeout=10)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-m",
+            "fedotllm.agents.evolve.controller",
+            "status",
+            "--workspace",
+            str(workspace),
+        ],
+        cwd=repo_root(),
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["state"] == "running"
     assert (workspace / "logs/service_status.json").read_text() == original
@@ -45,15 +67,29 @@ def test_status_reads_a_flat_saved_snapshot_without_modifying_it(tmp_path):
     original = '{"state":"running","heartbeat_at":"snapshot"}\n'
     status_path = workspace / "service_status.json"
     status_path.write_text(original)
-    result = subprocess.run([sys.executable, "-S", "-m", "fedotllm.agents.evolve.controller", "status",
-                             "--workspace", str(workspace)], cwd=repo_root(),
-                            text=True, capture_output=True, timeout=10)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-m",
+            "fedotllm.agents.evolve.controller",
+            "status",
+            "--workspace",
+            str(workspace),
+        ],
+        cwd=repo_root(),
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"state":"running", "heartbeat_at":"snapshot"}
+    assert json.loads(result.stdout) == {"state": "running", "heartbeat_at": "snapshot"}
     assert status_path.read_text() == original
 
 
-def test_direct_drain_scopes_worker_artifacts_to_its_workspace(tmp_path, monkeypatch, capsys):
+def test_direct_drain_scopes_worker_artifacts_to_its_workspace(
+    tmp_path, monkeypatch, capsys
+):
     import os
     from pathlib import Path
 
@@ -74,9 +110,18 @@ def test_direct_drain_scopes_worker_artifacts_to_its_workspace(tmp_path, monkeyp
         scoped.setattr(quality_executor, "drain_quality_queue", drain)
         for name in ("run-a", "run-b"):
             workspace = tmp_path / name
-            assert controller_cli.main([
-                "drain", "--fedot", str(repo_root()), "--workspace", str(workspace),
-            ]) == 0
+            assert (
+                controller_cli.main(
+                    [
+                        "drain",
+                        "--fedot",
+                        str(repo_root()),
+                        "--workspace",
+                        str(workspace),
+                    ]
+                )
+                == 0
+            )
             capsys.readouterr()
 
     assert observed == [

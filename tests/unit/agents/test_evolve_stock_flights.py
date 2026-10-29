@@ -20,9 +20,10 @@ def test_same_key_subscribers_share_one_compute_and_same_result():
     submit_lock = threading.Lock()
     results: list[Future[str] | None] = [None, None]
 
-    with ThreadPoolExecutor(max_workers=2) as compute_pool, ThreadPoolExecutor(
-        max_workers=2
-    ) as callers:
+    with (
+        ThreadPoolExecutor(max_workers=2) as compute_pool,
+        ThreadPoolExecutor(max_workers=2) as callers,
+    ):
 
         def submit(compute):
             with submit_lock:
@@ -67,6 +68,7 @@ def test_waiting_subscriber_does_not_occupy_executor_thread_or_compute_slot():
     unrelated_started = threading.Event()
 
     with ThreadPoolExecutor(max_workers=2) as compute_pool:
+
         def submit(compute):
             return compute_pool.submit(compute)
 
@@ -83,7 +85,9 @@ def test_waiting_subscriber_does_not_occupy_executor_thread_or_compute_slot():
         try:
             assert owner_started.wait(2), "owner fit did not start"
             follower = registry.get_or_submit(
-                "shared", submit=submit, compute=lambda: pytest.fail("duplicate stock fit")
+                "shared",
+                submit=submit,
+                compute=lambda: pytest.fail("duplicate stock fit"),
             )
             independent = registry.get_or_submit(
                 "independent", submit=submit, compute=unrelated_compute
@@ -106,6 +110,7 @@ def test_cancelling_one_subscriber_does_not_cancel_owner_or_other_subscribers():
     release_owner = threading.Event()
 
     with ThreadPoolExecutor(max_workers=1) as compute_pool:
+
         def compute() -> str:
             owner_started.set()
             assert release_owner.wait(3), "test did not release owner compute"
@@ -116,10 +121,14 @@ def test_cancelling_one_subscriber_does_not_cancel_owner_or_other_subscribers():
         )
         assert owner_started.wait(2), "owner compute was not started"
         cancelled_view = registry.get_or_submit(
-            "key", submit=compute_pool.submit, compute=lambda: pytest.fail("duplicate compute")
+            "key",
+            submit=compute_pool.submit,
+            compute=lambda: pytest.fail("duplicate compute"),
         )
         surviving_view = registry.get_or_submit(
-            "key", submit=compute_pool.submit, compute=lambda: pytest.fail("duplicate compute")
+            "key",
+            submit=compute_pool.submit,
+            compute=lambda: pytest.fail("duplicate compute"),
         )
 
         assert cancelled_view.cancel()
@@ -132,7 +141,9 @@ def test_cancelling_one_subscriber_does_not_cancel_owner_or_other_subscribers():
             cancelled_view.result()
 
 
-def test_cancelling_stock_owner_pair_does_not_cancel_shared_fit_for_follower(monkeypatch):
+def test_cancelling_stock_owner_pair_does_not_cancel_shared_fit_for_follower(
+    monkeypatch,
+):
     from pathlib import Path
 
     import fedotllm.agents.evolve.evaluation.fedot_quality as quality
@@ -227,7 +238,9 @@ def test_cancelling_stock_owner_pair_does_not_cancel_shared_fit_for_follower(mon
         )
         assert follower_waiting.wait(1), "follower did not join shared stock fit"
         assert owner_pair.cancel(), "owner proposal pair was not cancelled"
-        assert owner_cancel.is_set(), "cancelling the owner pair did not cancel its event"
+        assert owner_cancel.is_set(), (
+            "cancelling the owner pair did not cancel its event"
+        )
         release_owner.set()
 
         follower_result = follower_pair.result(timeout=2)
@@ -252,8 +265,12 @@ def test_owner_exception_reaches_all_subscribers_and_completed_flight_can_retry(
         owner_work.append(future)
         return future
 
-    first = registry.get_or_submit("key", submit=deferred_submit, compute=lambda: "unused")
-    second = registry.get_or_submit("key", submit=deferred_submit, compute=lambda: "must-not-run")
+    first = registry.get_or_submit(
+        "key", submit=deferred_submit, compute=lambda: "unused"
+    )
+    second = registry.get_or_submit(
+        "key", submit=deferred_submit, compute=lambda: "must-not-run"
+    )
     assert len(owner_work) == 1
     owner_work[0].set_exception(error)
     with pytest.raises(RuntimeError, match="stock fit failed") as first_error:
@@ -263,7 +280,9 @@ def test_owner_exception_reaches_all_subscribers_and_completed_flight_can_retry(
     assert first_error.value is error
     assert second_error.value is error
 
-    retry = registry.get_or_submit("key", submit=deferred_submit, compute=lambda: "retry-result")
+    retry = registry.get_or_submit(
+        "key", submit=deferred_submit, compute=lambda: "retry-result"
+    )
     assert len(owner_work) == 2
     owner_work[1].set_result("retry-result")
     assert retry.result(timeout=1) == "retry-result"
@@ -278,14 +297,20 @@ def test_cancelling_owner_work_notifies_subscribers_and_removes_flight_for_retry
         owner_work.append(future)
         return future
 
-    owner_view = registry.get_or_submit("key", submit=deferred_submit, compute=lambda: "unused")
-    follower_view = registry.get_or_submit("key", submit=deferred_submit, compute=lambda: "unused")
+    owner_view = registry.get_or_submit(
+        "key", submit=deferred_submit, compute=lambda: "unused"
+    )
+    follower_view = registry.get_or_submit(
+        "key", submit=deferred_submit, compute=lambda: "unused"
+    )
     assert len(owner_work) == 1
     assert owner_work[0].cancel()
     assert owner_view.cancelled()
     assert follower_view.cancelled()
 
-    retry_view = registry.get_or_submit("key", submit=deferred_submit, compute=lambda: "retry")
+    retry_view = registry.get_or_submit(
+        "key", submit=deferred_submit, compute=lambda: "retry"
+    )
     assert len(owner_work) == 2
     owner_work[1].set_result("retry")
     assert retry_view.result(timeout=1) == "retry"
@@ -298,13 +323,19 @@ def test_submit_failure_reaches_subscribers_and_does_not_leave_a_stuck_flight():
     def reject_submit(_compute):
         raise error
 
-    first = registry.get_or_submit("key", submit=reject_submit, compute=lambda: "unused")
+    first = registry.get_or_submit(
+        "key", submit=reject_submit, compute=lambda: "unused"
+    )
     with pytest.raises(RuntimeError, match="executor rejected stock work") as caught:
         first.result()
     assert caught.value is error
 
-    retry = registry.get_or_submit("key", submit=reject_submit, compute=lambda: "unused")
-    with pytest.raises(RuntimeError, match="executor rejected stock work") as retry_error:
+    retry = registry.get_or_submit(
+        "key", submit=reject_submit, compute=lambda: "unused"
+    )
+    with pytest.raises(
+        RuntimeError, match="executor rejected stock work"
+    ) as retry_error:
         retry.result()
     assert retry_error.value is error
 
@@ -333,7 +364,9 @@ def test_owner_wait_telemetry_failure_does_not_leave_a_stuck_flight():
         assert retry.result(timeout=1) == "retry-result"
 
 
-def test_campaign_pair_scheduler_parks_stock_follower_and_runs_independent_dataset(monkeypatch):
+def test_campaign_pair_scheduler_parks_stock_follower_and_runs_independent_dataset(
+    monkeypatch,
+):
     from pathlib import Path
 
     import fedotllm.agents.evolve.evaluation.fedot_quality as quality
@@ -361,7 +394,9 @@ def test_campaign_pair_scheduler_parks_stock_follower_and_runs_independent_datas
         )
         for task_id in ("task-x", "task-y")
     }
-    monkeypatch.setattr(quality, "get_dataset", lambda task_id, _registry: datasets[task_id])
+    monkeypatch.setattr(
+        quality, "get_dataset", lambda task_id, _registry: datasets[task_id]
+    )
     monkeypatch.setattr(
         quality,
         "job_spec",
@@ -372,7 +407,11 @@ def test_campaign_pair_scheduler_parks_stock_follower_and_runs_independent_datas
         },
     )
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: "/fake/python")
-    monkeypatch.setattr(quality, "_async_stock_flight_key", lambda dataset, *_args, **_kwargs: dataset.task_id)
+    monkeypatch.setattr(
+        quality,
+        "_async_stock_flight_key",
+        lambda dataset, *_args, **_kwargs: dataset.task_id,
+    )
 
     x_stock_started = threading.Event()
     release_x_stock = threading.Event()
@@ -423,12 +462,14 @@ def test_campaign_pair_scheduler_parks_stock_follower_and_runs_independent_datas
             phases[index].append((spec["source_dataset"], side, phase))
             if spec["source_dataset"] == "task-x" and side == "stock":
                 stock_flight_ids[index].append(spec.get("stock_flight_id"))
+
         return callback
 
     def record_wait(index: int):
         def callback(spec, side, _wait_kind, _elapsed, _attempt):
             if spec["source_dataset"] == "task-x" and side == "stock":
                 stock_wait_ids[index].append(spec.get("stock_flight_id"))
+
         return callback
 
     def run_group(index: int, task_ids: tuple[str, ...]) -> None:
@@ -478,7 +519,9 @@ def test_campaign_pair_scheduler_parks_stock_follower_and_runs_independent_datas
         assert all(value == owner_flight_id for value in stock_flight_ids[1])
         assert peak <= 2
         assert attempts and min(attempts) == 1
-        assert all(len(rows or []) == expected for rows, expected in zip(results, (2, 1)))
+        assert all(
+            len(rows or []) == expected for rows, expected in zip(results, (2, 1))
+        )
         assert all(
             (task, side, "finished") in events
             for events, tasks in zip(phases, (("task-x", "task-y"), ("task-x",)))
@@ -528,7 +571,11 @@ def test_shared_stock_follower_receives_owner_timeout_after_cleanup(monkeypatch)
         },
     )
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: "/fake/python")
-    monkeypatch.setattr(quality, "_async_stock_flight_key", lambda dataset, *_args, **_kwargs: dataset.task_id)
+    monkeypatch.setattr(
+        quality,
+        "_async_stock_flight_key",
+        lambda dataset, *_args, **_kwargs: dataset.task_id,
+    )
 
     owner_started = threading.Event()
     release_owner = threading.Event()
@@ -540,7 +587,9 @@ def test_shared_stock_follower_receives_owner_timeout_after_cleanup(monkeypatch)
         if side == "stock":
             if proposal_id == "owner":
                 owner_started.set()
-                assert release_owner.wait(3), "test did not release owner stock computation"
+                assert release_owner.wait(3), (
+                    "test did not release owner stock computation"
+                )
                 # Model the worker's bounded kill/reap/result-publication tail
                 # after its own fit deadline has elapsed.
                 time.sleep(0.05)
@@ -603,10 +652,16 @@ def test_shared_stock_follower_receives_owner_timeout_after_cleanup(monkeypatch)
         owner_result = owner_pair.result(timeout=2)["stock_result"]
         follower_result = follower_pair.result(timeout=2)["stock_result"]
         assert follower_stock_timed_out.is_set()
-        assert follower_patch_started.wait(1), "follower did not continue to its patch side"
+        assert follower_patch_started.wait(1), (
+            "follower did not continue to its patch side"
+        )
         assert owner_result.status == "timeout"
         assert follower_result.status == "timeout"
-        assert owner_result.detail == follower_result.detail == "owner task timed out after cleanup"
+        assert (
+            owner_result.detail
+            == follower_result.detail
+            == "owner task timed out after cleanup"
+        )
     finally:
         release_owner.set()
         scheduler.shutdown()
@@ -707,9 +762,11 @@ def test_shared_stock_follower_deadline_starts_after_owner_queue_admission(monke
             n_jobs=4,
             registry=registry,
             proposal_id="owner",
-            on_side_wait=lambda _spec, _side, kind, elapsed, _attempt: owner_wait_phases.append(
-                (kind, elapsed)
-            ),
+            on_side_wait=lambda _spec,
+            _side,
+            kind,
+            elapsed,
+            _attempt: owner_wait_phases.append((kind, elapsed)),
         )
         assert owner_wait_phases and owner_wait_phases[0][0] == "scheduler_queue", (
             "the queued shared-stock owner must report queue wait before FEDOT starts"
@@ -751,7 +808,9 @@ def test_shared_stock_follower_deadline_starts_after_owner_queue_admission(monke
         scheduler.shutdown()
 
 
-def test_subscriber_arriving_after_stock_admission_reports_active_fit_elapsed(monkeypatch):
+def test_subscriber_arriving_after_stock_admission_reports_active_fit_elapsed(
+    monkeypatch,
+):
     from dataclasses import replace
     from pathlib import Path
     import time
@@ -835,9 +894,11 @@ def test_subscriber_arriving_after_stock_admission_reports_active_fit_elapsed(mo
             n_jobs=4,
             registry=registry,
             proposal_id="follower",
-            on_side_wait=lambda _spec, _side, kind, elapsed, _attempt: wait_events.append(
-                (kind, elapsed)
-            ),
+            on_side_wait=lambda _spec,
+            _side,
+            kind,
+            elapsed,
+            _attempt: wait_events.append((kind, elapsed)),
         )
         assert wait_events, "subscribing waiter emitted no initial state"
         assert wait_events[0][0] == "shared_stock_fit"
@@ -850,12 +911,17 @@ def test_subscriber_arriving_after_stock_admission_reports_active_fit_elapsed(mo
         scheduler.shutdown()
 
 
-def test_spawned_stock_owner_stops_wait_heartbeat_without_stopping_subscriber(monkeypatch):
+def test_spawned_stock_owner_stops_wait_heartbeat_without_stopping_subscriber(
+    monkeypatch,
+):
     """The actual worker owner retains spawned state while followers wait."""
     from pathlib import Path
 
     from fedotllm.agents.evolve.evaluation import fedot_quality as quality
-    from fedotllm.agents.evolve.evaluation.quality_registry import get_dataset, load_quality_registry
+    from fedotllm.agents.evolve.evaluation.quality_registry import (
+        get_dataset,
+        load_quality_registry,
+    )
     from fedotllm.agents.evolve.types import ScoreResult
 
     registry = load_quality_registry()
@@ -876,21 +942,34 @@ def test_spawned_stock_owner_stops_wait_heartbeat_without_stopping_subscriber(mo
 
     monkeypatch.setattr(quality.threading, "Timer", ManualTimer)
     monkeypatch.setattr(quality, "_async_stock_flights", StockFlightRegistry())
-    monkeypatch.setattr(quality, "_async_stock_flight_key", lambda *_args, **_kwargs: "beer")
-    monkeypatch.setattr(quality, "_stock_cache_path", lambda *_args, **_kwargs: Path("/cache"))
+    monkeypatch.setattr(
+        quality, "_async_stock_flight_key", lambda *_args, **_kwargs: "beer"
+    )
+    monkeypatch.setattr(
+        quality, "_stock_cache_path", lambda *_args, **_kwargs: Path("/cache")
+    )
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: "/fake/python")
-    monkeypatch.setattr(quality, "job_spec", lambda value, *, n_jobs, registry: {
-        "source_dataset": value.task_id, "n_jobs": n_jobs,
-        "higher_is_better": value.higher_is_better,
-    })
+    monkeypatch.setattr(
+        quality,
+        "job_spec",
+        lambda value, *, n_jobs, registry: {
+            "source_dataset": value.task_id,
+            "n_jobs": n_jobs,
+            "higher_is_better": value.higher_is_better,
+        },
+    )
 
     def run_side(value, *, side, on_worker_spawned, **_kwargs):
         on_worker_spawned(123)
         if side == "stock":
             timers[0].callback()
             timers[1].callback()
-        return ScoreResult(task_id=value.task_id, status="ok", score=0.75,
-                           metric_observations={"search_ran": True, "metric_valid": True})
+        return ScoreResult(
+            task_id=value.task_id,
+            status="ok",
+            score=0.75,
+            metric_observations={"search_ran": True, "metric_valid": True},
+        )
 
     monkeypatch.setattr(quality, "run_quality_side", run_side)
 
@@ -901,14 +980,29 @@ def test_spawned_stock_owner_stops_wait_heartbeat_without_stopping_subscriber(mo
 
     pairs = []
     for proposal in ("owner", "subscriber"):
-        pairs.append(quality._run_quality_pair_async(
-            dataset, stock_checkout=Path("/stock"), patch_checkout=Path("/patch"),
-            submit_compute=submit, n_jobs=4, registry=registry, proposal_id=proposal,
-            on_side_event=lambda _spec, side, phase, _result, _attempt, proposal=proposal:
-                events[proposal].append((side, phase)),
-            on_side_wait=lambda _spec, side, kind, _elapsed, _attempt, proposal=proposal:
-                events[proposal].append((side, kind)),
-        ))
+        pairs.append(
+            quality._run_quality_pair_async(
+                dataset,
+                stock_checkout=Path("/stock"),
+                patch_checkout=Path("/patch"),
+                submit_compute=submit,
+                n_jobs=4,
+                registry=registry,
+                proposal_id=proposal,
+                on_side_event=lambda _spec,
+                side,
+                phase,
+                _result,
+                _attempt,
+                proposal=proposal: events[proposal].append((side, phase)),
+                on_side_wait=lambda _spec,
+                side,
+                kind,
+                _elapsed,
+                _attempt,
+                proposal=proposal: events[proposal].append((side, kind)),
+            )
+        )
     assert len(pending) == 1
     stock_future, stock_compute = pending[0]
     stock_result = stock_compute()
@@ -938,7 +1032,8 @@ def test_stock_without_cache_completes_pair_after_owner_future_finishes(monkeypa
     monkeypatch.setattr(quality, "_stock_cache_path", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: "/fake/python")
     monkeypatch.setattr(
-        quality, "job_spec",
+        quality,
+        "job_spec",
         lambda value, *, n_jobs, registry: {
             "source_dataset": value.task_id,
             "n_jobs": n_jobs,
@@ -946,9 +1041,12 @@ def test_stock_without_cache_completes_pair_after_owner_future_finishes(monkeypa
         },
     )
     monkeypatch.setattr(
-        quality, "run_quality_side",
+        quality,
+        "run_quality_side",
         lambda value, **_kwargs: ScoreResult(
-            task_id=value.task_id, status="ok", score=0.75,
+            task_id=value.task_id,
+            status="ok",
+            score=0.75,
             metric_observations={"search_ran": True, "metric_valid": True},
         ),
     )
@@ -966,7 +1064,9 @@ def test_stock_without_cache_completes_pair_after_owner_future_finishes(monkeypa
         n_jobs=4,
         registry=registry,
         proposal_id="uncached-stock",
-        on_side_event=lambda _spec, side, phase, _result, _attempt: phases.append((side, phase)),
+        on_side_event=lambda _spec, side, phase, _result, _attempt: phases.append(
+            (side, phase)
+        ),
     )
     stock_future, stock_compute = pending[0]
     stock_future.set_result(stock_compute())
@@ -979,7 +1079,9 @@ def test_stock_without_cache_completes_pair_after_owner_future_finishes(monkeypa
     pair_result = pair.result(timeout=1)
     assert pair_result["stock_result"].status == "ok"
     assert pair_result["patched_result"].status == "ok"
-    assert not pair_result["stock_result"].metric_observations.get("singleflight_shared")
+    assert not pair_result["stock_result"].metric_observations.get(
+        "singleflight_shared"
+    )
 
 
 def test_compute_queue_wait_does_not_consume_side_timeout(monkeypatch):
@@ -1002,8 +1104,12 @@ def test_compute_queue_wait_does_not_consume_side_timeout(monkeypatch):
     blocker_started = threading.Event()
     release_blocker = threading.Event()
 
-    monkeypatch.setattr(quality, "_stock_cache_path", lambda *_args, **_kwargs: Path("/cache"))
-    monkeypatch.setattr(quality, "_async_stock_flight_key", lambda *_args, **_kwargs: "beer")
+    monkeypatch.setattr(
+        quality, "_stock_cache_path", lambda *_args, **_kwargs: Path("/cache")
+    )
+    monkeypatch.setattr(
+        quality, "_async_stock_flight_key", lambda *_args, **_kwargs: "beer"
+    )
     monkeypatch.setattr(quality, "_async_stock_flights", quality.StockFlightRegistry())
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: "/fake/python")
     monkeypatch.setattr(
@@ -1061,7 +1167,9 @@ def test_compute_queue_wait_does_not_consume_side_timeout(monkeypatch):
         scheduler.shutdown()
 
 
-def test_shared_stock_timeout_and_owner_completion_publish_one_terminal_event(monkeypatch):
+def test_shared_stock_timeout_and_owner_completion_publish_one_terminal_event(
+    monkeypatch,
+):
     from dataclasses import replace
     from pathlib import Path
     import time
@@ -1100,7 +1208,9 @@ def test_shared_stock_timeout_and_owner_completion_publish_one_terminal_event(mo
     )
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: "/fake/python")
     monkeypatch.setattr(
-        quality, "_async_stock_flight_key", lambda dataset, *_args, **_kwargs: dataset.task_id
+        quality,
+        "_async_stock_flight_key",
+        lambda dataset, *_args, **_kwargs: dataset.task_id,
     )
 
     owner_started = threading.Event()
@@ -1235,7 +1345,11 @@ def test_cancel_snapshot_is_synchronized_with_side_finalize(monkeypatch):
     original_tuple = tuple
 
     def controlled_tuple(values):
-        if isinstance(values, set) and values and isinstance(next(iter(values)), Future):
+        if (
+            isinstance(values, set)
+            and values
+            and isinstance(next(iter(values)), Future)
+        ):
             iterator = iter(values)
             first = next(iterator)
             snapshot_entered.set()
@@ -1290,7 +1404,9 @@ def test_cancel_snapshot_is_synchronized_with_side_finalize(monkeypatch):
         finalize_thread = threading.Thread(target=complete_source, daemon=True)
         finalize_thread.start()
         assert finalize_started.wait(2)
-        assert not finalize_finished.wait(0.05), "finalize mutated active views during cancel snapshot"
+        assert not finalize_finished.wait(0.05), (
+            "finalize mutated active views during cancel snapshot"
+        )
         release_snapshot.set()
         cancel_thread.join(timeout=2)
         finalize_thread.join(timeout=2)
@@ -1302,7 +1418,9 @@ def test_cancel_snapshot_is_synchronized_with_side_finalize(monkeypatch):
         release_snapshot.set()
 
 
-def test_async_quality_side_observes_scheduler_fail_closed_without_mutating_local_event(monkeypatch):
+def test_async_quality_side_observes_scheduler_fail_closed_without_mutating_local_event(
+    monkeypatch,
+):
     from concurrent.futures import CancelledError
     from pathlib import Path
 
@@ -1346,7 +1464,9 @@ def test_async_quality_side_observes_scheduler_fail_closed_without_mutating_loca
     def wait_for_fatal(_dataset, *, cancellation_event, **_kwargs):
         observed_tokens.append(cancellation_event)
         compute_started.set()
-        assert cancellation_event.wait(2), "compute did not receive scheduler fatal cancellation"
+        assert cancellation_event.wait(2), (
+            "compute did not receive scheduler fatal cancellation"
+        )
         raise CancelledError("scheduler failed closed")
 
     monkeypatch.setattr(quality, "run_quality_side", wait_for_fatal)
@@ -1456,6 +1576,7 @@ def test_seven_proposals_share_one_stock_then_run_all_patch_sides(monkeypatch):
 
     monkeypatch.setattr(quality, "run_quality_side", fake_side)
     registry = load_quality_registry()
+
     class ObservedScheduler(SharedPairScheduler[str, object]):
         def submit_group(self, *args, **kwargs):
             nonlocal coordination_groups_finished
@@ -1489,6 +1610,7 @@ def test_seven_proposals_share_one_stock_then_run_all_patch_sides(monkeypatch):
             if side == "stock" and phase == "started":
                 all_started.wait(timeout=3)
             phases[index].append((spec["source_dataset"], side, phase))
+
         return record
 
     def run_proposal(index: int) -> None:
@@ -1517,17 +1639,23 @@ def test_seven_proposals_share_one_stock_then_run_all_patch_sides(monkeypatch):
         for caller in callers:
             caller.start()
         assert owner_started.wait(2), "stock owner did not start"
-        assert all_waiters_subscribed.wait(2), "six proposals did not subscribe to stock owner"
+        assert all_waiters_subscribed.wait(2), (
+            "six proposals did not subscribe to stock owner"
+        )
         assert all_coordination_groups_finished.wait(2), (
             "pair coordination callbacks waited on their stock Futures"
         )
-        assert scheduler.active_pair_slots == 0, "stock waiters retained proposal pair slots"
+        assert scheduler.active_pair_slots == 0, (
+            "stock waiters retained proposal pair slots"
+        )
         assert scheduler.active_compute_workers == 1
         with lock:
             assert stock_fits == 1
             assert patch_fits == 0, "patch began before stock had an outcome"
         release_owner.set()
-        assert all_patches_finished.wait(3), "not every proposal reached patch evaluation"
+        assert all_patches_finished.wait(3), (
+            "not every proposal reached patch evaluation"
+        )
         for caller in callers:
             caller.join(timeout=3)
         assert not any(caller.is_alive() for caller in callers)

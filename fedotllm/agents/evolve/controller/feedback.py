@@ -59,9 +59,7 @@ def _runtime_operation_evidence(
         implementation = re.sub(
             r"[^a-z0-9]", "", str(row.get("implementation") or "").lower()
         )
-        operation = re.sub(
-            r"[^a-z0-9]", "", str(row.get("operation") or "").lower()
-        )
+        operation = re.sub(r"[^a-z0-9]", "", str(row.get("operation") or "").lower())
         return bool(
             len(symbol_token) >= 3
             and (
@@ -83,7 +81,9 @@ def _runtime_operation_evidence(
         input_width = (row.get("input") or {}).get("active_width")
         output_width = (row.get("output") or {}).get("active_width")
         error = row.get("error")
-        item = f"{operation}/{implementation} {stage} width={input_width}->{output_width}"
+        item = (
+            f"{operation}/{implementation} {stage} width={input_width}->{output_width}"
+        )
         input_shape = (row.get("input") or {}).get("features_shape")
         output_shape = (row.get("output") or {}).get("predict_shape")
         if output_shape is None:
@@ -131,8 +131,10 @@ def _dev_feedback(
     *,
     stock: dict[str, ScoreResult],
 ) -> str:
-    outcome = "improved" if decision.keep else (
-        "regressed" if decision.reason.startswith("regression") else "neutral"
+    outcome = (
+        "improved"
+        if decision.keep
+        else ("regressed" if decision.reason.startswith("regression") else "neutral")
     )
     changed_deltas = {
         task_id: value
@@ -142,8 +144,7 @@ def _dev_feedback(
     status_changed = {
         task_id
         for task_id, result in patched.items()
-        if task_id in stock
-        and result.status != stock[task_id].status
+        if task_id in stock and result.status != stock[task_id].status
     }
     failure_changed = {
         task_id
@@ -154,19 +155,26 @@ def _dev_feedback(
         != (stock[task_id].detail, _failure_path(stock[task_id]))
     }
     interesting_tasks = set(changed_deltas) | status_changed | failure_changed
-    flow_tasks = status_changed | failure_changed | {
-        task_id for task_id, value in changed_deltas.items() if value < 0
-    }
-    statuses = ", ".join(
-        f"{task_id}:{patched[task_id].status}"
-        for task_id in sorted(interesting_tasks)
-    ) or "none"
+    flow_tasks = (
+        status_changed
+        | failure_changed
+        | {task_id for task_id, value in changed_deltas.items() if value < 0}
+    )
+    statuses = (
+        ", ".join(
+            f"{task_id}:{patched[task_id].status}"
+            for task_id in sorted(interesting_tasks)
+        )
+        or "none"
+    )
     details = ", ".join(
         f"{task_id}:{result.detail[:240]}"
         for task_id, result in sorted(patched.items())
         if task_id in interesting_tasks and result.status != "ok" and result.detail
     )
-    delta = "unknown" if decision.target_delta is None else f"{decision.target_delta:.8g}"
+    delta = (
+        "unknown" if decision.target_delta is None else f"{decision.target_delta:.8g}"
+    )
     feedback = (
         f"outcome={outcome}; DEV_delta={delta}; reason={decision.reason}; "
         f"affected_task_statuses={statuses}"
@@ -210,11 +218,7 @@ def _dev_feedback(
         else "Use this exact previous patch and measured outcome when deciding whether the branch can be corrected."
     )
     return (
-        feedback
-        + "\n\nPrevious evaluated patch:\n"
-        + patch_text
-        + "\n"
-        + instruction
+        feedback + "\n\nPrevious evaluated patch:\n" + patch_text + "\n" + instruction
     )
 
 
@@ -287,7 +291,9 @@ def _test_result_diagnostics(result: TestResult, *, max_chars: int = 5_000) -> s
     )
     output = (result.output or "").strip()
     if output:
-        header += "\npytest_output_tail:\n" + output[-max(0, max_chars - len(header) - 24) :]
+        header += (
+            "\npytest_output_tail:\n" + output[-max(0, max_chars - len(header) - 24) :]
+        )
     return header[-max_chars:]
 
 

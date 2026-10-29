@@ -6,7 +6,10 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 
-SCRIPT = Path(__file__).resolve().parents[2] / "research/evolve/scripts/mlflow_quality_sync.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "research/evolve/scripts/mlflow_quality_sync.py"
+)
 SPEC = importlib.util.spec_from_file_location("mlflow_quality_sync", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 mlflow_quality_sync = importlib.util.module_from_spec(SPEC)
@@ -30,12 +33,18 @@ class _FakeClient:
 
     def search_runs(self, *, filter_string, **_kwargs):
         key = filter_string.split("'", 2)[1]
-        return [run for run in self.runs.values() if run.data.tags.get("controller_key") == key]
+        return [
+            run
+            for run in self.runs.values()
+            if run.data.tags.get("controller_key") == key
+        ]
 
     def create_run(self, *, experiment_id, run_name, tags):
         run_id = f"run-{len(self.runs) + 1}"
         run = SimpleNamespace(
-            info=SimpleNamespace(run_id=run_id, status="RUNNING", experiment_id=experiment_id),
+            info=SimpleNamespace(
+                run_id=run_id, status="RUNNING", experiment_id=experiment_id
+            ),
             data=SimpleNamespace(tags={**tags, "mlflow.runName": run_name}),
         )
         self.runs[run_id] = run
@@ -128,12 +137,18 @@ def test_mlflow_sync_is_idempotent_and_tracks_parent_and_dataset_attempts(monkey
 
     assert first == second == {"parents": 1, "children": 2}
     assert len(fake_client.runs) == 3
-    children = [run for run in fake_client.runs.values() if run.data.tags.get("task_id")]
+    children = [
+        run for run in fake_client.runs.values() if run.data.tags.get("task_id")
+    ]
     assert {run.data.tags["task_id"] for run in children} == {"task-1", "task-2"}
-    completed_child = next(run for run in children if run.data.tags["task_id"] == "task-1")
+    completed_child = next(
+        run for run in children if run.data.tags["task_id"] == "task-1"
+    )
     assert completed_child.info.status == "FINISHED"
     assert completed_child.data.tags["metric"] == "rmse"
-    gain_history = fake_client.get_metric_history(completed_child.info.run_id, "quality_gain")
+    gain_history = fake_client.get_metric_history(
+        completed_child.info.run_id, "quality_gain"
+    )
     assert len(gain_history) == 1
     assert abs(gain_history[0].value - 0.5) < 1e-9
 
@@ -177,8 +192,12 @@ def test_real_mlflow_sqlite_persists_one_parent_and_one_dataset_run(tmp_path):
         for side, score in (("stock", 2.0), ("patch", 1.5))
     ]
 
-    mlflow_quality_sync.sync_quality_to_mlflow(journal, summary, tracking_uri=tracking_uri)
-    mlflow_quality_sync.sync_quality_to_mlflow(journal, summary, tracking_uri=tracking_uri)
+    mlflow_quality_sync.sync_quality_to_mlflow(
+        journal, summary, tracking_uri=tracking_uri
+    )
+    mlflow_quality_sync.sync_quality_to_mlflow(
+        journal, summary, tracking_uri=tracking_uri
+    )
     client = MlflowClient(tracking_uri=tracking_uri)
     experiment = client.get_experiment_by_name("FEDOT quality controller")
     runs = client.search_runs([experiment.experiment_id], max_results=10)

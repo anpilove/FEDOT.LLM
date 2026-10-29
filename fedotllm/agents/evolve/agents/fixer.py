@@ -21,7 +21,12 @@ from fedotllm.agents.evolve.agents.failures import (
     classify_model_failure,
 )
 from fedotllm.agents.evolve.agents.propose import propose_patch
-from fedotllm.agents.evolve.types import MatchSite, PatchCandidate, PatchEdit, SnippetResult
+from fedotllm.agents.evolve.types import (
+    MatchSite,
+    PatchCandidate,
+    PatchEdit,
+    SnippetResult,
+)
 
 
 _OBSERVATION_PREFIX = "EVOLVE_OBSERVATION="
@@ -277,7 +282,11 @@ def _regression_scope_diagnostics(
 def _edits_json(edits: list[PatchEdit]) -> str:
     return json.dumps(
         [
-            {"file_path": edit.file_path, "old_code": edit.old_code, "new_code": edit.new_code}
+            {
+                "file_path": edit.file_path,
+                "old_code": edit.old_code,
+                "new_code": edit.new_code,
+            }
             for edit in edits
         ],
         indent=2,
@@ -302,7 +311,9 @@ def fix_lead(
     ctx = context_from_lead(lead, checkout, max_chars=10_000)
     source_context = build_fedot_context(checkout, lead.file_path)
     if source_context is not None:
-        ctx += "\n\nFEDOT architecture context:\n" + source_context.render(max_chars=3_500)
+        ctx += "\n\nFEDOT architecture context:\n" + source_context.render(
+            max_chars=3_500
+        )
     if verification.strip():
         ctx += f"\n\nIndependent verifier result:\n{verification.strip()}\n"
     if feedback.strip():
@@ -316,11 +327,15 @@ def fix_lead(
 
     def candidate_note(candidate: PatchCandidate, name: str, text: str) -> None:
         if workspace is not None:
-            write_artifact(workspace / "candidates" / candidate.candidate_id, name, text)
+            write_artifact(
+                workspace / "candidates" / candidate.candidate_id, name, text
+            )
 
     def candidate_payload_json(candidate: PatchCandidate, status: str) -> str:
         return json.dumps(
-            _candidate_payload(candidate, lead=lead, hypothesis_id=hypothesis_id, status=status),
+            _candidate_payload(
+                candidate, lead=lead, hypothesis_id=hypothesis_id, status=status
+            ),
             ensure_ascii=False,
             indent=2,
         )
@@ -403,13 +418,19 @@ def fix_lead(
                     f"behavior_probe_preflight_invalid: {probe_diagnostic}"
                 )
                 candidate_note(candidate, "behavior_probe.py", candidate.behavior_probe)
-                candidate_note(candidate, "probe_preflight_failed.txt", probe_diagnostic)
+                candidate_note(
+                    candidate, "probe_preflight_failed.txt", probe_diagnostic
+                )
                 # Preserve the already useful source proposal before the
                 # optional probe-only LLM call. A provider timeout must not
                 # erase a patch that can be replayed and validated offline.
-                candidate_note(candidate, "frozen_source_patch.txt", _frozen_patch_text(candidate))
                 candidate_note(
-                    candidate, "candidate.json", candidate_payload_json(candidate, "awaiting_probe_repair")
+                    candidate, "frozen_source_patch.txt", _frozen_patch_text(candidate)
+                )
+                candidate_note(
+                    candidate,
+                    "candidate.json",
+                    candidate_payload_json(candidate, "awaiting_probe_repair"),
                 )
                 try:
                     repaired_probe = repair_behavior_probe(
@@ -436,11 +457,17 @@ def fix_lead(
                     raise failure from exc
                 if repaired_probe:
                     candidate.behavior_probe = repaired_probe
-                    candidate_note(candidate, "behavior_probe_repaired.py", repaired_probe)
+                    candidate_note(
+                        candidate, "behavior_probe_repaired.py", repaired_probe
+                    )
                 else:
                     note("fix_status.txt", "behavior_probe_repair_failed")
                     return None
-        candidate_note(candidate, "candidate.json", candidate_payload_json(candidate, "ready_to_apply"))
+        candidate_note(
+            candidate,
+            "candidate.json",
+            candidate_payload_json(candidate, "ready_to_apply"),
+        )
         candidate_note(candidate, "rationale.txt", candidate.rationale)
         candidate_note(candidate, "contract.txt", candidate.contract)
         candidate_note(candidate, "behavior_probe.py", candidate.behavior_probe)
@@ -449,7 +476,9 @@ def fix_lead(
         candidate_note(candidate, "edits.json", _edits_json(candidate.edits))
         if candidate.proposed_test_edits:
             candidate_note(
-                candidate, "proposed_test_edits.json", _edits_json(candidate.proposed_test_edits)
+                candidate,
+                "proposed_test_edits.json",
+                _edits_json(candidate.proposed_test_edits),
             )
         diagnostics = _regression_scope_diagnostics(checkout, lead, candidate, feedback)
         try:
@@ -462,7 +491,9 @@ def fix_lead(
             return None
         if applied:
             candidate_note(
-                candidate, "candidate.json", candidate_payload_json(candidate, "applied_awaiting_decision")
+                candidate,
+                "candidate.json",
+                candidate_payload_json(candidate, "applied_awaiting_decision"),
             )
             note("fix_status.txt", "applied")
             return candidate

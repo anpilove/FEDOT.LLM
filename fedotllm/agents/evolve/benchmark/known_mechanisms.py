@@ -48,7 +48,10 @@ def combined_known_mechanisms(findings_path: Path | None) -> list[dict[str, Any]
         confirmed_hypotheses_from_findings,
     )
 
-    rows = [*load_known_mechanisms(), *confirmed_hypotheses_from_findings(findings_path)]
+    rows = [
+        *load_known_mechanisms(),
+        *confirmed_hypotheses_from_findings(findings_path),
+    ]
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in rows:

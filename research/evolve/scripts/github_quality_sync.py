@@ -13,7 +13,13 @@ _ISSUE_URL = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:/.
 
 
 def _issue_body(candidates: list[tuple[str, dict[str, Any]]], generated_at: str) -> str:
-    lines = [MARKER, "## FEDOT: проверка предложений улучшений", "", f"Обновлено: {generated_at}", ""]
+    lines = [
+        MARKER,
+        "## FEDOT: проверка предложений улучшений",
+        "",
+        f"Обновлено: {generated_at}",
+        "",
+    ]
     for candidate_id, meta in candidates:
         lines.extend(
             [
@@ -60,7 +66,12 @@ def sync_issue_comments(summary: dict[str, Any]) -> dict[str, Any]:
         return {"created": 0, "updated": 0, "skipped": 0, "reason": "no_issue_urls"}
     gh = shutil.which("gh")
     if not gh:
-        return {"created": 0, "updated": 0, "skipped": len(grouped), "reason": "gh_not_installed"}
+        return {
+            "created": 0,
+            "updated": 0,
+            "skipped": len(grouped),
+            "reason": "gh_not_installed",
+        }
     auth = subprocess.run(
         [gh, "auth", "status", "--hostname", "github.com"],
         capture_output=True,
@@ -68,7 +79,12 @@ def sync_issue_comments(summary: dict[str, Any]) -> dict[str, Any]:
         check=False,
     )
     if auth.returncode != 0:
-        return {"created": 0, "updated": 0, "skipped": len(grouped), "reason": "gh_unauthenticated"}
+        return {
+            "created": 0,
+            "updated": 0,
+            "skipped": len(grouped),
+            "reason": "gh_unauthenticated",
+        }
 
     counts = {"created": 0, "updated": 0, "skipped": 0}
     for issue_url, candidates in grouped.items():
@@ -79,7 +95,14 @@ def sync_issue_comments(summary: dict[str, Any]) -> dict[str, Any]:
         owner, repo, number = match.groups()
         endpoint = f"repos/{owner}/{repo}/issues/{number}/comments"
         listed = subprocess.run(
-            [gh, "api", "--paginate", endpoint, "--jq", f'.[] | select(.body | contains("{MARKER}")) | .id'],
+            [
+                gh,
+                "api",
+                "--paginate",
+                endpoint,
+                "--jq",
+                f'.[] | select(.body | contains("{MARKER}")) | .id',
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -87,11 +110,23 @@ def sync_issue_comments(summary: dict[str, Any]) -> dict[str, Any]:
         if listed.returncode != 0:
             counts["skipped"] += 1
             continue
-        ids = [line.strip() for line in listed.stdout.splitlines() if line.strip().isdigit()]
+        ids = [
+            line.strip()
+            for line in listed.stdout.splitlines()
+            if line.strip().isdigit()
+        ]
         body = _issue_body(candidates, str(summary.get("generated_at") or "unknown"))
         if ids:
             result = subprocess.run(
-                [gh, "api", "--method", "PATCH", f"repos/{owner}/{repo}/issues/comments/{ids[0]}", "-f", f"body={body}"],
+                [
+                    gh,
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{owner}/{repo}/issues/comments/{ids[0]}",
+                    "-f",
+                    f"body={body}",
+                ],
                 capture_output=True,
                 text=True,
                 check=False,

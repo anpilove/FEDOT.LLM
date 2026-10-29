@@ -18,9 +18,12 @@ def _run_original_sitecustomize():
     if getattr(sys, guard_name, False):
         return
     bootstrap_directory = os.path.realpath(os.path.dirname(__file__))
-    search_path = [entry for entry in sys.path
-                   if not isinstance(entry, str)
-                   or os.path.realpath(entry or os.curdir) != bootstrap_directory]
+    search_path = [
+        entry
+        for entry in sys.path
+        if not isinstance(entry, str)
+        or os.path.realpath(entry or os.curdir) != bootstrap_directory
+    ]
     spec = PathFinder.find_spec("sitecustomize", search_path)
     if spec is None or spec.loader is None:
         return
@@ -42,12 +45,17 @@ _run_original_sitecustomize()
 
 if os.environ.get("EVOLVE_TRACE_DIRECTORY"):
     try:
-        from fedotllm.agents.evolve.evaluation.child_traces import install_child_trace_from_environment
+        from fedotllm.agents.evolve.evaluation.child_traces import (
+            install_child_trace_from_environment,
+        )
 
         install_child_trace_from_environment()
     except Exception as exc:
         try:
-            print(f"child stack diagnostic bootstrap warning: {type(exc).__name__}: {exc}",
-                  file=sys.stderr, flush=True)
+            print(
+                f"child stack diagnostic bootstrap warning: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         except Exception:
             pass

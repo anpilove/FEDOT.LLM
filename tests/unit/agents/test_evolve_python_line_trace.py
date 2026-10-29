@@ -3,7 +3,6 @@ import importlib.util
 import json
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -33,8 +32,13 @@ def test_line_samples_pin_a_blocked_callsite_to_fedot_source(tmp_path, monkeypat
         fedot_root,
         output,
         interval_seconds=0.02,
-        context={"candidate_id": "candidate-1", "evaluation_id": "eval-1", "fold_id": 2},
+        context={
+            "candidate_id": "candidate-1",
+            "evaluation_id": "eval-1",
+            "fold_id": 2,
+        },
     ) as status:
+
         def blocked_with_identity():
             module.blocked(release)
 
@@ -45,15 +49,25 @@ def test_line_samples_pin_a_blocked_callsite_to_fedot_source(tmp_path, monkeypat
         worker.join(timeout=1)
 
     assert status["enabled"] is True
-    records = [json.loads(line) for line in (output / f"python-lines-{status['pid']}.jsonl").read_text().splitlines()]
-    blocked_lines = [record for record in records if any(
-        frame["function"] == "blocked" and frame["filename"] == str(source_file)
-        for frame in record["fedot_frames"]
-    )]
+    records = [
+        json.loads(line)
+        for line in (output / f"python-lines-{status['pid']}.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    blocked_lines = [
+        record
+        for record in records
+        if any(
+            frame["function"] == "blocked" and frame["filename"] == str(source_file)
+            for frame in record["fedot_frames"]
+        )
+    ]
     assert blocked_lines, "the sampled trace did not retain the FEDOT call stack"
     assert any(
         frame["function"] == "blocked" and frame["lineno"] == 4
-        for record in blocked_lines for frame in record["fedot_frames"]
+        for record in blocked_lines
+        for frame in record["fedot_frames"]
     ), "the trace did not identify the blocked Python call line"
     assert any(
         record.get("candidate_id") == "candidate-1"
@@ -79,16 +93,27 @@ def test_line_sampling_does_not_swallow_worker_exceptions(tmp_path):
 
 def test_line_snapshot_never_imports_fedot_context(monkeypatch):
     lock = threading.RLock()
-    states = {17: {"thread_name": "fedot-import", "frames": [{
-        "frame_id": 1, "filename": "/fedot/api/main.py", "function": "<module>",
-        "lineno": 10,
-    }]}}
+    states = {
+        17: {
+            "thread_name": "fedot-import",
+            "frames": [
+                {
+                    "frame_id": 1,
+                    "filename": "/fedot/api/main.py",
+                    "function": "<module>",
+                    "lineno": 10,
+                }
+            ],
+        }
+    }
 
     original_import = builtins.__import__
 
     def reject_fedot_context_import(name, *args, **kwargs):
         if name == "fedot.utilities.evaluation_trace":
-            raise AssertionError("line sampler must not import FEDOT from a sampling thread")
+            raise AssertionError(
+                "line sampler must not import FEDOT from a sampling thread"
+            )
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", reject_fedot_context_import)

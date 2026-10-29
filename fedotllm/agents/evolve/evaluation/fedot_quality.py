@@ -63,7 +63,9 @@ class StockCacheWaitTimeout(TimeoutError):
     def __init__(self, wait_kind: str, elapsed_seconds: float):
         self.wait_kind = wait_kind
         self.elapsed_seconds = elapsed_seconds
-        super().__init__(f"{wait_kind} wait exceeded side deadline after {elapsed_seconds:.3f}s")
+        super().__init__(
+            f"{wait_kind} wait exceeded side deadline after {elapsed_seconds:.3f}s"
+        )
 
 
 def worker_artifact_paths(
@@ -82,45 +84,74 @@ def worker_artifact_paths(
     if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
         raise ValueError("attempt must be a positive integer")
     root_path = Path(
-        root if root is not None else os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent")
+        root
+        if root is not None
+        else os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent")
     ).expanduser()
     artifact_root = root_path
     if worker_invocation_id is not None:
-        if len(worker_invocation_id) != 32 or not all(c in "0123456789abcdef" for c in worker_invocation_id):
-            raise ValueError("worker_invocation_id must be a 32-character hexadecimal nonce")
+        if len(worker_invocation_id) != 32 or not all(
+            c in "0123456789abcdef" for c in worker_invocation_id
+        ):
+            raise ValueError(
+                "worker_invocation_id must be a 32-character hexadecimal nonce"
+            )
         root_path = root_path / worker_invocation_id
     attempt_id = f"{proposal_id or 'quality'}:{task_id}:{side}:{attempt}"
     token = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()[:10]
     stem = f"quality-out-{task_id}-{side}-{token}"
     paths = {
         "attempt_id": attempt_id,
-        "worker_spec_path": str(root_path / f"quality-spec-{task_id}-{side}-{token}.json"),
+        "worker_spec_path": str(
+            root_path / f"quality-spec-{task_id}-{side}-{token}.json"
+        ),
         "worker_result_path": str(root_path / f"{stem}.json"),
         "timeout_manifest_path": str(root_path / f"{stem}.timeout.json"),
         "worker_log_path": str(root_path / f"quality-log-{task_id}-{side}-{token}.log"),
         "stage_status_path": str(root_path / f"{stem}.stages.json"),
         "stack_trace_path": str(root_path / f"{stem}.stacks.txt"),
         "process_trace_dir": str(root_path / f"{stem}.process-traces"),
-        "process_trace_manifest_path": str(root_path / f"{stem}.process-traces" / "manifest.jsonl"),
+        "process_trace_manifest_path": str(
+            root_path / f"{stem}.process-traces" / "manifest.jsonl"
+        ),
     }
     if worker_invocation_id is not None:
-        paths.update(worker_invocation_id=worker_invocation_id, artifact_root=str(artifact_root))
+        paths.update(
+            worker_invocation_id=worker_invocation_id, artifact_root=str(artifact_root)
+        )
     if os.environ.get("EVOLVE_QUALITY_TRACE_FEDOT") == "1":
         paths["fedot_trace_dir"] = str(root_path / f"{stem}.fedot-traces")
     return paths
 
 
-
 def create_worker_artifact_plan(
-    task_id: str, side: str, proposal_id: str | None, attempt: int,
-    *, artifact_root: Path | str | None = None,
+    task_id: str,
+    side: str,
+    proposal_id: str | None,
+    attempt: int,
+    *,
+    artifact_root: Path | str | None = None,
 ) -> dict[str, str]:
     """Reserve an invocation identity before journaling or scheduling a worker."""
 
-    root = Path(artifact_root if artifact_root is not None else
-                os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent")).expanduser().resolve()
-    return worker_artifact_paths(task_id, side, proposal_id, attempt, root=root,
-                                 worker_invocation_id=uuid.uuid4().hex)
+    root = (
+        Path(
+            artifact_root
+            if artifact_root is not None
+            else os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent")
+        )
+        .expanduser()
+        .resolve()
+    )
+    return worker_artifact_paths(
+        task_id,
+        side,
+        proposal_id,
+        attempt,
+        root=root,
+        worker_invocation_id=uuid.uuid4().hex,
+    )
+
 
 def _check_cancellation(cancellation_event: threading.Event | None) -> None:
     if cancellation_event is not None and cancellation_event.is_set():
@@ -199,7 +230,9 @@ def _async_stock_flight_key(
     python: str,
     stock_cache_root: Path | str | None = None,
 ) -> str:
-    cache_path = _stock_cache_path(dataset, registry, n_jobs, stock_cache_root=stock_cache_root)
+    cache_path = _stock_cache_path(
+        dataset, registry, n_jobs, stock_cache_root=stock_cache_root
+    )
     identity = stock_cache_identity(
         dataset,
         registry,
@@ -226,7 +259,15 @@ def bind_stock_cache(path: Path | str | None) -> Path:
 
 
 def _stock_cache_root(root: Path | str | None = None) -> Path:
-    return Path(root if root is not None else os.environ.get(STOCK_CACHE_ENV, str(DEFAULT_STOCK_CACHE))).expanduser().resolve()
+    return (
+        Path(
+            root
+            if root is not None
+            else os.environ.get(STOCK_CACHE_ENV, str(DEFAULT_STOCK_CACHE))
+        )
+        .expanduser()
+        .resolve()
+    )
 
 
 def _safe_cache_name(name: str) -> str:
@@ -286,16 +327,23 @@ def stock_cache_identity(
         "python_executable": str(Path(sys.executable).resolve()),
         "platform": f"{platform.system()}-{platform.machine()}",
         "runtime_versions": _runtime_versions(),
-        "worker_runtime": worker_runtime if worker_runtime is not None else interpreter_identity(
-            Path.cwd(), executable=sys.executable
-        ),
+        "worker_runtime": worker_runtime
+        if worker_runtime is not None
+        else interpreter_identity(Path.cwd(), executable=sys.executable),
         "data_sha256": str(dataset.data_sha256 or ""),
     }
 
 
 def _runtime_versions() -> dict[str, str]:
     versions = {}
-    for package in ("fedot", "numpy", "pandas", "scikit-learn", "statsmodels", "giotto-ph"):
+    for package in (
+        "fedot",
+        "numpy",
+        "pandas",
+        "scikit-learn",
+        "statsmodels",
+        "giotto-ph",
+    ):
         try:
             versions[package] = version(package)
         except PackageNotFoundError:
@@ -326,7 +374,13 @@ def _source_sha256(checkout_path: str) -> str:
         return ""
 
 
-def _stock_cache_path(dataset: QualityDataset, registry: QualityRegistry, n_jobs: int, *, stock_cache_root: Path | str | None = None) -> Path:
+def _stock_cache_path(
+    dataset: QualityDataset,
+    registry: QualityRegistry,
+    n_jobs: int,
+    *,
+    stock_cache_root: Path | str | None = None,
+) -> Path:
     name = f"{registry.identity}__{dataset.task_id}__n{n_jobs}__s{registry.seed}.json"
     return _stock_cache_root(stock_cache_root) / _safe_cache_name(name)
 
@@ -398,7 +452,9 @@ def _join_stock_flight(
                     "shared stock fit", time.monotonic() - wait_started
                 )
             try:
-                result = future.result(timeout=0.1 if remaining is None else min(0.1, remaining))
+                result = future.result(
+                    timeout=0.1 if remaining is None else min(0.1, remaining)
+                )
                 observations = dict(result.metric_observations or {})
                 observations["singleflight_shared"] = True
                 return replace(result, metric_observations=observations)
@@ -442,16 +498,21 @@ def _iter_stock_cache_paths(
     dataset: QualityDataset,
     registry: QualityRegistry,
     n_jobs: int,
-    *, stock_cache_root: Path | str | None = None,
+    *,
+    stock_cache_root: Path | str | None = None,
 ) -> list[Path]:
     """Return only cache entries from the exact per-task compute profile."""
 
-    exact = _stock_cache_path(dataset, registry, n_jobs, stock_cache_root=stock_cache_root)
+    exact = _stock_cache_path(
+        dataset, registry, n_jobs, stock_cache_root=stock_cache_root
+    )
     return [exact] if exact.is_file() else []
 
 
 def _identity_matches(payload: dict, expected: dict) -> bool:
-    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    identity = (
+        payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    )
     blob = {**payload, **identity}
     # Old cache rows without the full identity are history only, never a hit.
     if not identity:
@@ -478,7 +539,9 @@ def _load_stock_cache(
         n_jobs=n_jobs,
         worker_runtime=worker_runtime,
     )
-    for path in _iter_stock_cache_paths(dataset, registry, n_jobs, stock_cache_root=stock_cache_root):
+    for path in _iter_stock_cache_paths(
+        dataset, registry, n_jobs, stock_cache_root=stock_cache_root
+    ):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -519,8 +582,11 @@ def _store_stock_cache(
     worker_runtime: str | None = None,
     stock_cache_root: Path | str | None = None,
 ) -> None:
-    if (result.status != "ok" or not math.isfinite(float(result.score))
-            or (result.metric_observations or {}).get("metric_valid") is not True):
+    if (
+        result.status != "ok"
+        or not math.isfinite(float(result.score))
+        or (result.metric_observations or {}).get("metric_valid") is not True
+    ):
         return
     root = _stock_cache_root(stock_cache_root)
     root.mkdir(parents=True, exist_ok=True)
@@ -553,7 +619,10 @@ def _store_stock_cache(
         "registry_identity": identity["registry_identity"],
         "fedot_commit": identity["fedot_commit"],
     }
-    write_json_atomic(_stock_cache_path(dataset, registry, n_jobs, stock_cache_root=stock_cache_root), payload)
+    write_json_atomic(
+        _stock_cache_path(dataset, registry, n_jobs, stock_cache_root=stock_cache_root),
+        payload,
+    )
 
 
 def _stage_status_observations(path: Path) -> dict:
@@ -565,13 +634,30 @@ def _stage_status_observations(path: Path) -> dict:
         if not isinstance(stage_status, dict):
             raise ValueError("stage status must be a JSON object")
         for key in (
-            "failed_stage", "last_stage", "active_stage", "stage_timings", "event",
-            "updated_at", "stage_started_at", "stage_elapsed_seconds",
-            "last_worker_output_line", "last_worker_output_at",
-            "last_optimizer_event_at", "last_fedot_log_line", "last_fedot_log_at",
-            "fedot_phase", "fedot_phase_at", "fedot_phase_line",
-            "stack_trace_path", "fedot_trace_dir",
-            "proposal_id", "attempt_id", "task_id", "source_dataset", "side", "attempt",
+            "failed_stage",
+            "last_stage",
+            "active_stage",
+            "stage_timings",
+            "event",
+            "updated_at",
+            "stage_started_at",
+            "stage_elapsed_seconds",
+            "last_worker_output_line",
+            "last_worker_output_at",
+            "last_optimizer_event_at",
+            "last_fedot_log_line",
+            "last_fedot_log_at",
+            "fedot_phase",
+            "fedot_phase_at",
+            "fedot_phase_line",
+            "stack_trace_path",
+            "fedot_trace_dir",
+            "proposal_id",
+            "attempt_id",
+            "task_id",
+            "source_dataset",
+            "side",
+            "attempt",
         ):
             if key in stage_status:
                 target = {
@@ -584,7 +670,9 @@ def _stage_status_observations(path: Path) -> dict:
     return observations
 
 
-def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str) -> ScoreResult:
+def _score_from_payload(
+    task_id: str, payload: dict, *, env_hash: str, cmd: str
+) -> ScoreResult:
     if not isinstance(payload, dict):
         raise ValueError("worker result must be a JSON object")
     observations = payload.get("metric_observations")
@@ -593,7 +681,13 @@ def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str)
     if not isinstance(observations, dict):
         raise ValueError("metric_observations must be a JSON object")
     observations = dict(observations)
-    for key in ("failure_kind", "failed_stage", "last_stage", "stage_timings", "stage_status_path"):
+    for key in (
+        "failure_kind",
+        "failed_stage",
+        "last_stage",
+        "stage_timings",
+        "stage_status_path",
+    ):
         if key in payload:
             observations[key] = payload[key]
     status = payload.get("status")
@@ -622,8 +716,10 @@ def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str)
     if not failure_kind and status == "crash":
         failed_stage = str(payload.get("failed_stage") or "")
         failure_kind = (
-            "scoring_error" if failed_stage in {"predict", "metrics"}
-            else "fedot_fit_error" if failed_stage == "fit"
+            "scoring_error"
+            if failed_stage in {"predict", "metrics"}
+            else "fedot_fit_error"
+            if failed_stage == "fit"
             else "worker_error"
         )
     if failure_kind:
@@ -676,7 +772,9 @@ def run_quality_side(
     stock_cache_root = _stock_cache_root(stock_cache_root)
     side_timeout = float(registry.timeout_seconds)
     side_started = time.monotonic() if _side_started is None else _side_started
-    side_deadline = side_started + side_timeout if _side_deadline is None else _side_deadline
+    side_deadline = (
+        side_started + side_timeout if _side_deadline is None else _side_deadline
+    )
     if isinstance(dataset, str):
         dataset = get_dataset(dataset, registry)
     spec = job_spec(dataset, n_jobs=n_jobs, registry=registry)
@@ -689,20 +787,26 @@ def run_quality_side(
     python = python_executable or fedot_python(checkout)
     worker_runtime = interpreter_identity(checkout, executable=python)
     cache_path = (
-        _stock_cache_path(dataset, registry, spec["n_jobs"], stock_cache_root=stock_cache_root) if side == "stock" else None
+        _stock_cache_path(
+            dataset, registry, spec["n_jobs"], stock_cache_root=stock_cache_root
+        )
+        if side == "stock"
+        else None
     )
     if side == "stock" and cache_path is not None and not _stock_lock_held:
-        identity_key = hashlib.sha256(json.dumps(
-            stock_cache_identity(
-                dataset,
-                registry,
-                fedot_commit=fedot_commit,
-                source_sha256=source_sha256,
-                n_jobs=spec["n_jobs"],
-                worker_runtime=worker_runtime,
-            ),
-            sort_keys=True,
-        ).encode()).hexdigest()
+        identity_key = hashlib.sha256(
+            json.dumps(
+                stock_cache_identity(
+                    dataset,
+                    registry,
+                    fedot_commit=fedot_commit,
+                    source_sha256=source_sha256,
+                    n_jobs=spec["n_jobs"],
+                    worker_runtime=worker_runtime,
+                ),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
 
         def compute_stock() -> ScoreResult:
             with _stock_cache_singleflight(
@@ -722,7 +826,8 @@ def run_quality_side(
                     proposal_id=proposal_id,
                     attempt=attempt,
                     evaluation_identity=evaluation_identity,
-                    artifact_root=artifact_root, stock_cache_root=stock_cache_root,
+                    artifact_root=artifact_root,
+                    stock_cache_root=stock_cache_root,
                     worker_paths=worker_paths,
                     _stock_lock_held=True,
                     _side_deadline=side_deadline,
@@ -759,11 +864,17 @@ def run_quality_side(
             stock_cache_root=stock_cache_root,
         )
         if cached is not None:
-            hit_path = (cached.metric_observations or {}).get("cache_path") or cache_path
+            hit_path = (cached.metric_observations or {}).get(
+                "cache_path"
+            ) or cache_path
             print(f"quality stock cache-hit {dataset.task_id} {hit_path}", flush=True)
             return cached
-    paths = dict(worker_paths) if worker_paths is not None else create_worker_artifact_plan(
-        dataset.task_id, side, proposal_id, attempt, artifact_root=artifact_root
+    paths = (
+        dict(worker_paths)
+        if worker_paths is not None
+        else create_worker_artifact_plan(
+            dataset.task_id, side, proposal_id, attempt, artifact_root=artifact_root
+        )
     )
     if not paths.get("worker_invocation_id"):
         raise ValueError("new workers require a worker_invocation_id")
@@ -771,40 +882,51 @@ def run_quality_side(
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.mkdir()  # A physical invocation is never allowed to reuse a directory.
     from fedotllm.agents.evolve.execution.storage_guard import require_storage
+
     require_storage(tmp)
     spec_path = Path(paths["worker_spec_path"])
     out_path = Path(paths["worker_result_path"])
     log_path = Path(paths["worker_log_path"])
-    spec.update({
-        "proposal_id": proposal_id,
-        "worker_invocation_id": paths["worker_invocation_id"],
-        "attempt": attempt,
-        "attempt_id": f"{proposal_id or 'quality'}:{dataset.task_id}:{side}:{attempt}",
-        "registry_identity": registry.identity,
-        "worker_log_path": str(log_path),
-        "stack_trace_path": paths["stack_trace_path"],
-    })
+    spec.update(
+        {
+            "proposal_id": proposal_id,
+            "worker_invocation_id": paths["worker_invocation_id"],
+            "attempt": attempt,
+            "attempt_id": f"{proposal_id or 'quality'}:{dataset.task_id}:{side}:{attempt}",
+            "registry_identity": registry.identity,
+            "worker_log_path": str(log_path),
+            "stack_trace_path": paths["stack_trace_path"],
+        }
+    )
     fedot_trace_interval = None
     if os.environ.get("EVOLVE_QUALITY_TRACE_FEDOT") == "1":
         fedot_trace_interval = float(
             os.environ.get("EVOLVE_QUALITY_TRACE_FEDOT_INTERVAL_SECONDS", "15")
         )
         if not math.isfinite(fedot_trace_interval) or fedot_trace_interval < 0.05:
-            raise ValueError("FEDOT trace interval must be finite and at least 0.05 seconds")
-        spec.update({
-            "fedot_trace_dir": paths["fedot_trace_dir"],
-            "fedot_trace_interval_seconds": fedot_trace_interval,
-        })
+            raise ValueError(
+                "FEDOT trace interval must be finite and at least 0.05 seconds"
+            )
+        spec.update(
+            {
+                "fedot_trace_dir": paths["fedot_trace_dir"],
+                "fedot_trace_interval_seconds": fedot_trace_interval,
+            }
+        )
     if os.environ.get("EVOLVE_QUALITY_TRACE_PROCESSES") == "1":
         interval = float(os.environ.get("EVOLVE_QUALITY_TRACE_INTERVAL_SECONDS", "15"))
         if not math.isfinite(interval) or interval < 0.05:
-            raise ValueError("diagnostic stack interval must be finite and at least 0.05 seconds")
-        spec.update({
-            "process_trace_dir": paths["process_trace_dir"],
-            "process_trace_manifest_path": paths["process_trace_manifest_path"],
-            "process_trace_interval_seconds": interval,
-            "stack_dump_interval_seconds": interval,
-        })
+            raise ValueError(
+                "diagnostic stack interval must be finite and at least 0.05 seconds"
+            )
+        spec.update(
+            {
+                "process_trace_dir": paths["process_trace_dir"],
+                "process_trace_manifest_path": paths["process_trace_manifest_path"],
+                "process_trace_interval_seconds": interval,
+                "stack_dump_interval_seconds": interval,
+            }
+        )
     spec_path.write_text(json.dumps(spec, sort_keys=True), encoding="utf-8")
     cmd = [
         python,
@@ -839,11 +961,13 @@ def run_quality_side(
         if os.environ.get(key)
     }
     if fedot_trace_interval is not None:
-        extra.update({
-            "FEDOT_TRACE_DIR": paths["fedot_trace_dir"],
-            "FEDOT_TRACE_RUN_ID": paths["attempt_id"],
-            "FEDOT_TRACE_INTERVAL_SECONDS": str(fedot_trace_interval),
-        })
+        extra.update(
+            {
+                "FEDOT_TRACE_DIR": paths["fedot_trace_dir"],
+                "FEDOT_TRACE_RUN_ID": paths["attempt_id"],
+                "FEDOT_TRACE_INTERVAL_SECONDS": str(fedot_trace_interval),
+            }
+        )
     extra["EVOLVE_AGENT_TMP"] = str(tmp)
     extra[STOCK_CACHE_ENV] = str(stock_cache_root)
     extra["FEDOT_EVOLVE_JOB_ID"] = paths["attempt_id"]
@@ -864,18 +988,28 @@ def run_quality_side(
         f"cache={cache_path} log={log_path}",
         flush=True,
     )
-    physical_observations = {"worker_paths": dict(paths),
-                             "worker_invocation_id": paths["worker_invocation_id"]}
+    physical_observations = {
+        "worker_paths": dict(paths),
+        "worker_invocation_id": paths["worker_invocation_id"],
+    }
+
     def check_storage():
         try:
             require_storage(tmp)
         except OSError as exc:
             if hasattr(exc, "add_note"):
-                exc.add_note(f"dataset={dataset.task_id}, side={side}, worker_log={log_path}, "
-                             f"stage_status={out_path.with_suffix('.stages.json')}")
+                exc.add_note(
+                    f"dataset={dataset.task_id}, side={side}, worker_log={log_path}, "
+                    f"stage_status={out_path.with_suffix('.stages.json')}"
+                )
             raise
+
     _check_cancellation(cancellation_event)
-    options = {"cancellation_event": cancellation_event} if cancellation_event is not None else {}
+    options = (
+        {"cancellation_event": cancellation_event}
+        if cancellation_event is not None
+        else {}
+    )
     options["resource_check"] = check_storage
     if on_worker_spawned is not None:
         options["on_spawned"] = on_worker_spawned
@@ -896,18 +1030,31 @@ def run_quality_side(
         flush=True,
     )
     proc = run_worker(
-        cmd, cwd=repo_root(), env=env, timeout=worker_timeout,
-        watchdog_timeout=watchdog_timeout, log_path=log_path, **options,
+        cmd,
+        cwd=repo_root(),
+        env=env,
+        timeout=worker_timeout,
+        watchdog_timeout=watchdog_timeout,
+        log_path=log_path,
+        **options,
     )
     elapsed_seconds = max(0.0, time.monotonic() - worker_started)
     if proc.cancelled:
         raise CancelledError("quality worker cancelled after sibling failure")
     _check_cancellation(cancellation_event)
     log_text = proc.stdout
-    from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError, storage_failure_text
+    from fedotllm.agents.evolve.execution.storage_guard import (
+        StorageCapacityError,
+        storage_failure_text,
+    )
+
     if storage_failure_text(log_text):
-        raise StorageCapacityError(28, f"worker storage failure: dataset={dataset.task_id}, "
-                                   f"side={side}, log={log_path}", str(tmp))
+        raise StorageCapacityError(
+            28,
+            f"worker storage failure: dataset={dataset.task_id}, "
+            f"side={side}, log={log_path}",
+            str(tmp),
+        )
     if proc.timed_out:
         timeout_kind = proc.timeout_kind or "task_timeout"
         timeout_limit = (
@@ -939,7 +1086,8 @@ def run_quality_side(
             "fedot_trace_dir": stage_observations.get("fedot_trace_dir")
             or spec.get("fedot_trace_dir"),
             "stack_trace_artifact_state": (
-                "present" if Path(spec.get("stack_trace_path", "")).is_file()
+                "present"
+                if Path(spec.get("stack_trace_path", "")).is_file()
                 else "not_written"
             ),
             "timeout_seconds": registry.timeout_seconds,
@@ -1048,57 +1196,80 @@ def run_quality_side(
             "worker_invocation_id": paths["worker_invocation_id"],
         }
         mismatched_fields = [
-            key for key, expected in expected_identity.items()
+            key
+            for key, expected in expected_identity.items()
             if payload.get(key) != expected
             or (key == "attempt" and type(payload.get(key)) is not int)
         ]
         if mismatched_fields:
             observations = payload.get("metric_observations")
             observations = dict(observations) if isinstance(observations, dict) else {}
-            observations.update({
-                "metric_valid": False,
-                "failure_kind": "worker_identity_mismatch",
-                "identity_mismatch_fields": mismatched_fields,
-            })
+            observations.update(
+                {
+                    "metric_valid": False,
+                    "failure_kind": "worker_identity_mismatch",
+                    "identity_mismatch_fields": mismatched_fields,
+                }
+            )
             payload = dict(
                 status="invalid",
                 score=None,
-                detail=("worker result identity mismatch: "
-                        + ", ".join(mismatched_fields)),
+                detail=(
+                    "worker result identity mismatch: " + ", ".join(mismatched_fields)
+                ),
                 failure_kind="worker_identity_mismatch",
                 metric_observations=observations,
             )
 
         if payload.get("failure_kind") == "storage_error" or storage_failure_text(
-            "\n".join(str(payload.get(key) or "")
-                      for key in ("detail", "traceback", "log_tail"))
+            "\n".join(
+                str(payload.get(key) or "")
+                for key in ("detail", "traceback", "log_tail")
+            )
         ):
-            raise StorageCapacityError(28, f"structured worker storage failure: "
-                f"dataset={dataset.task_id}, side={side}, log={log_path}, result={out_path}", str(tmp))
+            raise StorageCapacityError(
+                28,
+                f"structured worker storage failure: "
+                f"dataset={dataset.task_id}, side={side}, log={log_path}, result={out_path}",
+                str(tmp),
+            )
         if proc.returncode != 0 and payload.get("status") == "ok":
             # A worker that failed its process lifecycle cannot publish a
             # trusted metric, even if it wrote a plausible result first.
-            payload.update(status="invalid", score=None, detail=f"worker exit {proc.returncode}")
-        payload["log_tail"] = (str(payload.get("log_tail") or "") + "\n" + log_text)[-2000:]
-        result = _score_from_payload(dataset.task_id, payload, env_hash=env_hash, cmd=" ".join(cmd))
+            payload.update(
+                status="invalid", score=None, detail=f"worker exit {proc.returncode}"
+            )
+        payload["log_tail"] = (str(payload.get("log_tail") or "") + "\n" + log_text)[
+            -2000:
+        ]
+        result = _score_from_payload(
+            dataset.task_id, payload, env_hash=env_hash, cmd=" ".join(cmd)
+        )
         # Keep the structured outcome until the parent has durably recorded
         # the finished-side event. If the parent is interrupted in between,
         # recovery still has the worker's complete result file to inspect.
     except (TypeError, ValueError, OverflowError) as exc:
         return ScoreResult(
-            task_id=dataset.task_id, status="invalid", score=float("nan"),
+            task_id=dataset.task_id,
+            status="invalid",
+            score=float("nan"),
             duration_s=elapsed_seconds,
             detail=f"invalid worker result at {out_path}: {type(exc).__name__}: {exc}",
-            env_hash=env_hash, cmd=" ".join(cmd), seed=registry.seed,
-            traceback=log_text[-4000:], log_tail=log_text[-4000:],
-            metric_observations={**physical_observations, "search_ran": False, "worker_log_path": str(log_path),
-                                 "worker_result_path": str(out_path),
-                                 "failure_kind": "invalid_worker_result",
-                                 "elapsed_seconds": elapsed_seconds,
-                                 "worker_return_code": proc.returncode,
-                                 **_stage_status_observations(
-                                     out_path.with_suffix(".stages.json")
-                                 )},
+            env_hash=env_hash,
+            cmd=" ".join(cmd),
+            seed=registry.seed,
+            traceback=log_text[-4000:],
+            log_tail=log_text[-4000:],
+            metric_observations={
+                **physical_observations,
+                "search_ran": False,
+                "worker_log_path": str(log_path),
+                "worker_result_path": str(out_path),
+                "failure_kind": "invalid_worker_result",
+                "elapsed_seconds": elapsed_seconds,
+                "worker_return_code": proc.returncode,
+                **_stage_status_observations(out_path.with_suffix(".stages.json")),
+            },
         )
     result.metric_observations["worker_paths"] = dict(paths)
     result.metric_observations["worker_invocation_id"] = paths["worker_invocation_id"]
@@ -1179,29 +1350,37 @@ def run_quality_pair(
             _check_cancellation(cancellation_event)
             side_spec = dict(spec)
             side_spec["worker_paths"] = create_worker_artifact_plan(
-                dataset.task_id, side, proposal_id, attempt, artifact_root=artifact_root)
+                dataset.task_id, side, proposal_id, attempt, artifact_root=artifact_root
+            )
             if on_side_event is not None:
                 on_side_event(side_spec, side, "started", None, attempt)
+
             def record_worker_spawned(worker_pid: int) -> None:
                 side_spec["worker_pid"] = worker_pid
                 if on_side_event is not None:
                     on_side_event(side_spec, side, "spawned", None, attempt)
 
             result = run_quality_side(
-                dataset, checkout=checkout, side=side, n_jobs=n_jobs, registry=registry,
+                dataset,
+                checkout=checkout,
+                side=side,
+                n_jobs=n_jobs,
+                registry=registry,
                 python_executable=python,
                 cancellation_event=cancellation_event,
                 proposal_id=proposal_id,
                 attempt=attempt,
                 evaluation_identity=evaluation_identity,
-                artifact_root=artifact_root, stock_cache_root=stock_cache_root,
+                artifact_root=artifact_root,
+                stock_cache_root=stock_cache_root,
                 worker_paths=side_spec["worker_paths"],
                 on_worker_spawned=record_worker_spawned,
                 on_waiting=(
                     lambda wait_kind, elapsed: on_side_wait(
                         side_spec, side, wait_kind, elapsed, attempt
                     )
-                    if on_side_wait is not None else None
+                    if on_side_wait is not None
+                    else None
                 ),
             )
             if on_side_event is not None:
@@ -1304,9 +1483,23 @@ def _run_quality_pair_async(
 
         current_attempt = attempt_count + attempt + 1
         side_spec["worker_paths"] = create_worker_artifact_plan(
-            dataset.task_id, side, proposal_id, current_attempt, artifact_root=artifact_root)
+            dataset.task_id,
+            side,
+            proposal_id,
+            current_attempt,
+            artifact_root=artifact_root,
+        )
         stock_flight_key = None
-        if side == "stock" and _stock_cache_path(dataset, registry, side_spec["n_jobs"], stock_cache_root=stock_cache_root) is not None:
+        if (
+            side == "stock"
+            and _stock_cache_path(
+                dataset,
+                registry,
+                side_spec["n_jobs"],
+                stock_cache_root=stock_cache_root,
+            )
+            is not None
+        ):
             stock_flight_key = _async_stock_flight_key(
                 dataset,
                 checkout,
@@ -1347,7 +1540,9 @@ def _run_quality_pair_async(
                 terminal_claimed = True
                 try:
                     if on_side_event is not None:
-                        on_side_event(side_spec, side, "finished", side_result, current_attempt)
+                        on_side_event(
+                            side_spec, side, "finished", side_result, current_attempt
+                        )
                     visible.set_result(side_result)
                 except BaseException as exc:
                     if not visible.done():
@@ -1445,7 +1640,8 @@ def _run_quality_pair_async(
                 proposal_id=proposal_id,
                 attempt=current_attempt,
                 evaluation_identity=evaluation_identity,
-                artifact_root=artifact_root, stock_cache_root=stock_cache_root,
+                artifact_root=artifact_root,
+                stock_cache_root=stock_cache_root,
                 worker_paths=side_spec["worker_paths"],
                 _side_deadline=compute_deadline,
                 _side_started=compute_started,
@@ -1511,6 +1707,7 @@ def _run_quality_pair_async(
 
         source.add_done_callback(finish_source)
         if wait_state["waiting"] and not source.done() and not visible.done():
+
             def emit_wait_heartbeat() -> None:
                 nonlocal wait_heartbeat_timer
                 with state_lock:
@@ -1518,7 +1715,11 @@ def _run_quality_pair_async(
                     wait_heartbeat_timer = None
                     if previous_timer is not None:
                         timers.discard(previous_timer)
-                    if terminal_claimed or visible.done() or wait_state["worker_spawned"]:
+                    if (
+                        terminal_claimed
+                        or visible.done()
+                        or wait_state["worker_spawned"]
+                    ):
                         return
                 try:
                     report_wait_state()
@@ -1532,7 +1733,11 @@ def _run_quality_pair_async(
             def schedule_wait_heartbeat() -> None:
                 nonlocal wait_heartbeat_timer
                 with state_lock:
-                    if terminal_claimed or visible.done() or wait_state["worker_spawned"]:
+                    if (
+                        terminal_claimed
+                        or visible.done()
+                        or wait_state["worker_spawned"]
+                    ):
                         return
                     timer = threading.Timer(30.0, emit_wait_heartbeat)
                     timer.daemon = True
@@ -1565,7 +1770,9 @@ def _run_quality_pair_async(
             except BaseException as exc:
                 retried.set_exception(exc)
                 return
-            current_attempt = int(attempt_counts.get((dataset.task_id, side), 0)) + retry + 1
+            current_attempt = (
+                int(attempt_counts.get((dataset.task_id, side), 0)) + retry + 1
+            )
             if current_attempt < 2 and _retryable_quality_failure(side_result):
                 try:
                     _check_cancellation(cancellation_event)
@@ -1613,17 +1820,19 @@ def _run_quality_pair_async(
                 return
             try:
                 patched = patch_done.result()
-                result.set_result({
-                    "spec": spec,
-                    "stock": asdict(stock),
-                    "patched": asdict(patched),
-                    "stock_result": stock,
-                    "patched_result": patched,
-                    "search_ran": bool(
-                        (stock.metric_observations or {}).get("search_ran")
-                        and (patched.metric_observations or {}).get("search_ran")
-                    ),
-                })
+                result.set_result(
+                    {
+                        "spec": spec,
+                        "stock": asdict(stock),
+                        "patched": asdict(patched),
+                        "stock_result": stock,
+                        "patched_result": patched,
+                        "search_ran": bool(
+                            (stock.metric_observations or {}).get("search_ran")
+                            and (patched.metric_observations or {}).get("search_ran")
+                        ),
+                    }
+                )
             except BaseException as exc:
                 result.set_exception(exc)
 
@@ -1647,8 +1856,13 @@ def run_quality_stock_jobs(
 
     stock_cache_root = _stock_cache_root(stock_cache_root)
 
-    def one(task_id: str, *, registry: QualityRegistry, n_jobs: int,
-            cancellation_event: threading.Event) -> dict:
+    def one(
+        task_id: str,
+        *,
+        registry: QualityRegistry,
+        n_jobs: int,
+        cancellation_event: threading.Event,
+    ) -> dict:
         dataset = get_dataset(task_id, registry)
         spec = job_spec(dataset, n_jobs=n_jobs, registry=registry)
         stock = run_quality_side(
@@ -1658,7 +1872,8 @@ def run_quality_stock_jobs(
             n_jobs=n_jobs,
             registry=registry,
             cancellation_event=cancellation_event,
-            artifact_root=artifact_root, stock_cache_root=stock_cache_root,
+            artifact_root=artifact_root,
+            stock_cache_root=stock_cache_root,
         )
         return {
             "spec": spec,
@@ -1695,8 +1910,13 @@ def run_quality_jobs(
 
     stock_cache_root = _stock_cache_root(stock_cache_root)
 
-    def one(task_id: str, *, registry: QualityRegistry, n_jobs: int,
-            cancellation_event: threading.Event) -> dict:
+    def one(
+        task_id: str,
+        *,
+        registry: QualityRegistry,
+        n_jobs: int,
+        cancellation_event: threading.Event,
+    ) -> dict:
         return run_quality_pair(
             task_id,
             stock_checkout=stock_checkout,
@@ -1710,11 +1930,17 @@ def run_quality_jobs(
             cancellation_event=cancellation_event,
             proposal_id=proposal_id,
             evaluation_identity=evaluation_identity,
-            artifact_root=artifact_root, stock_cache_root=stock_cache_root,
+            artifact_root=artifact_root,
+            stock_cache_root=stock_cache_root,
         )
 
-    def async_one(task_id: str, *, registry: QualityRegistry, n_jobs: int,
-                  cancellation_event: threading.Event) -> Future[dict]:
+    def async_one(
+        task_id: str,
+        *,
+        registry: QualityRegistry,
+        n_jobs: int,
+        cancellation_event: threading.Event,
+    ) -> Future[dict]:
         if pair_scheduler is None:
             raise RuntimeError("async quality pair requires a shared pair scheduler")
         return _run_quality_pair_async(
@@ -1731,7 +1957,8 @@ def run_quality_jobs(
             cancellation_event=cancellation_event,
             proposal_id=proposal_id,
             evaluation_identity=evaluation_identity,
-            artifact_root=artifact_root, stock_cache_root=stock_cache_root,
+            artifact_root=artifact_root,
+            stock_cache_root=stock_cache_root,
         )
 
     return _run_over_tasks(
@@ -1763,8 +1990,14 @@ def _run_over_tasks(
     ids = task_ids or list_quality_task_ids(registry)
     jobs = n_jobs if n_jobs is not None else registry.n_jobs_per_job
     quota = cpu_quota if cpu_quota is not None else registry.cpu_quota
-    if (isinstance(jobs, bool) or not isinstance(jobs, int) or jobs <= 0
-            or isinstance(quota, bool) or not isinstance(quota, int) or quota <= 0):
+    if (
+        isinstance(jobs, bool)
+        or not isinstance(jobs, int)
+        or jobs <= 0
+        or isinstance(quota, bool)
+        or not isinstance(quota, int)
+        or quota <= 0
+    ):
         raise ValueError("n_jobs and cpu_quota must be positive integers")
     if quota < jobs:
         raise ValueError("cpu_quota cannot fund one n_jobs task")
@@ -1776,7 +2009,9 @@ def _run_over_tasks(
     def evaluate(task_id):
         try:
             _check_cancellation(cancellation)
-            return one(task_id, registry=registry, n_jobs=jobs, cancellation_event=cancellation)
+            return one(
+                task_id, registry=registry, n_jobs=jobs, cancellation_event=cancellation
+            )
         except BaseException as exc:
             # Set before this worker exits, so a newly scheduled task cannot
             # start ML while the coordinator has not yet observed the failure.
@@ -1789,6 +2024,7 @@ def _run_over_tasks(
     if pair_scheduler is not None:
         try:
             if async_one is not None:
+
                 def schedule(task_id):
                     _check_cancellation(cancellation)
                     return async_one(
@@ -1801,7 +2037,9 @@ def _run_over_tasks(
                 pair_futures = (
                     pair_scheduler.run_group(ids, schedule)
                     if pair_group_id is None
-                    else pair_scheduler.run_registered_group(pair_group_id, ids, schedule)
+                    else pair_scheduler.run_registered_group(
+                        pair_group_id, ids, schedule
+                    )
                 )
                 by_future = {}
                 completed_pairs: SimpleQueue[Future] = SimpleQueue()
@@ -1838,7 +2076,12 @@ def _run_over_tasks(
         by_id = {futures[future]: future.result() for future in as_completed(futures)}
     except BaseException as exc:
         with error_lock:
-            failure = original_error[0] if original_error and not isinstance(exc, (KeyboardInterrupt, SystemExit)) else exc
+            failure = (
+                original_error[0]
+                if original_error
+                and not isinstance(exc, (KeyboardInterrupt, SystemExit))
+                else exc
+            )
         cancellation.set()
         for future in futures:
             future.cancel()
@@ -1851,15 +2094,18 @@ def _run_over_tasks(
 
 def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     skipped_rows = [
-        row for row in rows
+        row
+        for row in rows
         if str(row.get("status") or "") in {"skipped", "inapplicable"}
         or str((row.get("spec") or {}).get("status") or "") == "skipped"
     ]
     if skipped_rows:
-        unresolved = tuple(dict.fromkeys(
-            str((row.get("spec") or {}).get("source_dataset") or "unknown_dataset")
-            for row in skipped_rows
-        ))
+        unresolved = tuple(
+            dict.fromkeys(
+                str((row.get("spec") or {}).get("source_dataset") or "unknown_dataset")
+                for row in skipped_rows
+            )
+        )
         return Decision(
             keep=None,
             reason="required_dataset_skipped:" + ",".join(unresolved),
@@ -1888,20 +2134,30 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         task_id = row["spec"]["source_dataset"]
         stock_result = row["stock_result"]
         patched_result = row["patched_result"]
-        retryable_failure = retryable_failure or _retryable_quality_failure(stock_result)
-        retryable_failure = retryable_failure or _retryable_quality_failure(patched_result)
+        retryable_failure = retryable_failure or _retryable_quality_failure(
+            stock_result
+        )
+        retryable_failure = retryable_failure or _retryable_quality_failure(
+            patched_result
+        )
         timeout_results = [
-            result for result in (stock_result, patched_result) if result.status == "timeout"
+            result
+            for result in (stock_result, patched_result)
+            if result.status == "timeout"
         ]
         if timeout_results:
             budget_timeout_results = [
-                result for result in timeout_results
-                if (result.metric_observations or {}).get("failure_kind") == "fedot_budget_timeout"
+                result
+                for result in timeout_results
+                if (result.metric_observations or {}).get("failure_kind")
+                == "fedot_budget_timeout"
             ]
             if budget_timeout_results:
                 fedot_budget_exhausted = True
                 failure_kind = failure_kind or "fedot_budget_timeout"
-                failure_reasons.append(f"FEDOT fit budget exhausted for {task_id}; metric not measured")
+                failure_reasons.append(
+                    f"FEDOT fit budget exhausted for {task_id}; metric not measured"
+                )
             else:
                 timed_out = True
                 failure_reasons.append(f"quality {task_id} worker deadline timeout")
@@ -1922,14 +2178,19 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         if stock_observations.get("metric_valid") is not True:
             unresolved.append(task_id)
             failure_kind = failure_kind or "unverified_metric"
-            failure_reasons.append(f"stock_metric_unverified:{task_id}:metric_valid!=true")
+            failure_reasons.append(
+                f"stock_metric_unverified:{task_id}:metric_valid!=true"
+            )
             continue
-        if patched_result.status != "ok" or not math.isfinite(float(patched_result.score)):
+        if patched_result.status != "ok" or not math.isfinite(
+            float(patched_result.score)
+        ):
             unresolved.append(task_id)
             observations = patched_result.metric_observations or {}
             failure_kind = (
                 "candidate_error"
-                if observations.get("failure_kind") in {"fedot_import_error", "fedot_fit_error"}
+                if observations.get("failure_kind")
+                in {"fedot_import_error", "fedot_fit_error"}
                 else "evaluation_error"
             )
             failure_reasons.append(
@@ -1943,7 +2204,9 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         if patched_observations.get("metric_valid") is not True:
             unresolved.append(task_id)
             failure_kind = failure_kind or "unverified_metric"
-            failure_reasons.append(f"patched_metric_unverified:{task_id}:metric_valid!=true")
+            failure_reasons.append(
+                f"patched_metric_unverified:{task_id}:metric_valid!=true"
+            )
             continue
         spec = row["spec"]
         before = float(stock_result.score)
@@ -1963,7 +2226,8 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
             infrastructure_error=timed_out or retryable_failure,
             quality_failure=None
             if timed_out or retryable_failure
-            else "fedot_budget_timeout" if fedot_budget_exhausted
+            else "fedot_budget_timeout"
+            if fedot_budget_exhausted
             else failure_kind or "evaluation_error",
             quality_outcome="not_evaluated",
             improved_task_count=sum(
@@ -1974,9 +2238,7 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
                 >= float(row["spec"]["min_delta"])
             ),
             regressed_task_count=sum(
-                1
-                for delta in deltas.values()
-                if delta is not None and delta < -1e-12
+                1 for delta in deltas.values() if delta is not None and delta < -1e-12
             ),
             unresolved_task_ids=tuple(dict.fromkeys(unresolved)),
         )

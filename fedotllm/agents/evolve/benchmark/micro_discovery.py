@@ -132,9 +132,7 @@ def _case_repaired(stages: list[dict[str, Any]]) -> bool:
         "behavior_probe",
     }
     return required <= {stage["stage"] for stage in stages} and all(
-        stage["status"] == "passed"
-        for stage in stages
-        if stage["stage"] in required
+        stage["status"] == "passed" for stage in stages if stage["stage"] in required
     )
 
 
@@ -150,7 +148,9 @@ def _repair_context(case: MicroCase, source: Path, file_path: str) -> tuple[str,
         _REPAIR_PROMPT.format(
             symptom=case.prompt.symptom,
             file_path=file_path,
-            source_context=source_context.render(max_chars=6_000) if source_context is not None else "",
+            source_context=source_context.render(max_chars=6_000)
+            if source_context is not None
+            else "",
             source=text,
         ),
         len(text.splitlines()),
@@ -192,7 +192,8 @@ def run_micro_discovery_benchmark(
         try:
             selection = calls.create(
                 _FILE_PROMPT.format(
-                    symptom=case.prompt.symptom, contexts=_architecture_contexts(source, pool)
+                    symptom=case.prompt.symptom,
+                    contexts=_architecture_contexts(source, pool),
                 ),
                 FileSelection,
                 stage="file_localization",

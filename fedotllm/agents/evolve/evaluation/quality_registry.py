@@ -28,6 +28,8 @@ _ALLOWED_TS_DATASETS = frozenset({"beer", "australia", "salaries"})
 _ALLOWED_LOCAL_TS_DATASETS = frozenset(
     {"temperature", "traffic", "economic", "arctic", "metocean"}
 )
+
+
 @dataclass(frozen=True)
 class QualityDataset:
     task_id: str
@@ -85,7 +87,11 @@ def _load_raw() -> dict:
 
 def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
     """Load a frozen campaign registry without changing process-global routing."""
-    raw = _load_raw() if path is None else json.loads(Path(path).read_text(encoding="utf-8"))
+    raw = (
+        _load_raw()
+        if path is None
+        else json.loads(Path(path).read_text(encoding="utf-8"))
+    )
     raw_composer_options = raw.get("composer_options", {})
     if not isinstance(raw_composer_options, dict):
         raise ValueError("composer_options must be an object")
@@ -133,12 +139,16 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
     ids = [item.task_id for item in datasets]
     if len(ids) != len(set(ids)):
         raise ValueError("quality registry task_id values must be unique")
-    openml_tasks = [item.openml_task for item in datasets if item.source == "openml_task"]
+    openml_tasks = [
+        item.openml_task for item in datasets if item.source == "openml_task"
+    ]
     if len(openml_tasks) != len(set(openml_tasks)):
         raise ValueError("quality registry openml_task values must be unique")
     for item in datasets:
         if item.source not in _ALLOWED_SOURCES:
-            raise ValueError(f"{item.task_id}: unsupported quality dataset source {item.source}")
+            raise ValueError(
+                f"{item.task_id}: unsupported quality dataset source {item.source}"
+            )
         if item.problem not in _ALLOWED_PROBLEMS:
             raise ValueError(
                 f"{item.task_id}: problem must be classification, regression, or ts_forecasting"
@@ -147,12 +157,18 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
             raise ValueError(f"{item.task_id}: official fold is repeat=0 fold=0")
         if item.source == "openml_task":
             if item.problem not in {"classification", "regression"}:
-                raise ValueError(f"{item.task_id}: OpenML quality rows must be supervised tabular tasks")
+                raise ValueError(
+                    f"{item.task_id}: OpenML quality rows must be supervised tabular tasks"
+                )
             if item.openml_task <= 0 or item.openml_data <= 0:
-                raise ValueError(f"{item.task_id}: openml_task/openml_data must be positive")
+                raise ValueError(
+                    f"{item.task_id}: openml_task/openml_data must be positive"
+                )
         elif item.source == "fedot_public_ts":
             if item.problem != "ts_forecasting":
-                raise ValueError(f"{item.task_id}: fedot_public_ts rows are ts_forecasting")
+                raise ValueError(
+                    f"{item.task_id}: fedot_public_ts rows are ts_forecasting"
+                )
             if item.ts_dataset not in _ALLOWED_TS_DATASETS:
                 raise ValueError(f"{item.task_id}: unknown public TS dataset")
             if len(item.data_sha256) != 64:
@@ -161,15 +177,21 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
                 raise ValueError(f"{item.task_id}: forecast_horizon must be positive")
         elif item.source == "fedot_local_ts":
             if item.problem != "ts_forecasting":
-                raise ValueError(f"{item.task_id}: fedot_local_ts rows are ts_forecasting")
+                raise ValueError(
+                    f"{item.task_id}: fedot_local_ts rows are ts_forecasting"
+                )
             if item.ts_dataset not in _ALLOWED_LOCAL_TS_DATASETS:
                 raise ValueError(f"{item.task_id}: unknown local TS dataset")
             if not item.data_path or not item.target or len(item.data_sha256) != 64:
-                raise ValueError(f"{item.task_id}: local TS path, target, and sha256 are required")
+                raise ValueError(
+                    f"{item.task_id}: local TS path, target, and sha256 are required"
+                )
             if item.forecast_horizon <= 0:
                 raise ValueError(f"{item.task_id}: forecast_horizon must be positive")
         if item.delta_mode not in {"absolute", "relative"}:
-            raise ValueError(f"{item.task_id}: unsupported delta mode {item.delta_mode}")
+            raise ValueError(
+                f"{item.task_id}: unsupported delta mode {item.delta_mode}"
+            )
     selection = raw.get("selection") or {}
     prefix = tuple(int(task) for task in selection.get("cc18_prefix_tasks") or ())
     extra = tuple(int(task) for task in selection.get("extra_openml_tasks") or ())
@@ -182,24 +204,41 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
             + ",".join(str(task) for task in (*missing_prefix, *missing_extra))
         )
     expected_ts = tuple(str(name) for name in selection.get("fedot_public_ts") or ())
-    registered_ts = {item.ts_dataset for item in datasets if item.source == "fedot_public_ts"}
+    registered_ts = {
+        item.ts_dataset for item in datasets if item.source == "fedot_public_ts"
+    }
     missing_ts = [name for name in expected_ts if name not in registered_ts]
     if missing_ts:
-        raise ValueError("quality registry missing public TS datasets: " + ",".join(missing_ts))
-    expected_local_ts = tuple(str(name) for name in selection.get("fedot_local_ts") or ())
+        raise ValueError(
+            "quality registry missing public TS datasets: " + ",".join(missing_ts)
+        )
+    expected_local_ts = tuple(
+        str(name) for name in selection.get("fedot_local_ts") or ()
+    )
     registered_local_ts = {
         item.ts_dataset for item in datasets if item.source == "fedot_local_ts"
     }
-    missing_local_ts = [name for name in expected_local_ts if name not in registered_local_ts]
+    missing_local_ts = [
+        name for name in expected_local_ts if name not in registered_local_ts
+    ]
     if missing_local_ts:
-        raise ValueError("quality registry missing local TS datasets: " + ",".join(missing_local_ts))
-    expected_regression = tuple(int(task) for task in selection.get("ctr23_regression_tasks") or ())
+        raise ValueError(
+            "quality registry missing local TS datasets: " + ",".join(missing_local_ts)
+        )
+    expected_regression = tuple(
+        int(task) for task in selection.get("ctr23_regression_tasks") or ()
+    )
     registered_regression = {
         item.openml_task for item in datasets if item.problem == "regression"
     }
-    missing_regression = [task for task in expected_regression if task not in registered_regression]
+    missing_regression = [
+        task for task in expected_regression if task not in registered_regression
+    ]
     if missing_regression:
-        raise ValueError("quality registry missing CTR23 regression tasks: " + ",".join(map(str, missing_regression)))
+        raise ValueError(
+            "quality registry missing CTR23 regression tasks: "
+            + ",".join(map(str, missing_regression))
+        )
     registry = QualityRegistry(
         identity=str(raw["identity"]),
         api=str(raw["api"]),
@@ -222,11 +261,14 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
         fedot_timeout_policy=str(raw.get("fedot_timeout_policy", "legacy")),
         final_fit_reserve_seconds=int(raw.get("final_fit_reserve_seconds", 1500)),
         runtime_paths_policy=str(raw.get("runtime_paths_policy", "isolated-worker-v1")),
-        max_pipeline_fit_policy=str(raw.get("max_pipeline_fit_policy", "per-cv-fold-v1")),
+        max_pipeline_fit_policy=str(
+            raw.get("max_pipeline_fit_policy", "per-cv-fold-v1")
+        ),
         max_pipeline_evaluation_policy=str(
             raw.get(
                 "max_pipeline_evaluation_policy",
-                "per-cv-candidate-v1" if raw.get("fedot_timeout_policy", "legacy") == "return_best"
+                "per-cv-candidate-v1"
+                if raw.get("fedot_timeout_policy", "legacy") == "return_best"
                 else "per-candidate-evaluation-v1",
             )
         ),
@@ -247,13 +289,17 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
     if registry.max_pipeline_fit_policy != "per-cv-fold-v1":
         raise ValueError("unsupported per-pipeline fit time policy")
     expected_evaluation_policy = (
-        "per-cv-candidate-v1" if registry.fedot_timeout_policy == "return_best"
+        "per-cv-candidate-v1"
+        if registry.fedot_timeout_policy == "return_best"
         else "per-candidate-evaluation-v1"
     )
     if registry.max_pipeline_evaluation_policy != expected_evaluation_policy:
-        raise ValueError("unsupported total cross-validation candidate evaluation budget policy")
+        raise ValueError(
+            "unsupported total cross-validation candidate evaluation budget policy"
+        )
     if registry.candidate_dispatcher not in {
-        "golem-joblib-v1", "isolated-candidate-process-v1"
+        "golem-joblib-v1",
+        "isolated-candidate-process-v1",
     }:
         raise ValueError("unsupported candidate evaluation dispatcher")
     if registry.timeout_seconds <= 0:
@@ -268,7 +314,9 @@ def load_quality_registry(path: Path | str | None = None) -> QualityRegistry:
     return registry
 
 
-def get_dataset(task_id: str, registry: QualityRegistry | None = None) -> QualityDataset:
+def get_dataset(
+    task_id: str, registry: QualityRegistry | None = None
+) -> QualityDataset:
     registry = registry or load_quality_registry()
     for item in registry.datasets:
         if item.task_id == task_id:
@@ -290,7 +338,9 @@ def patch_task_family(file_path: str = "", hint: str = "") -> str:
 
     from fedotllm.agents.evolve.evaluation.quality_scope import analyze_quality_scope
 
-    scope = analyze_quality_scope({"file_path": file_path, "hint": hint})["problem_families"]
+    scope = analyze_quality_scope({"file_path": file_path, "hint": hint})[
+        "problem_families"
+    ]
     if scope == ["ts_forecasting"]:
         return "ts"
     if "ts_forecasting" not in scope:
@@ -353,15 +403,23 @@ def job_spec(
     jobs = int(n_jobs if n_jobs is not None else registry.n_jobs_per_job)
     ts = is_ts_dataset(dataset)
     cv_folds = 3 if ts else 5
-    max_pipeline_evaluation_time_seconds = registry.fedot_search_budget_seconds // cv_folds
+    max_pipeline_evaluation_time_seconds = (
+        registry.fedot_search_budget_seconds // cv_folds
+    )
     max_pipeline_fit_time_seconds = (
         max_pipeline_evaluation_time_seconds // cv_folds
         if registry.fedot_timeout_policy == "return_best"
         else max_pipeline_evaluation_time_seconds
     )
     if max_pipeline_fit_time_seconds <= 0:
-        raise ValueError("quality timeout must allow a positive per-fold pipeline fit limit")
-    split = f"ts_holdout_last_{dataset.forecast_horizon}" if ts else f"openml_repeat{dataset.repeat}_fold{dataset.fold}"
+        raise ValueError(
+            "quality timeout must allow a positive per-fold pipeline fit limit"
+        )
+    split = (
+        f"ts_holdout_last_{dataset.forecast_horizon}"
+        if ts
+        else f"openml_repeat{dataset.repeat}_fold{dataset.fold}"
+    )
     return {
         "kind": "quality",
         "registry_identity": registry.identity,

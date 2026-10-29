@@ -89,12 +89,18 @@ def build_quality_history_index(
                             "run_id": run_id,
                             "source_path": str(proposal_path),
                             "reason": "malformed_queue_record",
-                            "raw_text": proposal_path.read_text(encoding="utf-8", errors="replace"),
+                            "raw_text": proposal_path.read_text(
+                                encoding="utf-8", errors="replace"
+                            ),
                         }
                     )
                     unresolved_events += 1
                     continue
-                candidate_id = str(proposal.get("candidate_revision_id") or proposal.get("candidate_id") or "")
+                candidate_id = str(
+                    proposal.get("candidate_revision_id")
+                    or proposal.get("candidate_id")
+                    or ""
+                )
                 if not candidate_id:
                     output_rows.append(
                         {
@@ -111,13 +117,23 @@ def build_quality_history_index(
                     "record_type": "proposal",
                     "run_id": run_id,
                     "run_workspace": str(workspace),
-                    "registry_identity": str(manifest.get("registry_identity") or proposal.get("registry_identity") or ""),
+                    "registry_identity": str(
+                        manifest.get("registry_identity")
+                        or proposal.get("registry_identity")
+                        or ""
+                    ),
                     "candidate_id": candidate_id,
                     "proposal_id": str(proposal.get("proposal_id") or candidate_id),
-                    "task_ids": sorted({str(task_id) for task_id in proposal.get("task_ids") or []}),
+                    "task_ids": sorted(
+                        {str(task_id) for task_id in proposal.get("task_ids") or []}
+                    ),
                     "source_path": str(proposal_path),
                     "source_sha256": _sha256(proposal_path),
-                    "patch_path": str((queue_dir / str(proposal.get("patch"))).resolve()) if proposal.get("patch") else None,
+                    "patch_path": str(
+                        (queue_dir / str(proposal.get("patch"))).resolve()
+                    )
+                    if proposal.get("patch")
+                    else None,
                     "patch_sha256": proposal.get("patch_sha256"),
                     "queue_record": proposal,
                     "journal_events": [],
@@ -128,7 +144,9 @@ def build_quality_history_index(
 
         journal_path = workspace / "quality_jobs.jsonl"
         if journal_path.is_file():
-            for line_number, line in enumerate(journal_path.read_text(encoding="utf-8").splitlines(), start=1):
+            for line_number, line in enumerate(
+                journal_path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
                 if not line.strip():
                     continue
                 try:
@@ -172,7 +190,11 @@ def build_quality_history_index(
                     reason = "missing_candidate_id" if candidate_key is None else ""
                 matches = by_candidate.get(candidate_key or "", [])
                 if not reason and len(matches) != 1:
-                    reason = "candidate_not_in_run_queue" if not matches else "ambiguous_candidate_in_run_queue"
+                    reason = (
+                        "candidate_not_in_run_queue"
+                        if not matches
+                        else "ambiguous_candidate_in_run_queue"
+                    )
 
                 task_ids = _journal_task_ids(row)
                 if not reason and task_ids:
@@ -200,7 +222,9 @@ def build_quality_history_index(
                         "source_path": str(journal_path),
                         "source_line": line_number,
                         "task_ids": task_ids,
-                        "link_level": "candidate_and_task" if task_ids else "candidate_only",
+                        "link_level": "candidate_and_task"
+                        if task_ids
+                        else "candidate_only",
                         "raw_record": row,
                     }
                 )

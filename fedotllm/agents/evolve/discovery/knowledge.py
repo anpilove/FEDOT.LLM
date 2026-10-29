@@ -15,8 +15,23 @@ MAX_CHUNK_CHARS = 2_400
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,}")
 _RST_HEADING = re.compile(r"^[=\-~^\"'`:+*#]{3,}$")
 _STOP = {
-    "and", "are", "class", "def", "for", "from", "import", "none", "not",
-    "return", "self", "that", "the", "this", "with", "fedot", "implementation",
+    "and",
+    "are",
+    "class",
+    "def",
+    "for",
+    "from",
+    "import",
+    "none",
+    "not",
+    "return",
+    "self",
+    "that",
+    "the",
+    "this",
+    "with",
+    "fedot",
+    "implementation",
 }
 
 
@@ -32,9 +47,7 @@ def _terms(text: str) -> set[str]:
     # Make PCAImplementation searchable as both `pca` and `implementation`.
     expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text or "").replace("_", " ")
     return {
-        token.lower()
-        for token in _WORD.findall(expanded)
-        if token.lower() not in _STOP
+        token.lower() for token in _WORD.findall(expanded) if token.lower() not in _STOP
     }
 
 
@@ -54,14 +67,18 @@ def _rst_chunks(root: Path) -> list[KnowledgeChunk]:
             heading = lines[index - 1].strip()
             if not heading:
                 continue
-            body = "\n".join(lines[start:index - 1]).strip()
+            body = "\n".join(lines[start : index - 1]).strip()
             if body:
-                chunks.append(KnowledgeChunk("documentation", rel, title, body[:MAX_CHUNK_CHARS]))
+                chunks.append(
+                    KnowledgeChunk("documentation", rel, title, body[:MAX_CHUNK_CHARS])
+                )
             title = heading
             start = index + 1
         body = "\n".join(lines[start:]).strip()
         if body:
-            chunks.append(KnowledgeChunk("documentation", rel, title, body[:MAX_CHUNK_CHARS]))
+            chunks.append(
+                KnowledgeChunk("documentation", rel, title, body[:MAX_CHUNK_CHARS])
+            )
     return chunks
 
 
@@ -78,7 +95,9 @@ def _docstring_chunks(root: Path) -> list[KnowledgeChunk]:
             continue
         rel = path.relative_to(root).as_posix()
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(
+                node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
                 continue
             doc = ast.get_docstring(node, clean=True)
             if not doc or len(doc) < 30:
@@ -114,14 +133,23 @@ def _repository_chunks(root: Path) -> list[KnowledgeChunk]:
                     "operation_metadata",
                     path.relative_to(root).as_posix(),
                     operation,
-                    json.dumps(combined, ensure_ascii=False, indent=2)[:MAX_CHUNK_CHARS],
+                    json.dumps(combined, ensure_ascii=False, indent=2)[
+                        :MAX_CHUNK_CHARS
+                    ],
                 )
             )
     return chunks
 
 
 def _default_parameter_chunks(root: Path) -> list[KnowledgeChunk]:
-    path = root / "fedot" / "core" / "repository" / "data" / "default_operation_params.json"
+    path = (
+        root
+        / "fedot"
+        / "core"
+        / "repository"
+        / "data"
+        / "default_operation_params.json"
+    )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -184,17 +212,23 @@ def retrieve_knowledge(
             rel = chunk.path.lower()
             if "pipeline" in query_terms and rel.endswith("advanced/architecture.rst"):
                 route_bonus += 40
-            if query_terms & {"forecast", "forecasting", "lagged", "timeseries"} and rel.endswith(
-                "basics/ts_forecasting.rst"
-            ):
+            if query_terms & {
+                "forecast",
+                "forecasting",
+                "lagged",
+                "timeseries",
+            } and rel.endswith("basics/ts_forecasting.rst"):
                 route_bonus += 80
-            if query_terms & {"preprocessing", "categorical", "encoding"} and rel.endswith(
-                "advanced/data_preprocessing.rst"
-            ):
+            if query_terms & {
+                "preprocessing",
+                "categorical",
+                "encoding",
+            } and rel.endswith("advanced/data_preprocessing.rst"):
                 route_bonus += 40
         score = title_hits * 8 + body_hits * 2 + exact_title * 12 + route_bonus
         ranked.append((score, chunk))
     ranked.sort(key=lambda item: (-item[0], item[1].path, item[1].title))
+
     # Pure top-k commonly returns three adjacent method docstrings. Preserve
     # semantic diversity so the model sees both local API meaning and the
     # framework/repository contract when those sources match the query.
@@ -203,7 +237,12 @@ def retrieve_knowledge(
         return bool(title_terms) and title_terms.issubset(query_terms)
 
     selected: list[tuple[int, KnowledgeChunk]] = []
-    for kind in ("docstring", "documentation", "operation_metadata", "operation_defaults"):
+    for kind in (
+        "docstring",
+        "documentation",
+        "operation_metadata",
+        "operation_defaults",
+    ):
         match = next(
             (
                 item
@@ -221,10 +260,10 @@ def retrieve_knowledge(
     for item in ranked:
         if len(selected) >= max(1, limit):
             break
-        if (
-            item[1].kind in {"operation_metadata", "operation_defaults"}
-            and not metadata_named_in_query(item[1])
-        ):
+        if item[1].kind in {
+            "operation_metadata",
+            "operation_defaults",
+        } and not metadata_named_in_query(item[1]):
             continue
         if item not in selected:
             selected.append(item)
@@ -254,9 +293,7 @@ def knowledge_for_lead(
     # unrelated classes used to dominate lexical retrieval (for example a
     # lagged-forecast lead retrieved SimpleImputer and GaussianFilter docs).
     path_terms = Path(lead.file_path).stem.replace("_", " ")
-    query = "\n".join(
-        [path_terms, lead.why, *lead.evidence]
-    )
+    query = "\n".join([path_terms, lead.why, *lead.evidence])
     result = retrieve_knowledge(checkout, query, limit=5, max_chars=max_chars)
     if result.startswith("<"):
         return ""
