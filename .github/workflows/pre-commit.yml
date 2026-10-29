@@ -2,7 +2,7 @@ name: Pre-commit checks
 
 on:
   push:
-    branches: [main, codex/project-setup]
+    branches: [main, research/evolve-agent-setup]
   pull_request:
     branches: [main]
 

@@ -231,7 +231,7 @@ flowchart TD
 выбирать датасеты после просмотра результатов или только по описанию LLM.
 
 Источник конфигурации —
-[`quality_registry.json`](../fedotllm/agents/evolve/evaluation/quality_registry.json).
+[`quality_registry.json`](../../../../fedotllm/agents/evolve/evaluation/quality_registry.json).
 Точный состав, горизонты, пороги и версия протокола сохраняются с запуском.
 
 ### 2.4. Бейзлайн и основное решение
@@ -280,7 +280,7 @@ def quality_delta(before, after, higher_is_better, relative=False):
 численной погрешности и достигнут порог улучшения больше чем на половине
 датасетов либо минимум на двух. Иначе выдаётся `DROP` с причиной.
 Это правило реализовано в
-[`decision_from_quality_jobs`](../fedotllm/agents/evolve/evaluation/fedot_quality.py).
+[`decision_from_quality_jobs`](../../../../fedotllm/agents/evolve/evaluation/fedot_quality.py).
 
 Дополнительно в пилоте измеряются число предложенных улучшений, доля технически
 пригодных патчей, число полностью проверенных улучшений, число `KEEP`,
@@ -371,8 +371,8 @@ MVP поставляется как часть библиотеки `fedotllm`. 
 
 ## 6. Материалы проекта
 
-- [Обзор EvolveAgent](../fedotllm/agents/evolve/README.md).
-- [Контроллер проверок улучшений](../fedotllm/agents/evolve/controller/README.md).
-- [Реестр датасетов и параметров проверки](../fedotllm/agents/evolve/evaluation/quality_registry.json).
-- [Выбор области проверки](../fedotllm/agents/evolve/evaluation/quality_scope.py).
-- [Исторические исследовательские артефакты](../research/evolve/README.md).
+- [Обзор EvolveAgent](../../../../fedotllm/agents/evolve/README.md).
+- [Контроллер проверок улучшений](../../../../fedotllm/agents/evolve/controller/README.md).
+- [Реестр датасетов и параметров проверки](../../../../fedotllm/agents/evolve/evaluation/quality_registry.json).
+- [Выбор области проверки](../../../../fedotllm/agents/evolve/evaluation/quality_scope.py).
+- [Исторические исследовательские артефакты](../../../../research/evolve/README.md).

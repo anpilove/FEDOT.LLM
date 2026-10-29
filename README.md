@@ -11,6 +11,7 @@
 ```bash
 python -m fedotllm.agents.evolve doctor --fedot /path/to/FEDOT
 python -m fedotllm.agents.evolve run --fedot /path/to/FEDOT --workspace /tmp/evolve-run
+python -m fedotllm.agents.evolve.controller --help
 ```
 
 Research campaign artifacts: **[research/evolve/README.md](research/evolve/README.md)**
@@ -60,5 +61,5 @@ uv run ruff format --check .
 
 ## Дизайн системы
 
-[Дизайн-документ EvolveAgent](docs/ml_system_design_doc.md): цели, требования,
+[Дизайн-документ EvolveAgent](fedotllm/agents/evolve/docs/ml_system_design_doc.md): цели, требования,
 ограничения, архитектура и протокол проверки улучшений FEDOT.
