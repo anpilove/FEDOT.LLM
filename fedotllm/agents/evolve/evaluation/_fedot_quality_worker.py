@@ -19,7 +19,9 @@ import traceback as tb_mod
 from pathlib import Path
 
 from fedotllm.agents.evolve.storage.journal import write_json_atomic
-from fedotllm.agents.evolve.evaluation.quality_registry import TUNING_EVALUATION_POLICIES
+from fedotllm.agents.evolve.evaluation.quality_registry import (
+    TUNING_EVALUATION_POLICIES,
+)
 
 STACK_DUMP_INTERVAL_SECONDS = 60.0
 SUPPORTED_CANDIDATE_DISPATCHERS = {
@@ -70,7 +72,7 @@ class _BoundedLogBuffer:
                     self.fedot_phase_at = datetime.now(timezone.utc).isoformat()
                     self.fedot_phase_line = line[-500:]
                     break
-        data = text.encode("utf-8", errors="replace")[-self.max_bytes:]
+        data = text.encode("utf-8", errors="replace")[-self.max_bytes :]
         if not data:
             return len(text)
         self._parts.append(data)
@@ -156,8 +158,10 @@ def _read_cpu_counters() -> dict:
             process_seconds = getattr(time, "process_time", None)
             source = "time.process_time"
             if process_seconds is None:
+
                 def process_seconds():
                     return time.process_time_ns() / 1_000_000_000
+
                 source = "time.process_time_ns"
             return {
                 "source": source,
@@ -173,7 +177,9 @@ def _read_cpu_counters() -> dict:
             }
 
 
-def _cpu_accounting_progress(current: dict, previous: dict | None, wall_interval: float | None) -> dict:
+def _cpu_accounting_progress(
+    current: dict, previous: dict | None, wall_interval: float | None
+) -> dict:
     """Label counter scope and deltas; child totals cover only already-reaped children."""
 
     progress = {
@@ -182,18 +188,25 @@ def _cpu_accounting_progress(current: dict, previous: dict | None, wall_interval
         "accounted_cpu_core_equivalents": None,
     }
     counter_keys = [
-        key for key, value in current.items()
+        key
+        for key, value in current.items()
         if key.endswith("_seconds") and isinstance(value, (int, float))
     ]
     deltas = []
     for key in counter_keys:
         delta_key = key.removesuffix("_seconds") + "_delta_seconds"
         previous_value = previous.get(key) if previous else None
-        delta = None if previous_value is None else max(0.0, current[key] - previous_value)
+        delta = (
+            None if previous_value is None else max(0.0, current[key] - previous_value)
+        )
         progress[delta_key] = delta
         if delta is not None:
             deltas.append(delta)
-    if wall_interval is not None and wall_interval > 0 and len(deltas) == len(counter_keys):
+    if (
+        wall_interval is not None
+        and wall_interval > 0
+        and len(deltas) == len(counter_keys)
+    ):
         progress["accounted_cpu_core_equivalents"] = sum(deltas) / wall_interval
     return progress
 
@@ -211,18 +224,30 @@ def _periodic_stack_dumps(
     """
     from fedotllm.agents.evolve.evaluation.stack_sampler import periodic_stack_samples
 
-    interval = STACK_DUMP_INTERVAL_SECONDS if interval_seconds is None else interval_seconds
-    with periodic_stack_samples(path, interval_seconds=interval,
-                                scope="worker_process_threads") as status:
+    interval = (
+        STACK_DUMP_INTERVAL_SECONDS if interval_seconds is None else interval_seconds
+    )
+    with periodic_stack_samples(
+        path, interval_seconds=interval, scope="worker_process_threads"
+    ) as status:
         yield status
 
 
 class _StageTimings:
     """Publish atomic stage state and independent heartbeats during long fits."""
 
-    def __init__(self, progress_path: Path | None = None, *, identity=None,
-                 log_buffer=None, heartbeat_interval_seconds: float = 30.0):
-        if not math.isfinite(heartbeat_interval_seconds) or heartbeat_interval_seconds <= 0:
+    def __init__(
+        self,
+        progress_path: Path | None = None,
+        *,
+        identity=None,
+        log_buffer=None,
+        heartbeat_interval_seconds: float = 30.0,
+    ):
+        if (
+            not math.isfinite(heartbeat_interval_seconds)
+            or heartbeat_interval_seconds <= 0
+        ):
             raise ValueError("heartbeat_interval_seconds must be finite and positive")
         self.records: dict[str, dict] = {}
         self.last_stage = ""
@@ -247,12 +272,16 @@ class _StageTimings:
             current = _read_cpu_counters()
         except Exception:
             # Diagnostic counters must never turn a successful model fit into a failure.
-            current = {"source": "unavailable", "scope": "unavailable",
-                       "children_supported": False}
+            current = {
+                "source": "unavailable",
+                "scope": "unavailable",
+                "children_supported": False,
+            }
         sampled_at = time.monotonic()
         wall_interval = (
             max(0.0, sampled_at - self._last_cpu_sample_monotonic)
-            if self._last_cpu_sample_monotonic is not None else None
+            if self._last_cpu_sample_monotonic is not None
+            else None
         )
         self.cpu_accounting = _cpu_accounting_progress(
             current, self._last_cpu_counters, wall_interval
@@ -266,8 +295,11 @@ class _StageTimings:
             return
         with self._lock:
             now = datetime.now(timezone.utc).isoformat()
-            elapsed = (time.monotonic() - self._active_started_monotonic
-                       if self._active_started_monotonic is not None else 0.0)
+            elapsed = (
+                time.monotonic() - self._active_started_monotonic
+                if self._active_started_monotonic is not None
+                else 0.0
+            )
             progress = {
                 **self.identity,
                 "last_stage": self.last_stage,
@@ -277,7 +309,9 @@ class _StageTimings:
                 "event": event,
                 "updated_at": now,
                 "failed_stage": self.failed_stage,
-                "stage_timings": {key: dict(value) for key, value in self.records.items()},
+                "stage_timings": {
+                    key: dict(value) for key, value in self.records.items()
+                },
                 "cpu_accounting": self._sample_cpu_accounting(),
             }
             if self.log_buffer is not None:
@@ -305,10 +339,14 @@ class _StageTimings:
                         progress["last_worker_log_line"] = lines[-1][-500:]
                     tail_start = max(0, size - 64 * 1024)
                     previous_size = self._last_worker_log_size
-                    if previous_size is None or previous_size < tail_start or previous_size > size:
+                    if (
+                        previous_size is None
+                        or previous_size < tail_start
+                        or previous_size > size
+                    ):
                         new_text = tail
                     else:
-                        new_text = tail[previous_size - tail_start:]
+                        new_text = tail[previous_size - tail_start :]
                     self._last_worker_log_size = size
                     optimizer_summary = _summarize_fedot_log(new_text)
                     if optimizer_summary:
@@ -318,7 +356,8 @@ class _StageTimings:
                         progress["last_optimizer_event_at"] = now
                         progress["last_fedot_log_at"] = now
                         optimizer_lines = [
-                            line.strip() for line in new_text.splitlines()
+                            line.strip()
+                            for line in new_text.splitlines()
                             if re.search(
                                 r"Generation num:|individuals out of .* evaluated successfully|"
                                 r"LaggedTransformationImplementation.*Window size.*changed",
@@ -330,7 +369,9 @@ class _StageTimings:
                             progress["last_fedot_log_line"] = optimizer_lines[-1][-500:]
                         progress.update(optimizer_summary)
                     elif self._last_optimizer_event_at is not None:
-                        progress["last_optimizer_event_at"] = self._last_optimizer_event_at
+                        progress["last_optimizer_event_at"] = (
+                            self._last_optimizer_event_at
+                        )
                         progress["last_fedot_log_at"] = self._last_optimizer_event_at
                 except OSError:
                     # The bounded in-process log buffer remains a useful fallback
@@ -346,7 +387,9 @@ class _StageTimings:
                     os.fsync(handle.fileno())
                 temporary.replace(self.progress_path)
                 if hasattr(os, "O_DIRECTORY"):
-                    directory_fd = os.open(self.progress_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    directory_fd = os.open(
+                        self.progress_path.parent, os.O_RDONLY | os.O_DIRECTORY
+                    )
                     try:
                         os.fsync(directory_fd)
                     finally:
@@ -377,7 +420,9 @@ class _StageTimings:
         self._publish("start")
         heartbeat_stop = threading.Event()
         heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop, args=(heartbeat_stop,), daemon=True,
+            target=self._heartbeat_loop,
+            args=(heartbeat_stop,),
+            daemon=True,
             name="quality-worker-heartbeat",
         )
         heartbeat_thread.start()
@@ -397,23 +442,32 @@ class _StageTimings:
             duration = time.monotonic() - started
             with self._lock:
                 self.records[stage] = {
-                    "started_at": started_at, "finished_at": finished_at,
-                    "duration_seconds": duration, "status": status,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "duration_seconds": duration,
+                    "status": status,
                 }
                 self._active_stage = None
                 self._active_started_monotonic = None
                 self._active_started_at = None
-            print(f"worker stage={stage} event={status} timestamp={finished_at} "
-                  f"duration_seconds={duration:.6f}", flush=True)
+            print(
+                f"worker stage={stage} event={status} timestamp={finished_at} "
+                f"duration_seconds={duration:.6f}",
+                flush=True,
+            )
             try:
                 self._publish(status)
                 if self._heartbeat_error is not None:
-                    raise OSError(f"worker heartbeat could not be saved: {self._heartbeat_error}")
+                    raise OSError(
+                        f"worker heartbeat could not be saved: {self._heartbeat_error}"
+                    )
             except OSError as persistence_error:
                 if original is None:
                     raise
                 if hasattr(original, "add_note"):
-                    original.add_note(f"Stage progress save failed: {persistence_error}")
+                    original.add_note(
+                        f"Stage progress save failed: {persistence_error}"
+                    )
 
 
 def _history_generations(history) -> int:
@@ -432,15 +486,26 @@ def _history_generations(history) -> int:
     return 1
 
 
-def _search_ran(model, log_text: str, *, composition_started: bool = False,
-                composition_skipped: bool = False) -> tuple[bool, str]:
+def _search_ran(
+    model,
+    log_text: str,
+    *,
+    composition_started: bool = False,
+    composition_skipped: bool = False,
+) -> tuple[bool, str]:
     composer = getattr(model, "api_composer", None)
     was_optimised = bool(getattr(composer, "was_optimised", False))
     generations = _history_generations(getattr(model, "history", None))
-    skipped = composition_skipped or "timeout is too small for composing" in log_text.lower()
+    skipped = (
+        composition_skipped or "timeout is too small for composing" in log_text.lower()
+    )
     if skipped or not was_optimised:
         return False, "composing_did_not_start"
-    if generations <= 0 and not composition_started and "pipeline composition started" not in log_text.lower():
+    if (
+        generations <= 0
+        and not composition_started
+        and "pipeline composition started" not in log_text.lower()
+    ):
         return False, "composing_did_not_start"
     return True, "composing_started"
 
@@ -475,7 +540,11 @@ def _score_classification(y_test, prediction, metric: str) -> float:
         if getattr(scores, "ndim", 1) == 2:
             return float(roc_auc_score(y, scores, multi_class="ovr"))
         return float(roc_auc_score(y, scores))
-    labels = np.argmax(pred, axis=1) if pred.ndim == 2 and pred.shape[1] > 1 else np.rint(pred.ravel())
+    labels = (
+        np.argmax(pred, axis=1)
+        if pred.ndim == 2 and pred.shape[1] > 1
+        else np.rint(pred.ravel())
+    )
     if name == "f1":
         return float(f1_score(y, labels, average="macro"))
     return float(accuracy_score(y, labels))
@@ -488,7 +557,9 @@ def _score_regression(y_test, prediction, metric: str) -> float:
     from sklearn.metrics import mean_absolute_error, mean_squared_error
 
     actual = np.asarray(y_test, dtype=float).reshape(-1)
-    predicted = np.asarray(getattr(prediction, "predict", prediction), dtype=float).reshape(-1)
+    predicted = np.asarray(
+        getattr(prediction, "predict", prediction), dtype=float
+    ).reshape(-1)
     if actual.shape != predicted.shape:
         raise ValueError(
             f"regression prediction shape mismatch: target={actual.shape}, prediction={predicted.shape}"
@@ -530,8 +601,13 @@ def _holdout_metrics(model, dataset, fold) -> tuple[float, dict]:
         if getattr(model, "prediction", None) is None:
             raise
         if dataset.problem == "classification":
-            score = _score_classification(fold["y_test"], model.prediction, dataset.metric)
-            return score, {dataset.metric: score, "fallback": "sklearn_from_predict_proba"}
+            score = _score_classification(
+                fold["y_test"], model.prediction, dataset.metric
+            )
+            return score, {
+                dataset.metric: score,
+                "fallback": "sklearn_from_predict_proba",
+            }
         if dataset.problem == "regression":
             score = _score_regression(fold["y_test"], model.prediction, dataset.metric)
             return score, {dataset.metric: score, "fallback": "sklearn_from_prediction"}
@@ -543,8 +619,9 @@ def configure_worker_runtime(out_path: Path) -> dict:
     import tempfile
     import golem.core.paths as golem_paths
 
-    runtime = Path(tempfile.mkdtemp(
-        prefix=f"{out_path.stem}.runtime-", dir=str(out_path.parent)))
+    runtime = Path(
+        tempfile.mkdtemp(prefix=f"{out_path.stem}.runtime-", dir=str(out_path.parent))
+    )
     temporary = runtime / "tmp"
     temporary.mkdir()
     golem = temporary / "GOLEM"
@@ -555,7 +632,7 @@ def configure_worker_runtime(out_path: Path) -> dict:
     # FEDOT/log/optimizer modules, which capture this function on import.
     # No installed dependency or FEDOT source file is changed.
     golem_paths.default_data_dir = lambda: str(golem)
-    return {"temp_dir":str(temporary), "golem_data_dir":str(golem)}
+    return {"temp_dir": str(temporary), "golem_data_dir": str(golem)}
 
 
 def cache_policy_parameters(policy: str, problem: str) -> tuple[dict, tuple[str, ...]]:
@@ -569,7 +646,9 @@ def cache_policy_parameters(policy: str, problem: str) -> tuple[dict, tuple[str,
     from fedot.core.repository.tasks import TaskTypesEnum
 
     defaults = ApiParamsRepository.default_params_for_task(TaskTypesEnum[problem])
-    cache_keys = {key for key in defaults if key.startswith("use_") and key.endswith("_cache")}
+    cache_keys = {
+        key for key in defaults if key.startswith("use_") and key.endswith("_cache")
+    }
     attributes = {
         "use_operations_cache": "operations_cache",
         "use_pipelines_cache": "pipelines_cache",
@@ -577,14 +656,21 @@ def cache_policy_parameters(policy: str, problem: str) -> tuple[dict, tuple[str,
         "use_predictions_cache": "predictions_cache",
     }
     model_keys = cache_keys & {"use_operations_cache", "use_pipelines_cache"}
-    if (len(model_keys) != 1 or "use_preprocessing_cache" not in cache_keys
-            or cache_keys - attributes.keys()):
-        raise ValueError(f"FEDOT cache policy has unsupported runtime switches: {sorted(cache_keys)}")
+    if (
+        len(model_keys) != 1
+        or "use_preprocessing_cache" not in cache_keys
+        or cache_keys - attributes.keys()
+    ):
+        raise ValueError(
+            f"FEDOT cache policy has unsupported runtime switches: {sorted(cache_keys)}"
+        )
     flags = {key: False for key in sorted(cache_keys)}
     return flags, tuple(attributes[key] for key in flags)
 
 
-def assert_cache_policy(model, flags: dict, attributes: tuple[str, ...], *, phase: str) -> None:
+def assert_cache_policy(
+    model, flags: dict, attributes: tuple[str, ...], *, phase: str
+) -> None:
     """Fail closed if a runtime ignores switches or changes its cache API."""
     if not flags:
         return
@@ -594,7 +680,9 @@ def assert_cache_policy(model, flags: dict, attributes: tuple[str, ...], *, phas
     composer = model.api_composer
     for attribute in attributes:
         if not hasattr(composer, attribute):
-            raise ValueError(f"FEDOT cache policy missing composer attribute {attribute} {phase}")
+            raise ValueError(
+                f"FEDOT cache policy missing composer attribute {attribute} {phase}"
+            )
         if getattr(composer, attribute) is not None:
             raise ValueError(f"FEDOT cache policy has active {attribute} {phase}")
 
@@ -603,7 +691,9 @@ def load_worker_fold(spec: dict):
     from fedotllm.agents.evolve.evaluation.openml_fold import load_registered_fold
     from fedotllm.agents.evolve.evaluation.quality_registry import get_dataset, job_spec
     from fedotllm.agents.evolve.evaluation.smoke_data import (
-        SMOKE_IDENTITY, load_smoke_fold, smoke_registry,
+        SMOKE_IDENTITY,
+        load_smoke_fold,
+        smoke_registry,
     )
 
     if spec.get("registry_identity") == SMOKE_IDENTITY:
@@ -619,7 +709,9 @@ def load_worker_fold(spec: dict):
 
 def main(argv: list[str] | None = None) -> int:
     from fedotllm.agents.evolve.evaluation.child_traces import traced_children
-    from fedotllm.agents.evolve.evaluation.python_line_trace import python_line_samples_from_environment
+    from fedotllm.agents.evolve.evaluation.python_line_trace import (
+        python_line_samples_from_environment,
+    )
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--spec-json", required=True)
@@ -627,7 +719,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     spec = json.loads(Path(args.spec_json).read_text(encoding="utf-8"))
     with traced_children(
-        spec.get("process_trace_dir"), attempt_id=str(spec.get("attempt_id", "unknown")),
+        spec.get("process_trace_dir"),
+        attempt_id=str(spec.get("attempt_id", "unknown")),
         interval_seconds=float(spec.get("process_trace_interval_seconds", 60)),
     ) as child_diagnostics:
         with python_line_samples_from_environment(
@@ -638,21 +731,35 @@ def main(argv: list[str] | None = None) -> int:
             ),
             context={
                 key: spec[key]
-                for key in ("proposal_id", "attempt_id", "source_dataset", "side", "attempt",
-                            "worker_invocation_id")
+                for key in (
+                    "proposal_id",
+                    "attempt_id",
+                    "source_dataset",
+                    "side",
+                    "attempt",
+                    "worker_invocation_id",
+                )
                 if spec.get(key) is not None
             },
         ) as line_diagnostics:
             with _periodic_stack_dumps(
-                spec.get("stack_trace_path"), interval_seconds=spec.get("stack_dump_interval_seconds"),
+                spec.get("stack_trace_path"),
+                interval_seconds=spec.get("stack_dump_interval_seconds"),
             ) as diagnostics:
                 payload, timings = _evaluate_worker(spec, Path(args.out))
                 payload["metric_observations"]["stack_trace_diagnostics"] = {
-                    **diagnostics, "counter_snapshot_stage": "before_saved_payload",
+                    **diagnostics,
+                    "counter_snapshot_stage": "before_saved_payload",
                 }
-                payload["metric_observations"]["child_trace_diagnostics"] = dict(child_diagnostics)
-                payload["metric_observations"]["python_line_trace_diagnostics"] = dict(line_diagnostics)
-                payload["metric_observations"]["python_line_trace_path"] = line_diagnostics.get("output_path")
+                payload["metric_observations"]["child_trace_diagnostics"] = dict(
+                    child_diagnostics
+                )
+                payload["metric_observations"]["python_line_trace_diagnostics"] = dict(
+                    line_diagnostics
+                )
+                payload["metric_observations"]["python_line_trace_path"] = (
+                    line_diagnostics.get("output_path")
+                )
                 with timings.measure("saved_payload"):
                     write_json_atomic(Path(args.out), payload)
     return 0 if payload.get("status") != "crash" else 2
@@ -684,7 +791,9 @@ def _evaluate_worker(spec: dict, out_path: Path) -> tuple[dict, _StageTimings]:
 
 
 def _evaluate_worker_with_logging(
-    spec: dict, out_path: Path, log_stream: _BoundedLogBuffer,
+    spec: dict,
+    out_path: Path,
+    log_stream: _BoundedLogBuffer,
 ) -> tuple[dict, _StageTimings]:
     """Evaluate with diagnostics active across import, data loading and scoring."""
     raw_composer_options = spec.get("composer_options", {})
@@ -704,19 +813,42 @@ def _evaluate_worker_with_logging(
     )
     timings = _StageTimings(
         out_path.with_suffix(".stages.json"),
-        identity={key: spec.get(key) for key in (
-            "proposal_id", "attempt_id", "source_dataset", "side", "attempt",
-            "worker_invocation_id", "tuning_evaluation_policy",
-            "registry_identity", "evaluation_identity", "preset", "n_jobs", "timeout_seconds",
-            "fedot_search_budget_seconds", "fedot_timeout_policy", "final_fit_reserve_seconds",
-            "timeout_minutes", "seed",
-            "cv_folds", "max_pipeline_fit_time_seconds", "max_pipeline_fit_policy",
-            "max_pipeline_evaluation_time_seconds", "max_pipeline_evaluation_policy",
-            "candidate_dispatcher",
-            "stack_trace_path", "fedot_trace_dir",
-            "process_trace_dir", "process_trace_manifest_path",
-            "composer_options", "worker_log_path",
-        ) if spec.get(key) is not None} | {"task_id": spec.get("source_dataset")},
+        identity={
+            key: spec.get(key)
+            for key in (
+                "proposal_id",
+                "attempt_id",
+                "source_dataset",
+                "side",
+                "attempt",
+                "worker_invocation_id",
+                "tuning_evaluation_policy",
+                "registry_identity",
+                "evaluation_identity",
+                "preset",
+                "n_jobs",
+                "timeout_seconds",
+                "fedot_search_budget_seconds",
+                "fedot_timeout_policy",
+                "final_fit_reserve_seconds",
+                "timeout_minutes",
+                "seed",
+                "cv_folds",
+                "max_pipeline_fit_time_seconds",
+                "max_pipeline_fit_policy",
+                "max_pipeline_evaluation_time_seconds",
+                "max_pipeline_evaluation_policy",
+                "candidate_dispatcher",
+                "stack_trace_path",
+                "fedot_trace_dir",
+                "process_trace_dir",
+                "process_trace_manifest_path",
+                "composer_options",
+                "worker_log_path",
+            )
+            if spec.get(key) is not None
+        }
+        | {"task_id": spec.get("source_dataset")},
         log_buffer=log_stream,
     )
     payload: dict
@@ -736,13 +868,20 @@ def _evaluate_worker_with_logging(
     )
     try:
         with timings.measure("validate_spec"):
-            if spec.get("tuning_evaluation_policy", "legacy") not in TUNING_EVALUATION_POLICIES:
+            if (
+                spec.get("tuning_evaluation_policy", "legacy")
+                not in TUNING_EVALUATION_POLICIES
+            ):
                 raise ValueError("unsupported tuning evaluation policy")
             if not isinstance(raw_composer_options, dict):
                 raise ValueError("composer_options must be an object")
-            if not isinstance(candidate_dispatcher, str) \
-                    or candidate_dispatcher not in SUPPORTED_CANDIDATE_DISPATCHERS:
-                raise ValueError(f"unsupported candidate_dispatcher: {candidate_dispatcher!r}")
+            if (
+                not isinstance(candidate_dispatcher, str)
+                or candidate_dispatcher not in SUPPORTED_CANDIDATE_DISPATCHERS
+            ):
+                raise ValueError(
+                    f"unsupported candidate_dispatcher: {candidate_dispatcher!r}"
+                )
             if set(raw_composer_options) - {"pop_size", "num_of_generations"}:
                 raise ValueError("unsupported FEDOT composer options")
             for key, value in raw_composer_options.items():
@@ -750,7 +889,10 @@ def _evaluate_worker_with_logging(
                     raise ValueError(f"invalid FEDOT composer option {key}={value!r}")
 
         with timings.measure("import"):
-            if spec.get("runtime_paths_policy", "isolated-worker-v1") != "isolated-worker-v1":
+            if (
+                spec.get("runtime_paths_policy", "isolated-worker-v1")
+                != "isolated-worker-v1"
+            ):
                 raise ValueError("unsupported worker runtime paths policy")
             runtime_paths = configure_worker_runtime(out_path)
 
@@ -760,17 +902,29 @@ def _evaluate_worker_with_logging(
         with timings.measure("load_fold"):
             dataset, fold = load_worker_fold(spec)
         with timings.measure("configure_fit_budget"):
-            cv_folds = int(spec.get("cv_folds") or (3 if dataset.problem == "ts_forecasting" else 5))
+            cv_folds = int(
+                spec.get("cv_folds")
+                or (3 if dataset.problem == "ts_forecasting" else 5)
+            )
             if cv_folds <= 0:
                 raise ValueError("worker requires positive CV fold count")
             side_timeout_seconds = int(spec["timeout_seconds"])
             fedot_search_budget_seconds = int(spec["fedot_search_budget_seconds"])
             if not 0 < fedot_search_budget_seconds < side_timeout_seconds:
-                raise ValueError("worker search budget must be positive and below the side deadline")
+                raise ValueError(
+                    "worker search budget must be positive and below the side deadline"
+                )
             if fedot_timeout_policy not in {"legacy", "return_best"}:
-                raise ValueError(f"unsupported FEDOT timeout policy: {fedot_timeout_policy}")
-            if final_fit_reserve_seconds < 0 or final_fit_reserve_seconds >= fedot_search_budget_seconds:
-                raise ValueError("final fit reserve must be non-negative and below the FEDOT search budget")
+                raise ValueError(
+                    f"unsupported FEDOT timeout policy: {fedot_timeout_policy}"
+                )
+            if (
+                final_fit_reserve_seconds < 0
+                or final_fit_reserve_seconds >= fedot_search_budget_seconds
+            ):
+                raise ValueError(
+                    "final fit reserve must be non-negative and below the FEDOT search budget"
+                )
             expected_evaluation_limit = fedot_search_budget_seconds // cv_folds
             expected_fit_limit = (
                 expected_evaluation_limit // cv_folds
@@ -779,10 +933,14 @@ def _evaluate_worker_with_logging(
             )
             configured_fit_limit = spec.get("max_pipeline_fit_time_seconds")
             max_pipeline_fit_time_seconds = (
-                expected_fit_limit if configured_fit_limit is None else int(configured_fit_limit)
+                expected_fit_limit
+                if configured_fit_limit is None
+                else int(configured_fit_limit)
             )
             if max_pipeline_fit_time_seconds <= 0:
-                raise ValueError("worker requires positive CV folds and per-fold fit limit")
+                raise ValueError(
+                    "worker requires positive CV folds and per-fold fit limit"
+                )
             if max_pipeline_fit_time_seconds != expected_fit_limit:
                 raise ValueError(
                     "worker per-fold fit limit does not match the registered profile: "
@@ -790,9 +948,12 @@ def _evaluate_worker_with_logging(
                 )
             if fit_policy != "per-cv-fold-v1":
                 raise ValueError(f"unsupported max_pipeline_fit_policy: {fit_policy}")
-            configured_evaluation_limit = spec.get("max_pipeline_evaluation_time_seconds")
+            configured_evaluation_limit = spec.get(
+                "max_pipeline_evaluation_time_seconds"
+            )
             max_pipeline_evaluation_time_seconds = (
-                expected_evaluation_limit if configured_evaluation_limit is None
+                expected_evaluation_limit
+                if configured_evaluation_limit is None
                 else int(configured_evaluation_limit)
             )
             if max_pipeline_evaluation_time_seconds != expected_evaluation_limit:
@@ -801,22 +962,27 @@ def _evaluate_worker_with_logging(
                     f"expected {expected_evaluation_limit}, got {max_pipeline_evaluation_time_seconds}"
                 )
             expected_evaluation_policy = (
-                "per-cv-candidate-v1" if fedot_timeout_policy == "return_best"
+                "per-cv-candidate-v1"
+                if fedot_timeout_policy == "return_best"
                 else "per-candidate-evaluation-v1"
             )
             if evaluation_policy != expected_evaluation_policy:
-                raise ValueError(f"unsupported total candidate evaluation policy: {evaluation_policy}")
-            timings.identity.update({
-                "cv_folds": cv_folds,
-                "side_timeout_seconds": side_timeout_seconds,
-                "fedot_search_budget_seconds": fedot_search_budget_seconds,
-                "fedot_timeout_policy": fedot_timeout_policy,
-                "final_fit_reserve_seconds": final_fit_reserve_seconds,
-                "max_pipeline_fit_time_seconds": max_pipeline_fit_time_seconds,
-                "max_pipeline_fit_policy": fit_policy,
-                "max_pipeline_evaluation_time_seconds": max_pipeline_evaluation_time_seconds,
-                "max_pipeline_evaluation_policy": evaluation_policy,
-            })
+                raise ValueError(
+                    f"unsupported total candidate evaluation policy: {evaluation_policy}"
+                )
+            timings.identity.update(
+                {
+                    "cv_folds": cv_folds,
+                    "side_timeout_seconds": side_timeout_seconds,
+                    "fedot_search_budget_seconds": fedot_search_budget_seconds,
+                    "fedot_timeout_policy": fedot_timeout_policy,
+                    "final_fit_reserve_seconds": final_fit_reserve_seconds,
+                    "max_pipeline_fit_time_seconds": max_pipeline_fit_time_seconds,
+                    "max_pipeline_fit_policy": fit_policy,
+                    "max_pipeline_evaluation_time_seconds": max_pipeline_evaluation_time_seconds,
+                    "max_pipeline_evaluation_policy": evaluation_policy,
+                }
+            )
             print(
                 f"worker fit profile fedot_search_budget_seconds={fedot_search_budget_seconds} "
                 f"planned_post_search_seconds={side_timeout_seconds - fedot_search_budget_seconds} "
@@ -834,7 +1000,9 @@ def _evaluate_worker_with_logging(
             flush=True,
         )
         with timings.measure("fit"):
-            cache_flags, cache_attributes = cache_policy_parameters(cache_policy, dataset.problem)
+            cache_flags, cache_attributes = cache_policy_parameters(
+                cache_policy, dataset.problem
+            )
             # A unique attempt directory avoids FEDOT's default-directory
             # cleanup touching another worker's SQLite cache. Keep it for audit.
             cache_dir = out_path.with_suffix(".fedot-cache")
@@ -846,16 +1014,26 @@ def _evaluate_worker_with_logging(
                 from fedot.core.repository.tasks import TsForecastingParams
 
                 extra["task_params"] = TsForecastingParams(
-                    forecast_length=int(dataset.forecast_horizon or fold.get("forecast_horizon") or 12)
+                    forecast_length=int(
+                        dataset.forecast_horizon or fold.get("forecast_horizon") or 12
+                    )
                 )
             composer_options = dict(raw_composer_options)
             if candidate_dispatcher == "isolated-candidate-process-v1":
-                from fedot.core.optimisers.isolated_gp_optimizer import IsolatedEvoGraphOptimizer
+                from fedot.core.optimisers.isolated_gp_optimizer import (
+                    IsolatedEvoGraphOptimizer,
+                )
 
                 composer_options["optimizer"] = IsolatedEvoGraphOptimizer
             timeout_policy_options = (
-                {"max_pipeline_evaluation_time": float(max_pipeline_evaluation_time_seconds) / 60.0}
-                if fedot_timeout_policy == "return_best" else {}
+                {
+                    "max_pipeline_evaluation_time": float(
+                        max_pipeline_evaluation_time_seconds
+                    )
+                    / 60.0
+                }
+                if fedot_timeout_policy == "return_best"
+                else {}
             )
             model = Fedot(
                 problem=dataset.problem,
@@ -877,12 +1055,18 @@ def _evaluate_worker_with_logging(
                 **extra,
                 **composer_options,
             )
-            assert_cache_policy(model, cache_flags, cache_attributes, phase="before fit")
+            assert_cache_policy(
+                model, cache_flags, cache_attributes, phase="before fit"
+            )
             fit_arguments = {"features": fold["X_train"]}
             if not ts:
                 fit_arguments["target"] = fold["y_train"]
-            if tuning_policy == "isolated-objective-process-v1" and spec.get("with_tuning"):
-                from fedotllm.agents.evolve.evaluation.tuning_isolation import install_tuning_isolation
+            if tuning_policy == "isolated-objective-process-v1" and spec.get(
+                "with_tuning"
+            ):
+                from fedotllm.agents.evolve.evaluation.tuning_isolation import (
+                    install_tuning_isolation,
+                )
 
                 isolation_spec = dict(
                     spec,
@@ -894,7 +1078,10 @@ def _evaluate_worker_with_logging(
                     with installation:
                         model.fit(**fit_arguments)
                 finally:
-                    tuning_isolation_observations = {"enabled": True, **installation.diagnostics()}
+                    tuning_isolation_observations = {
+                        "enabled": True,
+                        **installation.diagnostics(),
+                    }
             else:
                 model.fit(**fit_arguments)
             assert_cache_policy(model, cache_flags, cache_attributes, phase="after fit")
@@ -903,10 +1090,14 @@ def _evaluate_worker_with_logging(
         with timings.measure("metrics"):
             score, metrics = _holdout_metrics(model, dataset, fold)
             if not math.isfinite(float(score)):
-                raise ValueError(f"FEDOT returned a non-finite {dataset.metric} score: {score}")
+                raise ValueError(
+                    f"FEDOT returned a non-finite {dataset.metric} score: {score}"
+                )
         log_text = log_stream.getvalue()
         search_ran, search_detail = _search_ran(
-            model, log_text, composition_started=log_stream.composition_started,
+            model,
+            log_text,
+            composition_started=log_stream.composition_started,
             composition_skipped=log_stream.composition_skipped,
         )
         # A valid end-to-end prediction and metric is measurable quality even
@@ -925,7 +1116,9 @@ def _evaluate_worker_with_logging(
                 "runtime_paths": runtime_paths,
                 "fedot_trace_enabled": bool(spec.get("fedot_trace_dir")),
                 "fedot_trace_dir": spec.get("fedot_trace_dir"),
-                "fedot_trace_interval_seconds": spec.get("fedot_trace_interval_seconds"),
+                "fedot_trace_interval_seconds": spec.get(
+                    "fedot_trace_interval_seconds"
+                ),
                 "metric_valid": True,
                 "search_ran": search_ran,
                 "fedot_phase": log_stream.fedot_phase or None,
@@ -933,12 +1126,16 @@ def _evaluate_worker_with_logging(
                 "fedot_phase_line": log_stream.fedot_phase_line or None,
                 "search_detail": search_detail,
                 "was_optimised": bool(
-                    getattr(getattr(model, "api_composer", None), "was_optimised", False)
+                    getattr(
+                        getattr(model, "api_composer", None), "was_optimised", False
+                    )
                 ),
                 "was_tuned": bool(
                     getattr(getattr(model, "api_composer", None), "was_tuned", False)
                 ),
-                "history_generations": _history_generations(getattr(model, "history", None)),
+                "history_generations": _history_generations(
+                    getattr(model, "history", None)
+                ),
                 "metrics": metrics,
                 "loader": fold.get("loader"),
                 "preset": spec["preset"],
@@ -996,7 +1193,9 @@ def _evaluate_worker_with_logging(
                 "search_ran": False,
                 "fedot_trace_enabled": bool(spec.get("fedot_trace_dir")),
                 "fedot_trace_dir": spec.get("fedot_trace_dir"),
-                "fedot_trace_interval_seconds": spec.get("fedot_trace_interval_seconds"),
+                "fedot_trace_interval_seconds": spec.get(
+                    "fedot_trace_interval_seconds"
+                ),
                 "fedot_phase": log_stream.fedot_phase or None,
                 "fedot_phase_at": log_stream.fedot_phase_at or None,
                 "fedot_phase_line": log_stream.fedot_phase_line or None,
@@ -1011,10 +1210,15 @@ def _evaluate_worker_with_logging(
                 "final_fit_reserve_seconds": final_fit_reserve_seconds,
                 "metric_outcome": "not_measured",
                 "metric_valid": False,
-                "fedot_budget_phase": getattr(exc, "phase", None) if is_fedot_budget_timeout else None,
-                "fedot_budget_seconds": getattr(exc, "budget_seconds", None) if is_fedot_budget_timeout else None,
+                "fedot_budget_phase": getattr(exc, "phase", None)
+                if is_fedot_budget_timeout
+                else None,
+                "fedot_budget_seconds": getattr(exc, "budget_seconds", None)
+                if is_fedot_budget_timeout
+                else None,
                 "fedot_budget_elapsed_seconds": getattr(exc, "elapsed_seconds", None)
-                if is_fedot_budget_timeout else None,
+                if is_fedot_budget_timeout
+                else None,
                 "timeout_minutes": spec.get("timeout_minutes"),
                 "max_pipeline_fit_time_seconds": max_pipeline_fit_time_seconds,
                 "max_pipeline_fit_policy": fit_policy,
@@ -1024,8 +1228,14 @@ def _evaluate_worker_with_logging(
             "log_tail": log_stream.getvalue()[-4000:],
         }
     for key in (
-        "proposal_id", "attempt_id", "source_dataset", "side", "attempt",
-        "registry_identity", "evaluation_identity", "worker_invocation_id",
+        "proposal_id",
+        "attempt_id",
+        "source_dataset",
+        "side",
+        "attempt",
+        "registry_identity",
+        "evaluation_identity",
+        "worker_invocation_id",
     ):
         if key in spec:
             payload[key] = spec[key]

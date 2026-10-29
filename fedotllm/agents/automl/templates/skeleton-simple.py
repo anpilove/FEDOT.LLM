@@ -33,7 +33,9 @@ EVAL_SET_SIZE = 0.2  # 20% of the data for evaluation
 # --- TODO: Update these paths for your specific competition ---
 TRAIN_FILE = DATASET_PATH / "train.csv"  # TODO: Replace with your actual filename
 TEST_FILE = DATASET_PATH / "test.csv"  # TODO: Replace with your actual filename
-SAMPLE_SUBMISSION_FILE = DATASET_PATH / "sample_submission.csv"  # TODO: Replace with your actual filename or None
+SAMPLE_SUBMISSION_FILE = (
+    DATASET_PATH / "sample_submission.csv"
+)  # TODO: Replace with your actual filename or None
 
 
 # USER CODE BEGIN LOAD_DATA #
@@ -51,7 +53,7 @@ def transform_data(dataset: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     Used on both Train and Test data. Test data may initially not contain target columns.
     """
 
-    target_columns = [] # TODO: Replace with ACTUAL target columns
+    target_columns = []  # TODO: Replace with ACTUAL target columns
 
     # Separating features and target if present
     data = dataset.copy(deep=True)

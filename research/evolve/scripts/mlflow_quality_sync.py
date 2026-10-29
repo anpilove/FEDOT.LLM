@@ -13,7 +13,9 @@ def _key(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
 
 
-def _find_or_create(client, experiment_id: str, key: str, *, name: str, tags: dict[str, str]):
+def _find_or_create(
+    client, experiment_id: str, key: str, *, name: str, tags: dict[str, str]
+):
     runs = client.search_runs(
         experiment_ids=[experiment_id],
         filter_string=f"tags.controller_key = '{key}'",
@@ -28,7 +30,9 @@ def _find_or_create(client, experiment_id: str, key: str, *, name: str, tags: di
     )
 
 
-def _log_metric_if_changed(client, run_id: str, name: str, value: float, *, step: int) -> None:
+def _log_metric_if_changed(
+    client, run_id: str, name: str, value: float, *, step: int
+) -> None:
     history = client.get_metric_history(run_id, name)
     if history and history[-1].value == value and history[-1].step == step:
         return
@@ -48,7 +52,9 @@ def sync_quality_to_mlflow(
         import mlflow
         from mlflow import MlflowClient
     except ImportError as exc:  # local Markdown/JSON reporting remains independent
-        raise RuntimeError("MLflow is not installed; install it locally to enable this sync") from exc
+        raise RuntimeError(
+            "MLflow is not installed; install it locally to enable this sync"
+        ) from exc
 
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient(tracking_uri=tracking_uri)
@@ -79,12 +85,20 @@ def sync_quality_to_mlflow(
             "source_revision": str(meta.get("source_revision") or ""),
             "registry_identity": str(meta.get("registry_identity") or ""),
             "quality_outcome": str(
-                meta.get("derived_quality_outcome") or meta.get("quality_outcome") or "pending"
+                meta.get("derived_quality_outcome")
+                or meta.get("quality_outcome")
+                or "pending"
             ),
-            "queue_status": str(meta.get("queue_status") or meta.get("status") or "unknown"),
+            "queue_status": str(
+                meta.get("queue_status") or meta.get("status") or "unknown"
+            ),
             "issue_url": str(meta.get("issue_url") or ""),
-            "hypothesis_json": json.dumps(meta.get("hypothesis") or {}, ensure_ascii=False),
-            "quality_scope_json": json.dumps(meta.get("quality_scope") or {}, ensure_ascii=False),
+            "hypothesis_json": json.dumps(
+                meta.get("hypothesis") or {}, ensure_ascii=False
+            ),
+            "quality_scope_json": json.dumps(
+                meta.get("quality_scope") or {}, ensure_ascii=False
+            ),
             "task_ids_json": json.dumps(meta.get("task_ids") or [], ensure_ascii=False),
         }
         parent = _find_or_create(
@@ -100,20 +114,30 @@ def sync_quality_to_mlflow(
         planned = int(meta.get("planned_task_count") or len(meta.get("task_ids") or []))
         completed = int(meta.get("completed_task_pair_count") or 0)
         measured = int(meta.get("measured_task_pair_count") or 0)
-        _log_metric_if_changed(client, parent_id, "datasets_planned", float(planned), step=0)
-        _log_metric_if_changed(client, parent_id, "datasets_completed", float(completed), step=completed)
-        _log_metric_if_changed(client, parent_id, "datasets_measured", float(measured), step=completed)
+        _log_metric_if_changed(
+            client, parent_id, "datasets_planned", float(planned), step=0
+        )
+        _log_metric_if_changed(
+            client, parent_id, "datasets_completed", float(completed), step=completed
+        )
+        _log_metric_if_changed(
+            client, parent_id, "datasets_measured", float(measured), step=completed
+        )
         for metric_name, field in (
             ("quality_wins", "derived_improved_task_count"),
             ("quality_losses", "derived_regressed_task_count"),
         ):
             count = meta.get(field)
             if isinstance(count, (int, float)):
-                _log_metric_if_changed(client, parent_id, metric_name, float(count), step=completed)
+                _log_metric_if_changed(
+                    client, parent_id, metric_name, float(count), step=completed
+                )
         if meta.get("reason"):
             client.set_tag(parent_id, "decision_reason", str(meta["reason"]))
         if meta.get("quality_message"):
-            client.log_text(parent_id, str(meta["quality_message"]), "quality_message.txt")
+            client.log_text(
+                parent_id, str(meta["quality_message"]), "quality_message.txt"
+            )
         client.log_text(
             parent_id,
             json.dumps(meta, ensure_ascii=False, indent=2, default=str),
@@ -166,17 +190,24 @@ def sync_quality_to_mlflow(
                 client.set_tag(child_id, tag, value)
             for side in ("stock", "patch"):
                 result = sides.get(side) or {}
-                client.set_tag(child_id, f"{side}_status", str(result.get("status") or "pending"))
+                client.set_tag(
+                    child_id, f"{side}_status", str(result.get("status") or "pending")
+                )
                 observations = result.get("metric_observations") or {}
                 if result.get("worker_log_path") or observations.get("worker_log_path"):
                     client.set_tag(
                         child_id,
                         f"{side}_worker_log_path",
-                        str(result.get("worker_log_path") or observations["worker_log_path"]),
+                        str(
+                            result.get("worker_log_path")
+                            or observations["worker_log_path"]
+                        ),
                     )
                 score = result.get("score")
                 if isinstance(score, (int, float)) and math.isfinite(float(score)):
-                    _log_metric_if_changed(client, child_id, f"{side}_score", float(score), step=attempt)
+                    _log_metric_if_changed(
+                        client, child_id, f"{side}_score", float(score), step=attempt
+                    )
             stock = sides.get("stock") or {}
             patch = sides.get("patch") or {}
             stock_score, patch_score = stock.get("score"), patch.get("score")
@@ -193,9 +224,12 @@ def sync_quality_to_mlflow(
                     delta = -delta
                 if spec.get("delta_mode") == "relative":
                     delta /= max(abs(float(stock_score)), 1e-12)
-                _log_metric_if_changed(client, child_id, "quality_gain", delta, step=attempt)
+                _log_metric_if_changed(
+                    client, child_id, "quality_gain", delta, step=attempt
+                )
             child_terminal = all(
-                (sides.get(side) or {}).get("status") not in {None, "running", "pending"}
+                (sides.get(side) or {}).get("status")
+                not in {None, "running", "pending"}
                 for side in ("stock", "patch")
             )
             if child_terminal:

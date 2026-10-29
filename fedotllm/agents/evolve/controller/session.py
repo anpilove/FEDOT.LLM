@@ -47,10 +47,16 @@ def _llm_attempt_summary(workspace: Path) -> dict:
             continue
         if isinstance(row, dict):
             rows.append(row)
-    has_query_start_events = any(row.get("event") == "llm_query_started" for row in rows)
+    has_query_start_events = any(
+        row.get("event") == "llm_query_started" for row in rows
+    )
     has_provider_attempt_events = any(
         row.get("event")
-        in {"provider_attempt_started", "provider_attempt_result", "provider_local_rejection"}
+        in {
+            "provider_attempt_started",
+            "provider_attempt_result",
+            "provider_local_rejection",
+        }
         for row in rows
     )
     has_structured_start_events = any(
@@ -92,12 +98,20 @@ def _llm_attempt_summary(workspace: Path) -> dict:
                 continue
             if not has_query_start_events:
                 counts["provider_queries_started"] += 1
-            key = "provider_queries_succeeded" if status == "ok" else "provider_queries_failed"
+            key = (
+                "provider_queries_succeeded"
+                if status == "ok"
+                else "provider_queries_failed"
+            )
             counts[key] += 1
         elif event == "llm_structured_result":
             if not has_structured_start_events:
                 counts["structured_calls_started"] += 1
-            key = "structured_calls_succeeded" if status == "ok" else "structured_calls_failed"
+            key = (
+                "structured_calls_succeeded"
+                if status == "ok"
+                else "structured_calls_failed"
+            )
             counts[key] += 1
         else:
             continue
@@ -145,7 +159,9 @@ def _run_finding_summary(findings_path: Path, run_id: str) -> dict[str, int]:
         counts["confirmed"] += int(bool(novelty.get("confirmed")))
         counts["new_unique"] += int(bool(novelty.get("new_unique")))
         counts["repeats"] += int(bool(novelty.get("repeat")))
-        counts["known_contract_checks"] += int(bool(novelty.get("known_contract_check")))
+        counts["known_contract_checks"] += int(
+            bool(novelty.get("known_contract_check"))
+        )
         counts["continuations"] += int(bool(novelty.get("continuation")))
     return counts
 
@@ -229,7 +245,8 @@ def finish_campaign(
             ),
             "winner_patch": (
                 "winner.patch"
-                if decision.final_keep is True and (workspace / "winner.patch").is_file()
+                if decision.final_keep is True
+                and (workspace / "winner.patch").is_file()
                 else None
             ),
             "correctness_patches": [

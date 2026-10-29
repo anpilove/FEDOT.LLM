@@ -158,7 +158,9 @@ def snippet_runtime_guards(
         if checkout not in resolved.parents and resolved != checkout:
             mode = str(args[0] if args else kwargs.get("mode", "r"))
             if not is_package_resource_read(resolved, mode):
-                raise PermissionError(f"snippet file access outside checkout: {resolved}")
+                raise PermissionError(
+                    f"snippet file access outside checkout: {resolved}"
+                )
         return real_open(resolved, *args, **kwargs)
 
     builtins.open = guarded_open

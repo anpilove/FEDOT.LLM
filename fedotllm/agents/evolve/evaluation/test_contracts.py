@@ -4,6 +4,7 @@ Applied symmetrically to stock and candidate in disposable test copies. Neither
 the immutable checkout nor metric execution uses these copies. Changes to the
 upstream test disable the correction until it is reviewed again.
 """
+
 from __future__ import annotations
 
 import ast
@@ -13,13 +14,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from fedotllm.agents.evolve.execution.checkout import (
-    create_experiment_checkout, discard_experiment_checkout,
+    create_experiment_checkout,
+    discard_experiment_checkout,
 )
 
 TEST_PATH = "test/unit/pipelines/test_pipeline.py"
 TEST_NAME = "test_pipeline_with_custom_params_for_model"
 ORIGINAL_AST_HASH = "67dcbc877cddce7874761e1a9c043a967cc8097e1dcc9aca9049e1a4b22ebfcf"
-OLD_ASSERTION = "    assert not np.array_equal(custom_params_prediction, default_params_prediction)"
+OLD_ASSERTION = (
+    "    assert not np.array_equal(custom_params_prediction, default_params_prediction)"
+)
 NEW_ASSERTIONS = """    actual_params = pipeline.root_node.fitted_operation.model.get_params()
     assert {key: actual_params[key] for key in custom_params} == custom_params
     # Distinct settings can legitimately produce identical training predictions.
@@ -32,13 +36,21 @@ NEW_ASSERTIONS = """    actual_params = pipeline.root_node.fitted_operation.mode
 def repaired_contract_source(source: str) -> str:
     """Replace only the exact audited test; preserve unknown upstream changes."""
     try:
-        node = next((node for node in ast.parse(source).body
-                     if isinstance(node, ast.FunctionDef) and node.name == TEST_NAME), None)
+        node = next(
+            (
+                node
+                for node in ast.parse(source).body
+                if isinstance(node, ast.FunctionDef) and node.name == TEST_NAME
+            ),
+            None,
+        )
     except SyntaxError:
         return source
     if node is None:
         return source
-    fingerprint = hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest()
+    fingerprint = hashlib.sha256(
+        ast.dump(node, include_attributes=False).encode()
+    ).hexdigest()
     if fingerprint != ORIGINAL_AST_HASH:
         return source
     lines = source.splitlines(keepends=True)
@@ -46,13 +58,19 @@ def repaired_contract_source(source: str) -> str:
     body = "".join(lines[start:end])
     if body.count(OLD_ASSERTION) != 1:
         return source
-    return "".join(lines[:start]) + body.replace(OLD_ASSERTION, NEW_ASSERTIONS) + "".join(lines[end:])
+    return (
+        "".join(lines[:start])
+        + body.replace(OLD_ASSERTION, NEW_ASSERTIONS)
+        + "".join(lines[end:])
+    )
 
 
 def _needs_multimodal_fixture(checkout: Path) -> bool:
     archive = checkout / "examples/data/multimodal.tar.gz"
     directory = checkout / "examples/data/multimodal"
-    return archive.is_file() and (not directory.exists() or directory.is_dir() and not any(directory.iterdir()))
+    return archive.is_file() and (
+        not directory.exists() or directory.is_dir() and not any(directory.iterdir())
+    )
 
 
 def _prepare_multimodal_fixture(copied: Path) -> None:
@@ -64,8 +82,12 @@ def _prepare_multimodal_fixture(copied: Path) -> None:
     with tarfile.open(copied / "examples/data/multimodal.tar.gz") as archive:
         for member in archive.getmembers():
             target = (parent / member.name).resolve()
-            if (not target.is_relative_to(destination) or member.issym() or member.islnk()
-                    or not (member.isfile() or member.isdir())):
+            if (
+                not target.is_relative_to(destination)
+                or member.issym()
+                or member.islnk()
+                or not (member.isfile() or member.isdir())
+            ):
                 raise ValueError("unsafe multimodal test archive member")
         archive.extractall(parent, filter="data")
 
@@ -79,7 +101,9 @@ def run_with_test_repairs(checkout: Path, runner):
         return runner(checkout)
     with TemporaryDirectory(prefix="evolve-test-contract-") as temporary:
         workspace = Path(temporary)
-        copied = create_experiment_checkout(checkout, workspace, run_id="tests", candidate_id="contract")
+        copied = create_experiment_checkout(
+            checkout, workspace, run_id="tests", candidate_id="contract"
+        )
         try:
             if repaired != original:
                 (copied / TEST_PATH).write_text(repaired, encoding="utf-8")

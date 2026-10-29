@@ -69,8 +69,7 @@ def test_model_contract_rejects_wrong_model_with_stage_diagnostic():
 
     assert payload["ok"] is False
     assert payload["diagnostics"] == [
-        "scout: model_name must be 'z-ai/glm-5.3-flash', got "
-        "'openai/gpt-5-mini'"
+        "scout: model_name must be 'z-ai/glm-5.3-flash', got 'openai/gpt-5-mini'"
     ]
     assert payload["stages"]["scout"]["qualified_model"] == (
         "openrouter/openai/gpt-5-mini"
@@ -93,8 +92,7 @@ def test_model_contract_rejects_configured_fallbacks_for_each_stage():
         "anthropic/claude",
     ]
     assert payload["diagnostics"] == [
-        "scout: fallback_models must be empty, got "
-        "openai/gpt-5-mini, anthropic/claude"
+        "scout: fallback_models must be empty, got openai/gpt-5-mini, anthropic/claude"
     ]
 
 

@@ -10,7 +10,11 @@ import ast
 import re
 from pathlib import Path
 
-from fedotllm.agents.evolve.discovery.repo_map import Symbol, in_metric_scan, iter_symbols
+from fedotllm.agents.evolve.discovery.repo_map import (
+    Symbol,
+    in_metric_scan,
+    iter_symbols,
+)
 from fedotllm.agents.evolve.types import MatchSite
 
 _META = re.compile(r".+(_idx|_index|_indices|_indexes|_types)$", re.I)
@@ -23,10 +27,18 @@ _ROW_IDENTITY_WHY = (
 )
 
 
-def invariant_leads(checkout: Path, symbols: list[Symbol] | None = None) -> list[MatchSite]:
-    items = symbols if symbols is not None else [
-        item for item in iter_symbols(checkout) if item.kind in {"method", "function"}
-    ]
+def invariant_leads(
+    checkout: Path, symbols: list[Symbol] | None = None
+) -> list[MatchSite]:
+    items = (
+        symbols
+        if symbols is not None
+        else [
+            item
+            for item in iter_symbols(checkout)
+            if item.kind in {"method", "function"}
+        ]
+    )
     out: list[MatchSite] = []
     seen: set[tuple[str, int]] = set()
     for item in items:
@@ -46,7 +58,10 @@ def invariant_leads(checkout: Path, symbols: list[Symbol] | None = None) -> list
                 file_path=item.file_path,
                 line=item.line,
                 why=f"{_WHY} in {name}",
-                evidence=("features or predict assigned", "column metadata read and not assigned"),
+                evidence=(
+                    "features or predict assigned",
+                    "column metadata read and not assigned",
+                ),
             )
         )
     return [*row_identity_leads(checkout), *out]
@@ -145,9 +160,7 @@ def _has_boolean_style_subscript(node: ast.AST) -> bool:
     )
 
 
-def _calls_self_method_with_index(
-    node: ast.AST, method_names: set[str]
-) -> bool:
+def _calls_self_method_with_index(node: ast.AST, method_names: set[str]) -> bool:
     comprehensions = (
         child
         for child in ast.walk(node)
@@ -161,7 +174,10 @@ def _calls_self_method_with_index(
                 continue
             if child.func.attr not in method_names:
                 continue
-            if not isinstance(child.func.value, ast.Name) or child.func.value.id != "self":
+            if (
+                not isinstance(child.func.value, ast.Name)
+                or child.func.value.id != "self"
+            ):
                 continue
             # A one-argument selector can legitimately obtain the canonical
             # index. The risky comprehension independently filters identity

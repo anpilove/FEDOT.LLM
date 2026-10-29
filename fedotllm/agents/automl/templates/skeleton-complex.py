@@ -6,8 +6,12 @@ import pandas as pd
 from fedot.api.main import Fedot
 from fedot.core.pipelines.pipeline import Pipeline
 from fedot.core.data.data import InputData
-from fedot.core.repository.tasks import Task, TaskTypesEnum  # classification, regression, ts_forecasting.
+from fedot.core.repository.tasks import (
+    Task,
+    TaskTypesEnum,
+)  # classification, regression, ts_forecasting.
 from automl import train_model, evaluate_model, automl_predict
+
 ### UNMODIFIABLE IMPORT END ###
 # USER CODE BEGIN IMPORTS #
 from sklearn.model_selection import train_test_split
@@ -20,29 +24,33 @@ random.seed(SEED)
 np.random.seed(SEED)
 
 ### UNMODIFIABLE CODE BEGIN ###
-DATASET_PATH = Path("{%dataset_path%}") # path for saving and loading dataset(s)
+DATASET_PATH = Path("{%dataset_path%}")  # path for saving and loading dataset(s)
 WORKSPACE_PATH = Path("{%work_dir_path%}")
-PIPELINE_PATH = WORKSPACE_PATH / "pipeline" # path for saving and loading pipelines
+PIPELINE_PATH = WORKSPACE_PATH / "pipeline"  # path for saving and loading pipelines
 SUBMISSION_PATH = WORKSPACE_PATH / "submission.csv"
-EVAL_SET_SIZE = 0.2 # 20% of the data for evaluation
+EVAL_SET_SIZE = 0.2  # 20% of the data for evaluation
 ### UNMODIFIABLE CODE END ###
 
 # --- TODO: Update these paths for your specific competition ---
-TRAIN_FILE = DATASET_PATH / "train.csv" # Replace with your actual filename
-TEST_FILE = DATASET_PATH / "test.csv" # Replace with your actual filename
-SAMPLE_SUBMISSION_FILE = DATASET_PATH / "sample_submission.csv" # Replace with your actual filename or None
-ID_COLUMN = "id" # Replace with your actual ID column name, if any
-TARGET_COLUMNS = ["target"] # Replace with your actual target column name(s)
+TRAIN_FILE = DATASET_PATH / "train.csv"  # Replace with your actual filename
+TEST_FILE = DATASET_PATH / "test.csv"  # Replace with your actual filename
+SAMPLE_SUBMISSION_FILE = (
+    DATASET_PATH / "sample_submission.csv"
+)  # Replace with your actual filename or None
+ID_COLUMN = "id"  # Replace with your actual ID column name, if any
+TARGET_COLUMNS = ["target"]  # Replace with your actual target column name(s)
 
 
 def load_data():
     """Loads train, test, and optionally sample submission files."""
     try:
-        train_df = pd.read_csv(TRAIN_FILE) # TODO: Adjust pandas loader if needed
-        test_df = pd.read_csv(TEST_FILE) # TODO: Adjust pandas loader if needed
+        train_df = pd.read_csv(TRAIN_FILE)  # TODO: Adjust pandas loader if needed
+        test_df = pd.read_csv(TEST_FILE)  # TODO: Adjust pandas loader if needed
         sample_sub_df = None
         if SAMPLE_SUBMISSION_FILE and (DATASET_PATH / SAMPLE_SUBMISSION_FILE).exists():
-           sample_sub_df = pd.read_csv(DATASET_PATH / SAMPLE_SUBMISSION_FILE) # TODO: Adjust pandas loader if needed
+            sample_sub_df = pd.read_csv(
+                DATASET_PATH / SAMPLE_SUBMISSION_FILE
+            )  # TODO: Adjust pandas loader if needed
         else:
             print("Sample submission file not found or not specified.")
         print("Data loaded successfully.")
@@ -51,10 +59,12 @@ def load_data():
     except FileNotFoundError as e:
         print(f"Error loading data: {e}. Please check filenames.")
         return None, None, None
-    
+
+
 # --------------------------------------------------------------------------- #
 # Section 2: Data Cleaning
 # --------------------------------------------------------------------------- #
+
 
 def cleaning_data(df_train: pd.DataFrame, df_test: pd.DataFrame, target_cols: list):
     print("\nCleaning data...")
@@ -64,7 +74,7 @@ def cleaning_data(df_train: pd.DataFrame, df_test: pd.DataFrame, target_cols: li
 
     # --- Step 0: Handle specific data cleaning tasks (e.g., inconsistent values, typos) ---
     # This section remains for custom, early-stage cleaning if necessary.
-    
+
     y_train = None
     # Check if all target columns are in X_train
     if all(col in X_train.columns for col in target_cols):
@@ -76,22 +86,26 @@ def cleaning_data(df_train: pd.DataFrame, df_test: pd.DataFrame, target_cols: li
         # Optionally, remove existing target columns if some are missing
         present_target_cols = [col for col in target_cols if col in X_train.columns]
         if present_target_cols:
-            y_train = X_train[present_target_cols].copy() # or handle as error
+            y_train = X_train[present_target_cols].copy()  # or handle as error
             X_train = X_train.drop(columns=present_target_cols)
             print(f"Using available target columns: {present_target_cols}")
-
 
     # Remove target columns from test if present
     test_cols_to_drop = [col for col in target_cols if col in X_test.columns]
     if test_cols_to_drop:
-        print(f"Warning: Target column(s) {test_cols_to_drop} found in test data and removed.")
+        print(
+            f"Warning: Target column(s) {test_cols_to_drop} found in test data and removed."
+        )
         X_test.drop(columns=test_cols_to_drop, inplace=True)
-    
+
     # Remove ID column from feature lists if it's present and not a feature
-    if ID_COLUMN in X_train: X_train.drop(columns=[ID_COLUMN], inplace=True)
-    if ID_COLUMN in X_test: X_test.drop(columns=[ID_COLUMN], inplace=True)
-    
+    if ID_COLUMN in X_train:
+        X_train.drop(columns=[ID_COLUMN], inplace=True)
+    if ID_COLUMN in X_test:
+        X_test.drop(columns=[ID_COLUMN], inplace=True)
+
     return X_train, X_test, y_train
+
 
 # --------------------------------------------------------------------------- #
 # Section 3: Data Preprocessing
@@ -121,21 +135,23 @@ def preprocess_data(train_features: pd.DataFrame, test_features: pd.DataFrame):
         - Ensure the order of columns is consistent if not inherently handled by transformers.
         - DO NOT drop rows from the test set (for submission) unless absolutely necessary and accounted for, as it will affect submission alignment.
     """
-    
+
     print("\nPreprocessing data...")
     # Make copies to avoid modifying original dataframes
     X_train = train_features.copy()
     X_test = test_features.copy()
-    
+
     # --- Step 0: Column Dropping ---
     # Leave only important features
-    important_features = [ ]
+    important_features = []
     X_train = X_train[important_features]
     X_test = X_test[important_features]
-    
+
     # --- Step 1: Identify feature types (based on training data) ---
     numerical_cols = X_train.select_dtypes(include=np.number).columns.tolist()
-    categorical_cols = X_train.select_dtypes(include=['object', 'category']).columns.tolist()
+    categorical_cols = X_train.select_dtypes(
+        include=["object", "category"]
+    ).columns.tolist()
     # --- Step 2: Handle Missing Values (Fit on Train, Transform Train & Test) ---
     # Numerical Imputation
     # if numerical_cols:
@@ -148,7 +164,6 @@ def preprocess_data(train_features: pd.DataFrame, test_features: pd.DataFrame):
     #     cat_imputer = SimpleImputer(strategy='most_frequent') # Or 'constant' with fill_value='Missing'
     #     X_train[categorical_cols] = cat_imputer.fit_transform(X_train[categorical_cols])
     #     X_test[categorical_cols] = cat_imputer.transform(X_test[categorical_cols])
-    
 
     # --- Step 3: Encode Categorical Features (Fit on Train, Transform Train & Test) ---
     # Using OneHotEncoder for columns with few unique values and LabelEncoder for others.
@@ -173,7 +188,7 @@ def preprocess_data(train_features: pd.DataFrame, test_features: pd.DataFrame):
     # le = LabelEncoder()
     # X_train[col] = le.fit_transform(X_train[col].astype(str))
     # X_test[col] = X_test[col].astype(str).map(lambda s: le.transform([s])[0] if s in le.classes_ else -1) # -1 for unknown
-   
+
     # --- Step 4: Feature Scaling (Fit on Train, Transform Train & Test) ---
     # Scale numerical features (original numerical + label encoded if they are treated as numerical)
     # Exclude OHE columns if you prefer not to scale them, though scaling them is often fine.
@@ -192,7 +207,7 @@ def preprocess_data(train_features: pd.DataFrame, test_features: pd.DataFrame):
     #        # Add 1 to prevent log(0) issues, ensure positive values
     #        X_train[col] = np.log1p(X_train[col] - X_train[col].min())
     #        X_test[col] = np.log1p(X_test[col] - X_test[col].min()) # Apply same shift as train
-    
+
     # --- Step 6: Feature Engineering ---
     # Create new features from existing ones if it makes sense for the problem.
     # Use domain knowledge to create new features if it makes sense.
@@ -202,13 +217,18 @@ def preprocess_data(train_features: pd.DataFrame, test_features: pd.DataFrame):
     # X_train['feature_name'] = X_train['feature_name'] + X_train['feature_name_2']
 
     print("Preprocessing complete.")
-    print(f"Train processed shape: {X_train.shape}, Test processed shape: {X_test.shape}")
+    print(
+        f"Train processed shape: {X_train.shape}, Test processed shape: {X_test.shape}"
+    )
     return X_train, X_test
+
 
 # --------------------------------------------------------------------------- #
 # Section 6: Final Model Training & Submission
 # --------------------------------------------------------------------------- #
-def create_submission_file(test_ids, test_predictions, sample_sub_df, submission_filename="submission.csv"):
+def create_submission_file(
+    test_ids, test_predictions, sample_sub_df, submission_filename="submission.csv"
+):
     """Creates the submission file in the required format."""
     print(f"\nCreating submission file: {submission_filename}")
     # Flatten the predictions if they're 2D
@@ -219,17 +239,19 @@ def create_submission_file(test_ids, test_predictions, sample_sub_df, submission
             # Attempt to get ID from sample submission if test_ids is not directly usable
             if sample_sub_df is not None and ID_COLUMN in sample_sub_df.columns:
                 test_ids = sample_sub_df[ID_COLUMN]
-            else: # Fallback if ID_COLUMN not in sample submission
-                test_ids = np.arange(len(test_predictions)) # Simple range if no IDs
-                print(f"Warning: Using default range for test_ids as {ID_COLUMN} not found in sample submission.")
+            else:  # Fallback if ID_COLUMN not in sample submission
+                test_ids = np.arange(len(test_predictions))  # Simple range if no IDs
+                print(
+                    f"Warning: Using default range for test_ids as {ID_COLUMN} not found in sample submission."
+                )
         except Exception as e:
-            print(f"Warning: Could not load sample submission to get test_ids: {e}. Using default range.")
+            print(
+                f"Warning: Could not load sample submission to get test_ids: {e}. Using default range."
+            )
             test_ids = np.arange(len(test_predictions))
 
-
     submission_df = pd.DataFrame(test_predictions, columns=[TARGET_COLUMNS])
-    submission_df.insert(0, ID_COLUMN, test_ids) 
-
+    submission_df.insert(0, ID_COLUMN, test_ids)
 
     submission_file_path = WORKSPACE_PATH / submission_filename
     submission_df.to_csv(submission_file_path, index=False)
@@ -238,6 +260,7 @@ def create_submission_file(test_ids, test_predictions, sample_sub_df, submission
     print(submission_df.head())
     return submission_df
 
+
 # --------------------------------------------------------------------------- #
 # Main Orchestration Logic
 # --------------------------------------------------------------------------- #
@@ -245,55 +268,69 @@ def main():
     """Main function to orchestrate the ML pipeline."""
     print("Starting Kaggle ML Workflow...")
     # --- TODO: Define problem_type ('classification', 'regression', 'multi-label classification', 'ts_forecasting') ---
-    current_problem_type = 'classification' # Example
+    current_problem_type = "classification"  # Example
 
     # --- Step 0: Load Data ---
     train_df, test_df, sample_sub_df = load_data()
     if train_df is None or test_df is None:
         print("Exiting due to data loading failure.")
         return
-    
+
     # Store original test IDs for submission
-    original_test_ids = test_df[ID_COLUMN] if ID_COLUMN in test_df.columns else test_df.index
-    
+    original_test_ids = (
+        test_df[ID_COLUMN] if ID_COLUMN in test_df.columns else test_df.index
+    )
+
     # --- Step 1: Cleaning ---
-    X_train_cleaned, X_test_cleaned, y_train_full = cleaning_data(train_df, test_df, TARGET_COLUMNS)
+    X_train_cleaned, X_test_cleaned, y_train_full = cleaning_data(
+        train_df, test_df, TARGET_COLUMNS
+    )
 
     # --- Step 2: Preprocessing ---
     # The target column name (TARGET_COLUMN) is passed to preprocess_data
-    X_train_processed, X_test_processed  = preprocess_data(X_train_cleaned, X_test_cleaned)
-    
+    X_train_processed, X_test_processed = preprocess_data(
+        X_train_cleaned, X_test_cleaned
+    )
+
     # --- Create a fixed validation split from the processed full training data ---
-    print(f"\nCreating a fixed train-evaluation split (Eval size: {EVAL_SET_SIZE*100}%) ...")
+    print(
+        f"\nCreating a fixed train-evaluation split (Eval size: {EVAL_SET_SIZE * 100}%) ..."
+    )
     # For multi-target, set stratify=None
     stratify_target = None
-    if current_problem_type.startswith('classification') and len(TARGET_COLUMNS) == 1:
+    if current_problem_type.startswith("classification") and len(TARGET_COLUMNS) == 1:
         stratify_target = y_train_full  # Only stratify for single-target classification
     X_train_main, X_eval_holdout, y_train_main, y_eval_holdout = train_test_split(
-        X_train_processed, y_train_full,
+        X_train_processed,
+        y_train_full,
         test_size=EVAL_SET_SIZE,
         random_state=SEED,
-        stratify=stratify_target
+        stratify=stratify_target,
     )
-    
+
     # --- Step 3: Train AutoML model ---
     # You must use pre-defined train_model function to train the model.
     model = train_model(X_train_main, y_train_main)
-    
+
     # --- Step 4: Evaluate the trained model ---
     # You must use pre-defined evaluate_model function to evaluate the model.
     model_performance = evaluate_model(model, X_eval_holdout, y_eval_holdout)
 
     # --- Step 5: Evaluate predictions for the test dataset using AutoML Framework ---
     # You must use pre-defined automl_predict function to predict the model.
-    predictions:np.ndarray = automl_predict(model, X_test_processed) # returns 2D array
-  
+    predictions: np.ndarray = automl_predict(
+        model, X_test_processed
+    )  # returns 2D array
+
     # --- Step 6: Create submission file ---
     if predictions is not None:
-        create_submission_file(original_test_ids, predictions, sample_sub_df, "submission.csv")
+        create_submission_file(
+            original_test_ids, predictions, sample_sub_df, "submission.csv"
+        )
     else:
         print("No test predictions generated, skipping submission file creation.")
     print("\nKaggle ML Workflow finished.")
+
 
 if __name__ == "__main__":
     print("Files and directories:")
@@ -304,7 +341,7 @@ if __name__ == "__main__":
         "Submission Path": SUBMISSION_PATH,
         "Train File": TRAIN_FILE,
         "Test File": TEST_FILE,
-        "Sample Submission File": SAMPLE_SUBMISSION_FILE
+        "Sample Submission File": SAMPLE_SUBMISSION_FILE,
     }
     for name, path in paths.items():
         print(f"{name}: {path}")

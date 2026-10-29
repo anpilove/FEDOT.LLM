@@ -22,9 +22,7 @@ T = TypeVar("T", bound=BaseModel)
 LLM_TIMEOUT_SECONDS = float(os.getenv("FEDOTLLM_LLM_TIMEOUT", "120"))
 # One initial provider request plus at most one transient retry. Clamp the
 # legacy environment override so higher layers cannot multiply requests.
-LLM_RETRY_ATTEMPTS = min(
-    2, max(1, int(os.getenv("FEDOTLLM_LLM_RETRY_ATTEMPTS", "2")))
-)
+LLM_RETRY_ATTEMPTS = min(2, max(1, int(os.getenv("FEDOTLLM_LLM_RETRY_ATTEMPTS", "2"))))
 
 litellm._logging._disable_debugging()
 
@@ -76,10 +74,16 @@ def _provider_retry_wait(retry_state) -> float:
         message = str(getattr(exc, "message", ""))
         start = message.find("{")
         try:
-            body, _ = json.JSONDecoder().raw_decode(message[start:]) if start >= 0 else ({}, 0)
+            body, _ = (
+                json.JSONDecoder().raw_decode(message[start:])
+                if start >= 0
+                else ({}, 0)
+            )
             metadata = body.get("error", {}).get("metadata", {})
             nested_headers = metadata.get("headers", {})
-            delay = nested_headers.get("Retry-After") or nested_headers.get("retry-after")
+            delay = nested_headers.get("Retry-After") or nested_headers.get(
+                "retry-after"
+            )
         except (ValueError, AttributeError, TypeError):
             delay = None
     try:
@@ -155,14 +159,18 @@ class AIInference:
 
     def _model_chain(self) -> list[str]:
         primary = self._primary_model()
-        raw = os.environ.get("FEDOTLLM_LLM_FALLBACK") or self.config.fallback_models or ""
+        raw = (
+            os.environ.get("FEDOTLLM_LLM_FALLBACK") or self.config.fallback_models or ""
+        )
         prefix = f"{self.config.provider}/"
         chain = [primary]
         for item in raw.split(","):
             name = item.strip()
             if not name:
                 continue
-            model = name if "/" in name and name.startswith(prefix) else f"{prefix}{name}"
+            model = (
+                name if "/" in name and name.startswith(prefix) else f"{prefix}{name}"
+            )
             if model not in chain:
                 chain.append(model)
         return chain
@@ -256,7 +264,9 @@ class AIInference:
         self.usage["cached_tokens"] += int(number(details, "cached_tokens"))
         self.usage["cost_usd"] += cost
         content = response.choices[0].message.content or ""
-        logger.debug("LLM response %s: %s chars", self.completion_params["model"], len(content))
+        logger.debug(
+            "LLM response %s: %s chars", self.completion_params["model"], len(content)
+        )
         return content
 
 

@@ -16,12 +16,14 @@ def resolve_fedot_src() -> Path:
     local = os.environ.get("FEDOTLLM_REPO_PATH")
     if local and Path(local).is_dir():
         return Path(local).resolve()
-    cache = Path(os.environ.get("FEDOTLLM_REPO_CACHE", str(repo_root() / ".repo_cache" / "FEDOT")))
+    cache = Path(
+        os.environ.get(
+            "FEDOTLLM_REPO_CACHE", str(repo_root() / ".repo_cache" / "FEDOT")
+        )
+    )
     if cache.is_dir():
         return cache.resolve()
-    raise FileNotFoundError(
-        "Set FEDOTLLM_REPO_PATH to a FEDOT checkout (stock 0.7.5)."
-    )
+    raise FileNotFoundError("Set FEDOTLLM_REPO_PATH to a FEDOT checkout (stock 0.7.5).")
 
 
 def source_fingerprint(source: Path) -> str:
@@ -30,7 +32,9 @@ def source_fingerprint(source: Path) -> str:
     source = source.resolve()
     digest = hashlib.sha256()
     roots = [source / "fedot"]
-    extras = [source / name for name in ("pyproject.toml", "setup.py", "requirements.txt")]
+    extras = [
+        source / name for name in ("pyproject.toml", "setup.py", "requirements.txt")
+    ]
     files = sorted(
         path
         for root in roots
@@ -122,7 +126,11 @@ def discard_experiment_checkout(
         raise PermissionError(f"refuse to remove non-experiment path: {checkout}")
     if source is not None:
         source = source.resolve()
-        if checkout == source or checkout in source.parents or source in checkout.parents:
+        if (
+            checkout == source
+            or checkout in source.parents
+            or source in checkout.parents
+        ):
             raise PermissionError("refuse to remove immutable source or its parent")
     marker = checkout / MARKER
     if not checkout.exists():
@@ -132,10 +140,15 @@ def discard_experiment_checkout(
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise PermissionError(f"invalid EvolveAgent ownership marker: {checkout}") from exc
+        raise PermissionError(
+            f"invalid EvolveAgent ownership marker: {checkout}"
+        ) from exc
     if payload.get("source") == str(checkout):
         raise PermissionError("ownership marker points at checkout as source")
-    if payload.get("candidate_id") != checkout.name or payload.get("run_id") != checkout.parent.name:
+    if (
+        payload.get("candidate_id") != checkout.name
+        or payload.get("run_id") != checkout.parent.name
+    ):
         raise PermissionError("ownership marker does not match experiment path")
     if source is not None and payload.get("source") != str(source):
         raise PermissionError("ownership marker does not match immutable source")
@@ -151,8 +164,14 @@ def snapshot_diff(checkout: Path, rel: str, *, source: Path | None = None) -> st
     dst = checkout / rel
     if not dst.is_file():
         return ""
-    old = src.read_text(encoding="utf-8", errors="replace").splitlines() if src.is_file() else []
+    old = (
+        src.read_text(encoding="utf-8", errors="replace").splitlines()
+        if src.is_file()
+        else []
+    )
     new = dst.read_text(encoding="utf-8", errors="replace").splitlines()
     return "\n".join(
-        difflib.unified_diff(old, new, fromfile=f"stock/{rel}", tofile=f"patched/{rel}", lineterm="")
+        difflib.unified_diff(
+            old, new, fromfile=f"stock/{rel}", tofile=f"patched/{rel}", lineterm=""
+        )
     )

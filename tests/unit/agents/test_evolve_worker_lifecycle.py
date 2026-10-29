@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX worker groups"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-WORKER_FIXTURE = '''\
+WORKER_FIXTURE = """\
 import os
 from pathlib import Path
 import subprocess
@@ -54,10 +54,12 @@ else:
         raise SystemExit(0 if mode == "finish_ok" else 7)
     while time.monotonic() < deadline:
         time.sleep(0.02)
-'''
+"""
 
 
-def test_guard_treats_darwin_permission_race_as_clean_only_if_group_is_gone(monkeypatch):
+def test_guard_treats_darwin_permission_race_as_clean_only_if_group_is_gone(
+    monkeypatch,
+):
     calls = []
 
     def killpg(pgid, sig):
@@ -84,7 +86,7 @@ def test_guard_reports_permission_denial_when_owned_group_still_exists(monkeypat
     assert calls == [(43211, signal.SIGKILL), (43211, 0)]
 
 
-CONTROLLER_FIXTURE = '''\
+CONTROLLER_FIXTURE = """\
 import json
 import os
 from pathlib import Path
@@ -105,22 +107,39 @@ except KeyboardInterrupt:
     (root / "interrupted").write_text("interrupted")
 else:
     (root / "outcome.json").write_text(json.dumps(outcome.__dict__))
-'''
+"""
 
 
-def _start_controller(root, *, mode="same", timeout=30, cancellable=False, use_log=False,
-                      watchdog_timeout=None):
+def _start_controller(
+    root,
+    *,
+    mode="same",
+    timeout=30,
+    cancellable=False,
+    use_log=False,
+    watchdog_timeout=None,
+):
     (root / "worker_fixture.py").write_text(WORKER_FIXTURE)
     controller_script = root / "controller_fixture.py"
     controller_script.write_text(CONTROLLER_FIXTURE)
     env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
     return subprocess.Popen(
-        [sys.executable, str(controller_script), str(root), mode, str(timeout),
-         "poll" if cancellable else "direct", "log" if use_log else "capture",
-         *([str(watchdog_timeout)] if watchdog_timeout is not None else [])],
+        [
+            sys.executable,
+            str(controller_script),
+            str(root),
+            mode,
+            str(timeout),
+            "poll" if cancellable else "direct",
+            "log" if use_log else "capture",
+            *([str(watchdog_timeout)] if watchdog_timeout is not None else []),
+        ],
         # Only fixture-owned file logs are used by log-mode lifecycle checks.
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, start_new_session=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
 
 
@@ -167,7 +186,9 @@ def _assert_heartbeat_stopped(root):
     assert (root / "heartbeat").stat().st_size == size
 
 
-def test_timeout_does_not_wait_forever_for_escaped_descendants_with_open_pipes(tmp_path):
+def test_timeout_does_not_wait_forever_for_escaped_descendants_with_open_pipes(
+    tmp_path,
+):
     # Removing the bounded post-kill communicate would hang on the escaped child.
     controller = _start_controller(tmp_path, mode="escaped", timeout=0.3)
     try:
@@ -181,7 +202,7 @@ def test_timeout_does_not_wait_forever_for_escaped_descendants_with_open_pipes(t
         _cleanup_fixture(tmp_path, controller, escaped=True)
 
 
-SNIPPET_CONTROLLER_FIXTURE = '''\
+SNIPPET_CONTROLLER_FIXTURE = """\
 import json
 from pathlib import Path
 import sys
@@ -196,7 +217,7 @@ except KeyboardInterrupt:
     (root / "interrupted").write_text("interrupted")
 else:
     (root / "outcome.json").write_text(json.dumps(result.__dict__))
-'''
+"""
 
 
 def _start_snippet_controller(root, *, escaped=False, timeout=30):
@@ -212,8 +233,11 @@ def _start_snippet_controller(root, *, escaped=False, timeout=30):
     script.write_text(SNIPPET_CONTROLLER_FIXTURE)
     return subprocess.Popen(
         [sys.executable, str(script), str(root), str(timeout)],
-        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)), stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, start_new_session=True,
+        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
 
 
@@ -231,7 +255,9 @@ def test_snippet_timeout_returns_even_when_escaped_child_holds_output_pipe(tmp_p
 
 
 @pytest.mark.parametrize("interrupt", [signal.SIGINT, signal.SIGKILL])
-def test_snippet_controller_interruption_stops_owned_worker_descendants(tmp_path, interrupt):
+def test_snippet_controller_interruption_stops_owned_worker_descendants(
+    tmp_path, interrupt
+):
     controller = _start_snippet_controller(tmp_path)
     try:
         _wait_file(tmp_path / "ready", controller)
@@ -243,7 +269,9 @@ def test_snippet_controller_interruption_stops_owned_worker_descendants(tmp_path
         _cleanup_fixture(tmp_path, controller)
 
 
-def test_interpreter_probe_timeout_returns_when_escaped_child_holds_output_pipe(tmp_path):
+def test_interpreter_probe_timeout_returns_when_escaped_child_holds_output_pipe(
+    tmp_path,
+):
     # Runtime identity runs before ML's watchdog; it needs bounded cleanup too.
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
     interpreter = tmp_path / "interpreter_fixture"
@@ -264,8 +292,11 @@ def test_interpreter_probe_timeout_returns_when_escaped_child_holds_output_pipe(
     )
     controller = subprocess.Popen(
         [sys.executable, str(driver), str(tmp_path)],
-        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)), stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, start_new_session=True,
+        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
     try:
         _wait_file(tmp_path / "ready", controller)
@@ -393,7 +424,9 @@ def test_permission_denied_direct_cleanup_falls_back_to_guardian(tmp_path, monke
     try:
         outcome = run_worker(
             [sys.executable, str(script), str(tmp_path), "finish_ok"],
-            cwd=tmp_path, env=dict(os.environ), timeout=5,
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=5,
             log_path=tmp_path / "worker.log",
         )
         assert outcome.returncode == 0
@@ -408,12 +441,20 @@ def test_permission_denied_direct_cleanup_falls_back_to_guardian(tmp_path, monke
 
 
 @pytest.mark.parametrize("cancellable", [False, True])
-def test_normal_completion_preserves_stdout_stderr_and_returncode(tmp_path, cancellable):
+def test_normal_completion_preserves_stdout_stderr_and_returncode(
+    tmp_path, cancellable
+):
     script = tmp_path / "output_fixture.py"
-    script.write_text('import sys\nprint("output")\nprint("error", file=sys.stderr)\nsys.exit(7)\n')
-    outcome = run_worker([sys.executable, str(script)], cwd=tmp_path,
-                         env=dict(os.environ), timeout=5,
-                         cancellation_event=threading.Event() if cancellable else None)
+    script.write_text(
+        'import sys\nprint("output")\nprint("error", file=sys.stderr)\nsys.exit(7)\n'
+    )
+    outcome = run_worker(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        timeout=5,
+        cancellation_event=threading.Event() if cancellable else None,
+    )
     assert outcome.returncode == 7
     assert outcome.stdout == "output\n"
     assert outcome.stderr == "error\n"
@@ -421,13 +462,18 @@ def test_normal_completion_preserves_stdout_stderr_and_returncode(tmp_path, canc
     assert outcome.cancelled is False
 
 
-def test_parent_monitored_task_timeout_is_distinct_and_kills_same_session_child(tmp_path):
+def test_parent_monitored_task_timeout_is_distinct_and_kills_same_session_child(
+    tmp_path,
+):
     """The task deadline must fire before, and independently of, its guardian cap."""
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
     started = time.monotonic()
     outcome = run_worker(
         [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "same"],
-        cwd=tmp_path, env=dict(os.environ), timeout=0.2, watchdog_timeout=2.0,
+        cwd=tmp_path,
+        env=dict(os.environ),
+        timeout=0.2,
+        watchdog_timeout=2.0,
         log_path=tmp_path / "worker.log",
     )
     assert time.monotonic() - started < 1.5
@@ -447,8 +493,16 @@ def test_blocked_resource_check_cannot_extend_task_deadline(tmp_path):
     started = time.monotonic()
     try:
         outcome = run_worker(
-            [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "same"],
-            cwd=tmp_path, env=dict(os.environ), timeout=0.2, watchdog_timeout=2.0,
+            [
+                sys.executable,
+                str(tmp_path / "worker_fixture.py"),
+                str(tmp_path),
+                "same",
+            ],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=0.2,
+            watchdog_timeout=2.0,
             resource_check=lambda: release_check.wait(timeout=2.0),
             log_path=tmp_path / "worker.log",
         )
@@ -462,7 +516,9 @@ def test_blocked_resource_check_cannot_extend_task_deadline(tmp_path):
         unblock_later.cancel()
 
 
-def test_blocked_periodic_resource_check_cannot_extend_task_deadline(tmp_path, monkeypatch):
+def test_blocked_periodic_resource_check_cannot_extend_task_deadline(
+    tmp_path, monkeypatch
+):
     """Periodic storage checks must stay off the deadline-monitoring thread."""
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
     release_check = threading.Event()
@@ -478,8 +534,16 @@ def test_blocked_periodic_resource_check_cannot_extend_task_deadline(tmp_path, m
     started = time.monotonic()
     try:
         outcome = run_worker(
-            [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "same"],
-            cwd=tmp_path, env=dict(os.environ), timeout=0.35, watchdog_timeout=2.0,
+            [
+                sys.executable,
+                str(tmp_path / "worker_fixture.py"),
+                str(tmp_path),
+                "same",
+            ],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=0.35,
+            watchdog_timeout=2.0,
             resource_check=check_resource,
             log_path=tmp_path / "worker.log",
         )
@@ -507,11 +571,21 @@ def test_repeated_blocked_resource_checks_do_not_create_unbounded_threads(tmp_pa
         callback_started.set()
         release_check.wait()
 
-    before = sum(thread.name == "evolve-resource-check" for thread in threading.enumerate())
+    before = sum(
+        thread.name == "evolve-resource-check" for thread in threading.enumerate()
+    )
     try:
         first = run_worker(
-            [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "same"],
-            cwd=tmp_path, env=dict(os.environ), timeout=0.15, watchdog_timeout=2.0,
+            [
+                sys.executable,
+                str(tmp_path / "worker_fixture.py"),
+                str(tmp_path),
+                "same",
+            ],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=0.15,
+            watchdog_timeout=2.0,
             resource_check=blocked_check,
         )
         assert first.timed_out is True
@@ -519,13 +593,23 @@ def test_repeated_blocked_resource_checks_do_not_create_unbounded_threads(tmp_pa
 
         for _ in range(3):
             outcome = run_worker(
-                [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "same"],
-                cwd=tmp_path, env=dict(os.environ), timeout=0.08, watchdog_timeout=2.0,
+                [
+                    sys.executable,
+                    str(tmp_path / "worker_fixture.py"),
+                    str(tmp_path),
+                    "same",
+                ],
+                cwd=tmp_path,
+                env=dict(os.environ),
+                timeout=0.08,
+                watchdog_timeout=2.0,
                 resource_check=blocked_check,
             )
             assert outcome.timed_out is True
 
-        after = sum(thread.name == "evolve-resource-check" for thread in threading.enumerate())
+        after = sum(
+            thread.name == "evolve-resource-check" for thread in threading.enumerate()
+        )
         assert after - before <= 1
         assert callback_calls == 1
     finally:
@@ -570,8 +654,11 @@ def test_guardian_watchdog_fires_if_parent_stops_monitoring_worker(tmp_path):
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
     worker = subprocess.Popen(
         [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "same"],
-        cwd=tmp_path, env=dict(os.environ), stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL, start_new_session=True,
+        cwd=tmp_path,
+        env=dict(os.environ),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     guardian = None
     parent_write = None
@@ -599,10 +686,17 @@ def test_guardian_watchdog_fires_if_parent_stops_monitoring_worker(tmp_path):
 def test_log_outcome_reads_only_a_bounded_tail(tmp_path):
     # Reading the entire file would return the 2MiB prefix as well as the tail.
     script = tmp_path / "log_fixture.py"
-    script.write_text('import sys\nsys.stdout.write("x" * (2 * 1024 * 1024) + "FINAL\\n")\n')
+    script.write_text(
+        'import sys\nsys.stdout.write("x" * (2 * 1024 * 1024) + "FINAL\\n")\n'
+    )
     log = tmp_path / "worker.log"
-    outcome = run_worker([sys.executable, str(script)], cwd=tmp_path,
-                         env=dict(os.environ), timeout=5, log_path=log)
+    outcome = run_worker(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        timeout=5,
+        log_path=log,
+    )
     assert log.stat().st_size == 2 * 1024 * 1024 + 6
     assert len(outcome.stdout.encode("utf-8")) <= 1024 * 1024
     assert outcome.stdout.endswith("FINAL\n")
@@ -626,9 +720,17 @@ def test_guardian_spawn_failure_cleans_already_launched_worker(tmp_path, monkeyp
     monkeypatch.setattr(worker_process.subprocess, "Popen", fail_guardian_spawn)
     try:
         with pytest.raises(OSError, match="guardian launch denied"):
-            run_worker([sys.executable, str(tmp_path / "worker_fixture.py"),
-                        str(tmp_path), "same"], cwd=tmp_path,
-                       env=dict(os.environ), timeout=5)
+            run_worker(
+                [
+                    sys.executable,
+                    str(tmp_path / "worker_fixture.py"),
+                    str(tmp_path),
+                    "same",
+                ],
+                cwd=tmp_path,
+                env=dict(os.environ),
+                timeout=5,
+            )
         _assert_heartbeat_stopped(tmp_path)
     finally:
         if worker is not None:
@@ -647,7 +749,9 @@ def test_cleanup_error_does_not_replace_original_interrupt(tmp_path, monkeypatch
     def interrupt_after_guard_ready(proc, *, watchdog_timeout=None):
         nonlocal worker
         worker = proc
-        guardian, parent_write = real_start_guard(proc, watchdog_timeout=watchdog_timeout)
+        guardian, parent_write = real_start_guard(
+            proc, watchdog_timeout=watchdog_timeout
+        )
         communicate = proc.communicate
 
         def first_call_interrupt(*args, **kwargs):
@@ -661,15 +765,25 @@ def test_cleanup_error_does_not_replace_original_interrupt(tmp_path, monkeypatch
     def permission_denied(pgid, signum):
         raise PermissionError("fixture controller cannot signal owned group")
 
-    monkeypatch.setattr(worker_process, "_start_lifetime_guard", interrupt_after_guard_ready)
+    monkeypatch.setattr(
+        worker_process, "_start_lifetime_guard", interrupt_after_guard_ready
+    )
     # Only the controller's os.killpg is replaced; the guardian is a real process.
     real_killpg = os.killpg
     monkeypatch.setattr(worker_process.os, "killpg", permission_denied)
     try:
         with pytest.raises(KeyboardInterrupt, match="operator interrupted"):
-            run_worker([sys.executable, str(tmp_path / "worker_fixture.py"),
-                        str(tmp_path), "same"], cwd=tmp_path,
-                       env=dict(os.environ), timeout=5)
+            run_worker(
+                [
+                    sys.executable,
+                    str(tmp_path / "worker_fixture.py"),
+                    str(tmp_path),
+                    "same",
+                ],
+                cwd=tmp_path,
+                env=dict(os.environ),
+                timeout=5,
+            )
         _assert_heartbeat_stopped(tmp_path)
     finally:
         if worker is not None:
@@ -683,7 +797,9 @@ def test_cleanup_error_does_not_replace_original_interrupt(tmp_path, monkeypatch
             worker.communicate(timeout=3)
 
 
-def test_guardian_pipe_creation_failure_closes_already_created_descriptors(tmp_path, monkeypatch):
+def test_guardian_pipe_creation_failure_closes_already_created_descriptors(
+    tmp_path, monkeypatch
+):
     # Failing the second pipe must close both ends of the first one.
     script = tmp_path / "sleep_fixture.py"
     script.write_text("import time\ntime.sleep(60)\n")
@@ -705,10 +821,17 @@ def test_guardian_pipe_creation_failure_closes_already_created_descriptors(tmp_p
         monkeypatch.setattr(worker_process.os, "pipe", fail_second_pipe)
         return real_start_guard(proc, watchdog_timeout=watchdog_timeout)
 
-    monkeypatch.setattr(worker_process, "_start_lifetime_guard", fail_guard_pipe_creation)
+    monkeypatch.setattr(
+        worker_process, "_start_lifetime_guard", fail_guard_pipe_creation
+    )
     with pytest.raises(OSError, match="fixture readiness pipe unavailable"):
-        run_worker([sys.executable, str(script)], cwd=tmp_path,
-                   env=dict(os.environ), timeout=5, log_path=tmp_path / "worker.log")
+        run_worker(
+            [sys.executable, str(script)],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=5,
+            log_path=tmp_path / "worker.log",
+        )
     try:
         for descriptor in created:
             with pytest.raises(OSError):
@@ -722,7 +845,9 @@ def test_guardian_pipe_creation_failure_closes_already_created_descriptors(tmp_p
 
 
 @pytest.mark.parametrize("ready", [False, True])
-def test_guardian_failure_keeps_original_error_when_cleanup_fails(tmp_path, monkeypatch, ready):
+def test_guardian_failure_keeps_original_error_when_cleanup_fails(
+    tmp_path, monkeypatch, ready
+):
     # An error while stopping a not-ready guardian must not replace the reason
     # worker startup failed. Both fixture processes are independently cleaned.
     worker_script = tmp_path / "sleep_fixture.py"
@@ -730,9 +855,12 @@ def test_guardian_failure_keeps_original_error_when_cleanup_fails(tmp_path, monk
     guard_script = tmp_path / "failed_guard_fixture.py"
     guard_script.write_text(
         "import os, sys, time\n"
-        + ("os.write(int(sys.argv[sys.argv.index('--ready-fd') + 1]), b'R')\n" if ready else "")
-        +
-        "os.close(int(sys.argv[sys.argv.index('--ready-fd') + 1]))\n"
+        + (
+            "os.write(int(sys.argv[sys.argv.index('--ready-fd') + 1]), b'R')\n"
+            if ready
+            else ""
+        )
+        + "os.close(int(sys.argv[sys.argv.index('--ready-fd') + 1]))\n"
         "time.sleep(60)\n"
     )
     real_popen = subprocess.Popen
@@ -745,24 +873,36 @@ def test_guardian_failure_keeps_original_error_when_cleanup_fails(tmp_path, monk
         proc = real_popen(cmd, **kwargs)
         launched.append(proc)
         if is_guard:
+
             def fail_guard_cleanup():
                 raise PermissionError("fixture guardian cleanup denied")
+
             proc.kill = fail_guard_cleanup
         elif ready:
             real_communicate = proc.communicate
+
             def first_call_interrupt(*args, **kwargs):
                 proc.communicate = real_communicate
                 raise KeyboardInterrupt("fixture operator interrupted")
+
             proc.communicate = first_call_interrupt
         return proc
 
     monkeypatch.setattr(worker_process.subprocess, "Popen", start_fixture)
     try:
         expected = KeyboardInterrupt if ready else RuntimeError
-        detail = "fixture operator interrupted" if ready else "guardian exited before readiness"
+        detail = (
+            "fixture operator interrupted"
+            if ready
+            else "guardian exited before readiness"
+        )
         with pytest.raises(expected, match=detail):
-            run_worker([sys.executable, str(worker_script)], cwd=tmp_path,
-                       env=dict(os.environ), timeout=5)
+            run_worker(
+                [sys.executable, str(worker_script)],
+                cwd=tmp_path,
+                env=dict(os.environ),
+                timeout=5,
+            )
     finally:
         for proc in launched:
             if proc.poll() is None:
@@ -772,7 +912,9 @@ def test_guardian_failure_keeps_original_error_when_cleanup_fails(tmp_path, monk
 
 @pytest.mark.parametrize("timeout", [None, 30])
 @pytest.mark.parametrize("use_log", [False, True])
-def test_cancellation_event_stops_owned_group_without_reporting_timeout(tmp_path, timeout, use_log):
+def test_cancellation_event_stops_owned_group_without_reporting_timeout(
+    tmp_path, timeout, use_log
+):
     # Ignoring the event would wait the worker's full timeout and keep its child
     # running; cancellation is a separate outcome from an ML execution timeout.
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
@@ -788,11 +930,19 @@ def test_cancellation_event_stops_owned_group_without_reporting_timeout(tmp_path
     setter.start()
     started = time.monotonic()
     try:
-        outcome = run_worker([sys.executable, str(tmp_path / "worker_fixture.py"),
-                              str(tmp_path), "same"], cwd=tmp_path,
-                             env=dict(os.environ), timeout=timeout,
-                             log_path=tmp_path / "worker.log" if use_log else None,
-                             cancellation_event=cancellation)
+        outcome = run_worker(
+            [
+                sys.executable,
+                str(tmp_path / "worker_fixture.py"),
+                str(tmp_path),
+                "same",
+            ],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=timeout,
+            log_path=tmp_path / "worker.log" if use_log else None,
+            cancellation_event=cancellation,
+        )
         assert time.monotonic() - started < 5
         assert outcome.cancelled is True
         assert outcome.timed_out is False
@@ -807,11 +957,13 @@ def test_cancellation_event_stops_owned_group_without_reporting_timeout(tmp_path
             _kill_known_group(int(path.read_text()))
 
 
-def test_escaped_fixture_has_a_deadline_even_if_controller_and_test_owner_die(tmp_path, monkeypatch):
-    monkeypatch.setenv('EVOLVE_FIXTURE_LIFETIME_SECONDS', '0.6')
-    controller = _start_controller(tmp_path, mode='escaped')
+def test_escaped_fixture_has_a_deadline_even_if_controller_and_test_owner_die(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("EVOLVE_FIXTURE_LIFETIME_SECONDS", "0.6")
+    controller = _start_controller(tmp_path, mode="escaped")
     try:
-        _wait_file(tmp_path / 'ready', controller)
+        _wait_file(tmp_path / "ready", controller)
         _kill_known_group(controller.pid)
         _assert_heartbeat_stopped(tmp_path)
     finally:

@@ -43,9 +43,11 @@ _CATEGORICAL_ENCODER_PATH = (
 )
 # FEDOT calls this helper only under categorical_ids.size > 0. Other methods
 # in the encoder module also run on numerical data and must stay broad.
-_CATEGORICAL_ONLY_SYMBOLS = frozenset({
-    "OneHotEncodingImplementation._apply_one_hot_encoding",
-})
+_CATEGORICAL_ONLY_SYMBOLS = frozenset(
+    {
+        "OneHotEncodingImplementation._apply_one_hot_encoding",
+    }
+)
 _SHARED_MARKERS = (
     "fedot/core/data/",
     "fedot/core/pipelines/",
@@ -105,7 +107,9 @@ def extract_change_tags(code_fragments: Iterable[str]) -> list[str]:
             ]
         except (tokenize.TokenError, IndentationError, SyntaxError):
             return []
-        identifier_matches.append(any(marker in name for name in names for marker in markers))
+        identifier_matches.append(
+            any(marker in name for name in names for marker in markers)
+        )
     if identifier_matches and all(identifier_matches):
         return ["categorical"]
     return []
@@ -190,7 +194,10 @@ def analyze_quality_scope(job: dict, registry=None) -> dict:
         and symbols
         and set(symbols) <= _CATEGORICAL_ONLY_SYMBOLS
         and not job.get("ast_errors")
-        and any(word in hypothesis_lower for word in ("categorical", "category", "categories"))
+        and any(
+            word in hypothesis_lower
+            for word in ("categorical", "category", "categories")
+        )
         else []
     )
     if dataset_traits:
@@ -273,7 +280,7 @@ def extract_changed_symbols(
             # Added code can escape the original helper with a dedent. Check
             # the replacement's whole span and enclosing lineage as well.
             replacement = str(new_code)
-            updated = text[:offset] + replacement + text[offset + len(str(old_code)):]
+            updated = text[:offset] + replacement + text[offset + len(str(old_code)) :]
             try:
                 new_tree = ast.parse(updated, filename=rel.as_posix())
             except SyntaxError:
@@ -281,12 +288,17 @@ def extract_changed_symbols(
                 continue
             new_end_line = line + replacement.rstrip("\r\n").count("\n")
             new_enclosing = [
-                node for node in ast.walk(new_tree)
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                node
+                for node in ast.walk(new_tree)
+                if isinstance(
+                    node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+                )
                 and node.lineno <= line
                 and new_end_line <= (node.end_lineno or node.lineno)
             ]
-            new_enclosing.sort(key=lambda node: (node.lineno, -(node.end_lineno or node.lineno)))
+            new_enclosing.sort(
+                key=lambda node: (node.lineno, -(node.end_lineno or node.lineno))
+            )
             if ".".join(node.name for node in new_enclosing) != symbol:
                 errors.append(f"{rel.as_posix()}:new_edit_outside_symbol")
     return symbols, errors

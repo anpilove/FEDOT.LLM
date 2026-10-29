@@ -5,7 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-SCRIPT = Path(__file__).resolve().parents[2] / "research/evolve/scripts/github_quality_sync.py"
+SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "research/evolve/scripts/github_quality_sync.py"
+)
 SPEC = importlib.util.spec_from_file_location("github_quality_sync", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 github_quality_sync = importlib.util.module_from_spec(SPEC)
@@ -13,7 +16,9 @@ SPEC.loader.exec_module(github_quality_sync)
 
 
 def test_issue_sync_creates_then_updates_only_controller_comment(monkeypatch):
-    monkeypatch.setattr(github_quality_sync.shutil, "which", lambda _name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        github_quality_sync.shutil, "which", lambda _name: "/usr/bin/gh"
+    )
     list_calls = 0
     mutations = []
 
@@ -23,7 +28,9 @@ def test_issue_sync_creates_then_updates_only_controller_comment(monkeypatch):
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[1] == "api" and "--paginate" in command:
             list_calls += 1
-            return SimpleNamespace(returncode=0, stdout="" if list_calls == 1 else "42\n", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout="" if list_calls == 1 else "42\n", stderr=""
+            )
         if command[1] == "api":
             mutations.append(command)
             return SimpleNamespace(returncode=0, stdout="{}", stderr="")
@@ -68,11 +75,15 @@ def test_issue_sync_creates_then_updates_only_controller_comment(monkeypatch):
 
 
 def test_issue_sync_skips_gracefully_without_github_auth(monkeypatch):
-    monkeypatch.setattr(github_quality_sync.shutil, "which", lambda _name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        github_quality_sync.shutil, "which", lambda _name: "/usr/bin/gh"
+    )
     monkeypatch.setattr(
         github_quality_sync.subprocess,
         "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr="not logged in"),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="not logged in"
+        ),
     )
     result = github_quality_sync.sync_issue_comments(
         {

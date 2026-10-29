@@ -74,7 +74,10 @@ def compare_pack(
     best: float | None = None
     for task_id in lift_ids:
         hib, floor, sent, mode = _spec(
-            task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
+            task_id,
+            higher_is_better=higher_is_better,
+            min_delta=min_delta,
+            sentinel=sentinel,
         )
         if _patched_broke(stock[task_id], patched[task_id]):
             lift_deltas[task_id] = None
@@ -88,7 +91,9 @@ def compare_pack(
         lift_deltas[task_id] = delta
         if best is None or delta > best:
             best = delta
-        lift_need = _signal_threshold(a) if evidence_only else _threshold(a, floor, mode)
+        lift_need = (
+            _signal_threshold(a) if evidence_only else _threshold(a, floor, mode)
+        )
         if delta >= lift_need:
             lift_ok = True
     regressions: dict[str, float | None] = dict(lift_deltas)
@@ -102,7 +107,10 @@ def compare_pack(
         )
     for task_id in protect_ids:
         hib, floor, sent, mode = _spec(
-            task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
+            task_id,
+            higher_is_better=higher_is_better,
+            min_delta=min_delta,
+            sentinel=sentinel,
         )
         if _patched_broke(stock[task_id], patched[task_id]):
             regressions[task_id] = None
@@ -134,7 +142,9 @@ def compare_pack(
                 regression_deltas=regressions,
             )
     if not lift_ok:
-        threshold_label = "numerical signal floor" if evidence_only else "per-task threshold"
+        threshold_label = (
+            "numerical signal floor" if evidence_only else "per-task threshold"
+        )
         return Decision(
             keep=False,
             reason=f"target_delta {best:.4f} below {threshold_label}",

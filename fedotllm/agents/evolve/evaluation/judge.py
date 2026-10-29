@@ -11,13 +11,24 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fedotllm.log import logger
-from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src, source_commit, source_fingerprint
+from fedotllm.agents.evolve.execution.checkout import (
+    resolve_fedot_src,
+    source_commit,
+    source_fingerprint,
+)
 from fedotllm.agents.evolve.evaluation.compare import compare_pack
-from fedotllm.agents.evolve.discovery.discover import pytest_failure_excerpt, pytest_snapshot
+from fedotllm.agents.evolve.discovery.discover import (
+    pytest_failure_excerpt,
+    pytest_snapshot,
+)
 from fedotllm.agents.evolve.evaluation.eval import run_patched, run_stock
 from fedotllm.agents.evolve.execution.guard import repo_root
 from fedotllm.agents.evolve.storage.journal import write_json_atomic
-from fedotllm.agents.evolve.evaluation.tasks import coverage_task_limit, hidden_exam, load_task
+from fedotllm.agents.evolve.evaluation.tasks import (
+    coverage_task_limit,
+    hidden_exam,
+    load_task,
+)
 from fedotllm.agents.evolve.types import Decision, MatchSite, ScoreResult, TestResult
 from fedotllm.agents.evolve.evaluation.test_contracts import run_with_test_repairs
 
@@ -98,7 +109,9 @@ def measure_fedot_tests(checkout: Path) -> TestResult:
     """FEDOT unit tests after a patch. Not an agent hunt signal."""
 
     # Discovery may stop early, acceptance must compare complete suites.
-    return run_with_test_repairs(checkout, lambda tree: pytest_snapshot(tree, maxfail=0))
+    return run_with_test_repairs(
+        checkout, lambda tree: pytest_snapshot(tree, maxfail=0)
+    )
 
 
 def _baseline_test_fingerprint(checkout: Path) -> str:
@@ -108,7 +121,11 @@ def _baseline_test_fingerprint(checkout: Path) -> str:
     digest = hashlib.sha256()
     digest.update(Path(__file__).with_name("test_contracts.py").read_bytes())
     evolve = Path(__file__).resolve().parents[1]
-    for relative in ("evaluation/judge.py", "discovery/signals.py", "execution/process.py"):
+    for relative in (
+        "evaluation/judge.py",
+        "discovery/signals.py",
+        "execution/process.py",
+    ):
         digest.update((evolve / relative).read_bytes())
     digest.update(source_fingerprint(checkout).encode())
     digest.update(source_commit(checkout).encode())

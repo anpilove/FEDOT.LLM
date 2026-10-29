@@ -61,10 +61,12 @@ def fixture_native_gil() -> dict:
     blocking_sleep.restype = ctypes.c_uint
     started = time.monotonic()
     blocking_sleep(1)
-    return {"native_call_elapsed_seconds": time.monotonic() - started,
-            "native_inside_call_line_guaranteed": False,
-            "sampling_gap_expected": True,
-            "native_observation": "Python wrapper sampled before GIL hold; inside-call Python sampling unavailable"}
+    return {
+        "native_call_elapsed_seconds": time.monotonic() - started,
+        "native_inside_call_line_guaranteed": False,
+        "sampling_gap_expected": True,
+        "native_observation": "Python wrapper sampled before GIL hold; inside-call Python sampling unavailable",
+    }
 
 
 def fixture_raised_exception() -> None:
@@ -81,14 +83,22 @@ FUNCTIONS = {
 
 
 def child(case: str, workspace: str, ready, release) -> None:
-    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import _periodic_stack_dumps
+    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import (
+        _periodic_stack_dumps,
+    )
 
     directory = Path(workspace) / case
     log_path = directory / "worker.log"
     stack_path = directory / "worker.stacks.txt"
-    record = {"case": case, "pid": os.getpid(), "attempt_id": f"parallel-trace:{case}:1",
-              "log_path": str(log_path), "stack_trace_path": str(stack_path),
-              "expected_function": FUNCTIONS[case].__name__, "purpose": PURPOSE}
+    record = {
+        "case": case,
+        "pid": os.getpid(),
+        "attempt_id": f"parallel-trace:{case}:1",
+        "log_path": str(log_path),
+        "stack_trace_path": str(stack_path),
+        "expected_function": FUNCTIONS[case].__name__,
+        "purpose": PURPOSE,
+    }
     returncode = 0
     diagnostics = {}
     with log_path.open("w", buffering=1) as log:
@@ -100,7 +110,9 @@ def child(case: str, workspace: str, ready, release) -> None:
             record["started_at"] = datetime.now(timezone.utc).isoformat()
             record["started_monotonic"] = time.monotonic()
             try:
-                with _periodic_stack_dumps(stack_path, interval_seconds=STACK_INTERVAL_SECONDS) as diagnostics:
+                with _periodic_stack_dumps(
+                    stack_path, interval_seconds=STACK_INTERVAL_SECONDS
+                ) as diagnostics:
                     observations = FUNCTIONS[case]()
                     if observations:
                         record.update(observations)
@@ -110,7 +122,9 @@ def child(case: str, workspace: str, ready, release) -> None:
             finally:
                 record["finished_monotonic"] = time.monotonic()
                 record["finished_at"] = datetime.now(timezone.utc).isoformat()
-                record["elapsed_seconds"] = record["finished_monotonic"] - record["started_monotonic"]
+                record["elapsed_seconds"] = (
+                    record["finished_monotonic"] - record["started_monotonic"]
+                )
                 record["stack_diagnostics"] = diagnostics
                 record["returncode"] = returncode
                 print(f"finished case={case} returncode={returncode}", flush=True)
@@ -125,7 +139,10 @@ def validate_workspace(path: Path) -> Path:
     if not parent.is_dir():
         raise ValueError("workspace parent must be an existing directory")
     workspace = parent / path.name
-    if ROOT / ".repo_cache" in workspace.parents or ROOT / "fedotllm" in workspace.parents:
+    if (
+        ROOT / ".repo_cache" in workspace.parents
+        or ROOT / "fedotllm" in workspace.parents
+    ):
         raise ValueError("workspace must be separate from source checkouts")
     return workspace
 
@@ -133,12 +150,20 @@ def validate_workspace(path: Path) -> Path:
 def launch(workspace: Path, arguments: list[str]) -> dict:
     script = Path(__file__).resolve()
     worker_source = ROOT / "fedotllm/agents/evolve/evaluation/_fedot_quality_worker.py"
-    report = {"mode": "launch", "purpose": PURPOSE, "passed": False,
-              "started_at": datetime.now(timezone.utc).isoformat(),
-              "script_path": str(script), "script_sha256": sha256(script),
-              "worker_source_sha256": sha256(worker_source), "arguments": arguments,
-              "affected_paths": [str(workspace)], "workspace": str(workspace),
-              "stack_interval_seconds": STACK_INTERVAL_SECONDS, "workers": []}
+    report = {
+        "mode": "launch",
+        "purpose": PURPOSE,
+        "passed": False,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "script_path": str(script),
+        "script_sha256": sha256(script),
+        "worker_source_sha256": sha256(worker_source),
+        "arguments": arguments,
+        "affected_paths": [str(workspace)],
+        "workspace": str(workspace),
+        "stack_interval_seconds": STACK_INTERVAL_SECONDS,
+        "workers": [],
+    }
     workspace.mkdir(exist_ok=False)
     write_json(workspace / "launch_audit.json", report)
     context = multiprocessing.get_context("spawn")
@@ -148,12 +173,16 @@ def launch(workspace: Path, arguments: list[str]) -> dict:
     try:
         for case in CASES:
             (workspace / case).mkdir()
-            process = context.Process(target=child, args=(case, str(workspace), ready, release), name=case)
+            process = context.Process(
+                target=child, args=(case, str(workspace), ready, release), name=case
+            )
             process.start()
             children.append((case, process))
         ready_cases = {ready.get(timeout=3) for _ in CASES}
         if ready_cases != set(CASES):
-            raise RuntimeError("not all four fixture processes reached the start barrier")
+            raise RuntimeError(
+                "not all four fixture processes reached the start barrier"
+            )
         release.set()
         deadline = time.monotonic() + 4
         for case, process in children:
@@ -164,19 +193,30 @@ def launch(workspace: Path, arguments: list[str]) -> dict:
             stacks = Path(record["stack_trace_path"]).read_text()
             expected = record["expected_function"]
             frame = rf'File "{re.escape(str(script))}", line [1-9][0-9]* in {re.escape(expected)}'
-            record.update(stack_dump_count=stacks.count("--- stack dump at "),
-                          expected_function_present=f"in {expected}" in stacks,
-                          source_line_present=bool(re.search(frame, stacks)),
-                          actual_returncode=process.exitcode)
+            record.update(
+                stack_dump_count=stacks.count("--- stack dump at "),
+                expected_function_present=f"in {expected}" in stacks,
+                source_line_present=bool(re.search(frame, stacks)),
+                actual_returncode=process.exitcode,
+            )
             report["workers"].append(record)
         records = report["workers"]
-        report["overlap_seconds"] = min(row["finished_monotonic"] for row in records) - max(
-            row["started_monotonic"] for row in records)
+        report["overlap_seconds"] = min(
+            row["finished_monotonic"] for row in records
+        ) - max(row["started_monotonic"] for row in records)
         report["passed"] = report["overlap_seconds"] > 0.1 and all(
-            row["stack_dump_count"] >= 1 and row["expected_function_present"] and row["source_line_present"]
-            and row["actual_returncode"] == row["returncode"] == (3 if row["case"] == "raised_exception" else 0)
-            and (row["case"] != "native_gil" or row["native_call_elapsed_seconds"] >= 1.0)
-            and row["elapsed_seconds"] < 10 for row in records)
+            row["stack_dump_count"] >= 1
+            and row["expected_function_present"]
+            and row["source_line_present"]
+            and row["actual_returncode"]
+            == row["returncode"]
+            == (3 if row["case"] == "raised_exception" else 0)
+            and (
+                row["case"] != "native_gil" or row["native_call_elapsed_seconds"] >= 1.0
+            )
+            and row["elapsed_seconds"] < 10
+            for row in records
+        )
     except BaseException as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
     finally:
@@ -202,9 +242,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         workspace = validate_workspace(args.workspace)
         if args.mode == "check":
-            print(json.dumps({"mode": "check", "purpose": PURPOSE, "workspace": str(workspace),
-                              "script_sha256": sha256(Path(__file__).resolve()),
-                              "cases": list(CASES), "processes_started": False}))
+            print(
+                json.dumps(
+                    {
+                        "mode": "check",
+                        "purpose": PURPOSE,
+                        "workspace": str(workspace),
+                        "script_sha256": sha256(Path(__file__).resolve()),
+                        "cases": list(CASES),
+                        "processes_started": False,
+                    }
+                )
+            )
             return 0
         report = launch(workspace, list(sys.argv[1:] if argv is None else argv))
     except (OSError, ValueError) as exc:

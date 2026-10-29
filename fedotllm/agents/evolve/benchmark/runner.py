@@ -12,7 +12,10 @@ from fedotllm.agents.evolve.execution.checkout import (
     source_fingerprint,
 )
 from fedotllm.agents.evolve.evaluation.compare import compare_pack
-from fedotllm.agents.evolve.discovery.discover import default_parameter_leads, leads_from_scores
+from fedotllm.agents.evolve.discovery.discover import (
+    default_parameter_leads,
+    leads_from_scores,
+)
 from fedotllm.agents.evolve.agents.fixer import fix_lead
 from fedotllm.agents.evolve.evaluation.judge import (
     measure_fedot_tests,
@@ -51,7 +54,9 @@ _PCA_FILE = (
 _PCA_OLD = """        self.pca = PCA(**self.params.to_dict())
         self.number_of_features = None
 """
-_PCA_NEW = _PCA_OLD + """
+_PCA_NEW = (
+    _PCA_OLD
+    + """
     def fit(self, input_data: InputData) -> PCA:
         features = input_data.features
         if isinstance(features, pd.DataFrame):
@@ -114,17 +119,18 @@ _PCA_NEW = _PCA_OLD + """
         output_data.features_names = None
         return output_data
 """
+)
 
 _RF_DEFAULTS_FILE = "fedot/core/repository/data/default_operation_params.json"
-_RF_DEFAULTS_OLD = '''  "rf": {
+_RF_DEFAULTS_OLD = """  "rf": {
     "n_jobs": 1
   },
-'''
-_RF_DEFAULTS_NEW = '''  "rf": {
+"""
+_RF_DEFAULTS_NEW = """  "rf": {
     "n_jobs": 1,
     "min_samples_leaf": 2
   },
-'''
+"""
 
 _LAGGED_FILE = (
     "fedot/core/operations/evaluation/operation_implementations/"
@@ -369,13 +375,34 @@ def negative_controls() -> dict:
     protect = ("guard",)
     stock = {"lift": _score("lift", "ok", 0.80), "guard": _score("guard", "ok", 0.80)}
     packs = {
-        "no_op": {"lift": _score("lift", "ok", 0.80), "guard": _score("guard", "ok", 0.80)},
-        "inverse": {"lift": _score("lift", "ok", 0.70), "guard": _score("guard", "ok", 0.80)},
-        "neutral": {"lift": _score("lift", "ok", 0.805), "guard": _score("guard", "ok", 0.80)},
-        "regression": {"lift": _score("lift", "ok", 0.82), "guard": _score("guard", "ok", 0.70)},
-        "crash": {"lift": _score("lift", "crash", 0.5), "guard": _score("guard", "ok", 0.80)},
-        "timeout": {"lift": _score("lift", "timeout", float("nan")), "guard": _score("guard", "ok", 0.80)},
-        "invalid": {"lift": _score("lift", "invalid", float("nan")), "guard": _score("guard", "ok", 0.80)},
+        "no_op": {
+            "lift": _score("lift", "ok", 0.80),
+            "guard": _score("guard", "ok", 0.80),
+        },
+        "inverse": {
+            "lift": _score("lift", "ok", 0.70),
+            "guard": _score("guard", "ok", 0.80),
+        },
+        "neutral": {
+            "lift": _score("lift", "ok", 0.805),
+            "guard": _score("guard", "ok", 0.80),
+        },
+        "regression": {
+            "lift": _score("lift", "ok", 0.82),
+            "guard": _score("guard", "ok", 0.70),
+        },
+        "crash": {
+            "lift": _score("lift", "crash", 0.5),
+            "guard": _score("guard", "ok", 0.80),
+        },
+        "timeout": {
+            "lift": _score("lift", "timeout", float("nan")),
+            "guard": _score("guard", "ok", 0.80),
+        },
+        "invalid": {
+            "lift": _score("lift", "invalid", float("nan")),
+            "guard": _score("guard", "ok", 0.80),
+        },
     }
     rows = {}
     for name, patched in packs.items():
@@ -432,7 +459,11 @@ def _judge_known_case(
             "ok": bool(dev.keep and final.keep),
             "case_id": candidate.candidate_id,
             "dev": {"keep": dev.keep, "reason": dev.reason, "delta": dev.target_delta},
-            "final": {"keep": final.keep, "reason": final.reason, "delta": final.target_delta},
+            "final": {
+                "keep": final.keep,
+                "reason": final.reason,
+                "delta": final.target_delta,
+            },
         }
     finally:
         discard_experiment_checkout(tree, workspace=workspace, source=source)
@@ -549,7 +580,9 @@ def benchmark_configuration(source: Path, workspace: Path) -> dict:
         applied = apply_patch(experiment, rf_leaf2_case())
         patched_hash = source_fingerprint(experiment) if applied else stock_hash
         if applied:
-            from fedotllm.agents.evolve.controller.campaign import compare_behavior_probe
+            from fedotllm.agents.evolve.controller.campaign import (
+                compare_behavior_probe,
+            )
 
             probe = compare_behavior_probe(
                 source,
@@ -1129,7 +1162,9 @@ def run_component(
         payload["repeated_run_matches_previous"] = bool(
             previous is not None and old_comparable == comparable
         )
-        artifact.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        artifact.write_text(
+            json.dumps(payload, indent=2, default=str), encoding="utf-8"
+        )
         return payload
     if component == "localization":
         return benchmark_localization(source, workspace)
@@ -1165,7 +1200,11 @@ def run_component(
         )
     verifier_client = verifier_inference or scout_inference or inference
     fixer_client = fixer_inference or inference
-    if component == "fixer" and fixer_client is not None and verifier_client is not None:
+    if (
+        component == "fixer"
+        and fixer_client is not None
+        and verifier_client is not None
+    ):
         return benchmark_fixer(
             source,
             workspace,

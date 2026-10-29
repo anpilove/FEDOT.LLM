@@ -78,7 +78,9 @@ def _model_name(inference: Any) -> str:
     config = getattr(inference, "config", None)
     provider = getattr(config, "provider", "")
     model = getattr(config, "model_name", "")
-    return "/".join(part for part in (provider, model) if part) or type(inference).__name__
+    return (
+        "/".join(part for part in (provider, model) if part) or type(inference).__name__
+    )
 
 
 def capture_structured_create(
@@ -209,7 +211,9 @@ def capture_structured_create(
             inference.query = original
 
     if path is not None:
-        payload = parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
+        payload = (
+            parsed.model_dump(mode="json") if isinstance(parsed, BaseModel) else parsed
+        )
         append_journal(
             path,
             {

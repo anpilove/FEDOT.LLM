@@ -34,20 +34,23 @@ def terminate_owned_worker_group(worker_pgid: int) -> int:
                 f"worker_group_cleanup_failed pgid={worker_pgid} "
                 f"signal_error={type(exc).__name__}:{exc} "
                 f"probe_error={type(probe_error).__name__}:{probe_error}",
-                file=sys.stderr, flush=True,
+                file=sys.stderr,
+                flush=True,
             )
             return 1
         print(
             f"worker_group_cleanup_failed pgid={worker_pgid} "
             f"signal_error={type(exc).__name__}:{exc} group_still_exists=true",
-            file=sys.stderr, flush=True,
+            file=sys.stderr,
+            flush=True,
         )
         return 1
     except OSError as exc:
         print(
             f"worker_group_cleanup_failed pgid={worker_pgid} "
             f"signal_error={type(exc).__name__}:{exc}",
-            file=sys.stderr, flush=True,
+            file=sys.stderr,
+            flush=True,
         )
         return 1
     return 0
@@ -68,14 +71,17 @@ def main() -> int:
         os.close(args.ready_fd)
     message = b""
     deadline = (
-        None if args.watchdog_timeout_seconds is None
+        None
+        if args.watchdog_timeout_seconds is None
         else time.monotonic() + args.watchdog_timeout_seconds
     )
     if deadline is not None and args.watchdog_timeout_seconds <= 0:
         parser.error("watchdog timeout must be positive")
     try:
         while True:
-            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            remaining = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
             readable, _, _ = select.select([args.parent_fd], [], [], remaining)
             if not readable:
                 cleanup_status = terminate_owned_worker_group(args.worker_pgid)

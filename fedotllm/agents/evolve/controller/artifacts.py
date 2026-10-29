@@ -16,6 +16,7 @@ from fedotllm.agents.evolve.types import (
     ScoreResult,
 )
 
+
 def _record_attempt(
     journal: Path,
     workspace: Path,
@@ -50,12 +51,14 @@ def _record_attempt(
         "hypothesis_id": hypothesis_id,
         "candidate": None if candidate is None else candidate.candidate_id,
         "file": None if candidate is None else candidate.file_path,
-        "edits": [] if candidate is None else [asdict(edit) for edit in candidate.edits],
+        "edits": []
+        if candidate is None
+        else [asdict(edit) for edit in candidate.edits],
         "lead": asdict(lead),
         "stock": {key: _score_log(value) for key, value in stock.items()},
-        "patched": None if patched is None else {
-            key: _score_log(value) for key, value in patched.items()
-        },
+        "patched": None
+        if patched is None
+        else {key: _score_log(value) for key, value in patched.items()},
         "diff": diff,
         "patch_hash": patch_hash,
         "score_protocol_hash": score_protocol_hash,
@@ -75,9 +78,10 @@ def _record_attempt(
         row["fedot_test_cmd"] = tests.cmd
         row["fedot_test_output_tail"] = (tests.output or "")[-6_000:]
         row["fedot_test_failures"] = sorted(tests.failed_nodes)[:20]
-        row["fedot_test_gate_passed"] = not decision.reason.startswith(
-            "fedot_tests_regressed"
-        ) and not decision.infrastructure_error
+        row["fedot_test_gate_passed"] = (
+            not decision.reason.startswith("fedot_tests_regressed")
+            and not decision.infrastructure_error
+        )
     append_journal(journal, row)
     if findings_path is not None:
         append_finding(
@@ -102,8 +106,13 @@ def _record_attempt(
         record = ExperimentRecord(
             hypothesis_id=hypothesis_id,
             experiment_hash=patch_hash,
-            patch={"candidate_id": candidate.candidate_id, "edits": [asdict(e) for e in candidate.edits]},
-            tests={} if tests is None else {
+            patch={
+                "candidate_id": candidate.candidate_id,
+                "edits": [asdict(e) for e in candidate.edits],
+            },
+            tests={}
+            if tests is None
+            else {
                 "status": tests.status,
                 "exit_code": tests.exit_code,
                 "failed_nodes": sorted(tests.failed_nodes),
@@ -111,13 +120,15 @@ def _record_attempt(
                 "cmd": tests.cmd,
                 "output_tail": (tests.output or "")[-6_000:],
             },
-            dev_scores={} if patched is None else {
-                key: _score_log(value) for key, value in patched.items()
-            },
+            dev_scores={}
+            if patched is None
+            else {key: _score_log(value) for key, value in patched.items()},
             feedback=feedback,
             revision=revision,
         )
-        append_journal(workspace / "hypotheses.jsonl", {"event": "experiment", **as_row(record)})
+        append_journal(
+            workspace / "hypotheses.jsonl", {"event": "experiment", **as_row(record)}
+        )
 
 
 def _score_log(result: ScoreResult) -> dict:

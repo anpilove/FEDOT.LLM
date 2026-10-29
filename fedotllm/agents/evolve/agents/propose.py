@@ -323,7 +323,9 @@ def propose_patch(
                 )
             continue
         if status in {"search", "symbol", "callers", "docs"} and checkout is not None:
-            from fedotllm.agents.evolve.discovery.research_tools import run_research_tool
+            from fedotllm.agents.evolve.discovery.research_tools import (
+                run_research_tool,
+            )
 
             _, opened = run_research_tool(
                 checkout, status, query=parsed.query, symbol=parsed.symbol

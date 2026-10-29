@@ -33,7 +33,10 @@ def campaign_workspace(workspace: Path) -> Path:
     workspace = workspace.resolve()
     # A server service itself lives under evolve/runs/<campaign>; only hunt
     # children use the legacy <campaign>/runs/<hunt-id> layout.
-    if any((workspace / name).is_file() for name in ("service_manifest.json", "launch_audit.json")):
+    if any(
+        (workspace / name).is_file()
+        for name in ("service_manifest.json", "launch_audit.json")
+    ):
         return workspace
     if workspace.parent.name == "runs":
         return workspace.parent.parent
@@ -63,13 +66,15 @@ def enqueue_quality_job(
     """Record a pair job. Does not fit Fedot and does not judge quality."""
 
     registry = registry or load_quality_registry()
-    changed_files = list(dict.fromkeys(
-        edit.file_path for edit in candidate.edits if edit.file_path
-    )) or ([candidate.file_path] if candidate.file_path else [])
+    changed_files = list(
+        dict.fromkeys(edit.file_path for edit in candidate.edits if edit.file_path)
+    ) or ([candidate.file_path] if candidate.file_path else [])
     changed_symbols: list[str] = []
     ast_errors: list[str] = []
     if source_root is not None and candidate.edits:
-        changed_symbols, ast_errors = extract_changed_symbols(source_root, candidate.edits)
+        changed_symbols, ast_errors = extract_changed_symbols(
+            source_root, candidate.edits
+        )
     changed_code_tags = extract_change_tags(edit.new_code for edit in candidate.edits)
     impact = {
         "changed_files": changed_files,
@@ -79,7 +84,9 @@ def enqueue_quality_job(
         "hypothesis": hypothesis or {},
     }
     scope = analyze_quality_scope(impact, registry)
-    requested = tuple(task_ids) if task_ids is not None else list_quality_task_ids(registry)
+    requested = (
+        tuple(task_ids) if task_ids is not None else list_quality_task_ids(registry)
+    )
     required_ids = select_task_ids_for_job(
         {**impact, "quality_scope": scope}, registry=registry
     )
@@ -102,13 +109,18 @@ def enqueue_quality_job(
     source_revision = ""
     source_sha256 = ""
     if source_root is not None:
-        from fedotllm.agents.evolve.execution.checkout import source_commit, source_fingerprint
+        from fedotllm.agents.evolve.execution.checkout import (
+            source_commit,
+            source_fingerprint,
+        )
 
         source_revision = source_commit(source_root)
         source_sha256 = source_fingerprint(source_root)
     check_identity = {
         "registry_identity": registry.identity,
-        "registry_sha256": hashlib.sha256(json.dumps(asdict(registry), sort_keys=True).encode()).hexdigest(),
+        "registry_sha256": hashlib.sha256(
+            json.dumps(asdict(registry), sort_keys=True).encode()
+        ).hexdigest(),
         "source_revision": source_revision,
         "source_sha256": source_sha256,
         "required_task_ids": list(required_ids),
@@ -124,16 +136,23 @@ def enqueue_quality_job(
         except json.JSONDecodeError as exc:
             raise ValueError(f"unreadable proposed improvement: {job_path}") from exc
         if not isinstance(existing, dict):
-            raise ValueError(f"invalid proposed improvement: {job_path}: expected object")
+            raise ValueError(
+                f"invalid proposed improvement: {job_path}: expected object"
+            )
         old_patch = directory / str(existing.get("patch") or f"{revision_id}.patch")
         old_hash = str(existing.get("patch_sha256") or "")
         if not old_hash and old_patch.is_file():
             old_hash = hashlib.sha256(old_patch.read_bytes()).hexdigest()
-        if old_hash == patch_sha256 and existing.get("check_identity") == check_identity:
+        if (
+            old_hash == patch_sha256
+            and existing.get("check_identity") == check_identity
+        ):
             # Idempotent enqueue must not reset a completed or running evaluation.
             return job_path
         if old_hash == patch_sha256:
-            check_hash = hashlib.sha256(json.dumps(check_identity, sort_keys=True).encode()).hexdigest()
+            check_hash = hashlib.sha256(
+                json.dumps(check_identity, sort_keys=True).encode()
+            ).hexdigest()
             revision_id = f"{candidate.candidate_id}-q{check_hash[:12]}"
         else:
             revision_id = f"{candidate.candidate_id}-r{patch_sha256[:12]}"
@@ -142,9 +161,13 @@ def enqueue_quality_job(
             try:
                 existing_revision = json.loads(job_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
-                raise ValueError(f"unreadable proposed improvement: {job_path}") from exc
-            if (existing_revision.get("patch_sha256") == patch_sha256
-                    and existing_revision.get("check_identity") == check_identity):
+                raise ValueError(
+                    f"unreadable proposed improvement: {job_path}"
+                ) from exc
+            if (
+                existing_revision.get("patch_sha256") == patch_sha256
+                and existing_revision.get("check_identity") == check_identity
+            ):
                 return job_path
             raise FileExistsError(f"candidate revision id collision: {revision_id}")
     patch_path = directory / f"{revision_id}.patch"
@@ -256,7 +279,9 @@ def list_queued_jobs(workspace: Path) -> list[dict]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise ValueError(f"unreadable proposed improvement: {path}: {exc.msg}") from exc
+            raise ValueError(
+                f"unreadable proposed improvement: {path}: {exc.msg}"
+            ) from exc
         if not isinstance(payload, dict):
             raise ValueError(f"invalid proposed improvement: {path}: expected object")
         payload["_path"] = str(path)
@@ -325,7 +350,7 @@ def quality_result_message(result: dict) -> str:
     claim = str(hypothesis.get("claim") or "").strip()
     subject = f"Кандидат {candidate}"
     if claim:
-        subject += f', гипотеза «{claim}»'
+        subject += f", гипотеза «{claim}»"
     task_count = len(result.get("task_ids") or ())
     reason = str(result.get("reason") or "без указанной причины")
     status = str(result.get("status") or "")
@@ -349,7 +374,9 @@ def quality_result_message(result: dict) -> str:
             f"({reason}); это не подтверждённая регрессия и не повод принимать патч."
         )
     if status == "apply_failed":
-        return f"Патч кандидата {candidate} не применился ({reason}); качество не оценено."
+        return (
+            f"Патч кандидата {candidate} не применился ({reason}); качество не оценено."
+        )
     if status == "skipped":
         return f"Кандидат {candidate} пропущен: {reason}; качество не оценено."
     if status in {"partial", "blocked", "fedot_budget_timeout", "unverified_metric"}:

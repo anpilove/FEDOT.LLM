@@ -4,6 +4,7 @@ The controller accounts for a stock/patched task pair, rather than provider
 calls.  A ceiling is intentionally fail-closed: lack of capacity is reported
 as inconclusive and can never become a metric KEEP.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -34,7 +35,10 @@ class MeasurementBudget:
             raise ValueError("max_seconds must be non-negative or None")
         if self.reserve_final_seconds < 0:
             raise ValueError("reserve_final_seconds must be non-negative")
-        if self.max_seconds is not None and self.reserve_final_seconds > self.max_seconds:
+        if (
+            self.max_seconds is not None
+            and self.reserve_final_seconds > self.max_seconds
+        ):
             raise ValueError("reserve_final_seconds exceed max_seconds")
         if self.max_pairs is not None and self.reserve_final_pairs > self.max_pairs:
             raise ValueError("reserve_final_pairs exceed max_pairs")
@@ -73,9 +77,12 @@ class MeasurementBudget:
         payload.pop("_campaign_started_at", None)
         return payload | {
             "wall_elapsed_seconds": self.wall_elapsed_seconds(),
-            "remaining_pairs": None if self.max_pairs is None else self.max_pairs - self.pairs_started,
+            "remaining_pairs": None
+            if self.max_pairs is None
+            else self.max_pairs - self.pairs_started,
             "remaining_seconds": (
-                None if self.max_seconds is None
+                None
+                if self.max_seconds is None
                 else max(0.0, self.max_seconds - self.wall_elapsed_seconds())
             ),
         }

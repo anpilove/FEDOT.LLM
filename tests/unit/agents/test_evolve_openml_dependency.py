@@ -15,7 +15,9 @@ def test_openml_is_a_required_locked_dependency_for_quality_loading():
     project = tomllib.loads((root / "pyproject.toml").read_text())
     requirements = [Requirement(value) for value in project["project"]["dependencies"]]
     openml = next((item for item in requirements if item.name == "openml"), None)
-    assert openml is not None, "quality loading requires OpenML in a normal installation"
+    assert openml is not None, (
+        "quality loading requires OpenML in a normal installation"
+    )
     assert openml.marker is None, "OpenML must be installed on every supported platform"
 
     lock = tomllib.loads((root / "uv.lock").read_text())
