@@ -60,7 +60,8 @@ def _compact_lead_evidence(lead: MatchSite, *, max_chars: int = 3_000) -> str:
     rows = list(dict.fromkeys(direct))
     if implementations:
         rows.append(
-            "runtime implementations observed: " + ", ".join(implementations[:16])
+            "runtime implementations observed: "
+            + ", ".join(implementations[:16])
         )
     if workloads:
         rows.append("affected frozen workloads:")
@@ -177,11 +178,7 @@ def inspect_trace(
         raw, line, func = match.group(1), int(match.group(2)), match.group(3) or ""
         try:
             raw_path = Path(raw)
-            resolved = (
-                raw_path.resolve()
-                if raw_path.is_absolute()
-                else (checkout / raw_path).resolve()
-            )
+            resolved = raw_path.resolve() if raw_path.is_absolute() else (checkout / raw_path).resolve()
             rel = resolved.relative_to(checkout).as_posix()
         except (OSError, ValueError):
             continue
@@ -192,32 +189,28 @@ def inspect_trace(
                 "file": rel,
                 "line": line,
                 "func": func,
-                "source": show_source(
-                    resolved, checkout=checkout, around=line, radius=radius
-                ),
+                "source": show_source(resolved, checkout=checkout, around=line, radius=radius),
             }
         )
     return frames
 
 
-def context_from_lead(
-    lead: MatchSite, checkout: Path, *, max_chars: int = _MAX_FILE_CHARS
-) -> str:
+def context_from_lead(lead: MatchSite, checkout: Path, *, max_chars: int = _MAX_FILE_CHARS) -> str:
     target = checkout / lead.file_path
     n_lines = 0
     if target.is_file():
         n_lines = len(target.read_text(encoding="utf-8", errors="replace").splitlines())
     whole = n_lines <= _WHOLE_FILE_LINES
-    source = (
-        show_file(lead.file_path, checkout=checkout)
-        if whole
-        else show_source(lead.file_path, checkout=checkout, around=lead.line)
+    source = show_file(lead.file_path, checkout=checkout) if whole else show_source(
+        lead.file_path, checkout=checkout, around=lead.line
     )
     # On bounded prompts, an otherwise "small" 300-line file can still consume
     # the entire budget before the marked line.  Prefer the enclosing executable
     # symbol when the whole numbered file would crowd out the lead and contract.
     focused_for_budget = bool(
-        whole and lead.line > 1 and len(source) > max(4_000, int(max_chars * 0.55))
+        whole
+        and lead.line > 1
+        and len(source) > max(4_000, int(max_chars * 0.55))
     )
     if focused_for_budget:
         source = show_source(lead.file_path, checkout=checkout, around=lead.line)
@@ -272,9 +265,7 @@ def context_from_lead(
             )
             if conversion:
                 parts.append("Output conversion contract:\n" + conversion)
-    callees = _callee_sources(
-        checkout, lead, skip_file=lead.file_path if whole else None
-    )
+    callees = _callee_sources(checkout, lead, skip_file=lead.file_path if whole else None)
     if callees:
         parts.append("Called from this function:\n" + callees)
     from fedotllm.agents.evolve.discovery.repo_map import (
@@ -322,10 +313,7 @@ def _named_runtime_sources(
 ) -> str:
     """Show concrete helper bodies referenced by inherited runtime methods."""
 
-    from fedotllm.agents.evolve.discovery.repo_map import (
-        iter_symbols,
-        skip_metric_noise,
-    )
+    from fedotllm.agents.evolve.discovery.repo_map import iter_symbols, skip_metric_noise
 
     wanted = set(names)
     by_name: dict[str, list] = {name: [] for name in names}
@@ -400,9 +388,7 @@ _SKIP_ATTRS = frozenset(
 
 
 def _attrs_in_source(source: str, *, limit: int = 4) -> list[str]:
-    body = "\n".join(
-        line.split("|", 1)[-1] for line in (source or "").splitlines() if "|" in line
-    )
+    body = "\n".join(line.split("|", 1)[-1] for line in (source or "").splitlines() if "|" in line)
     body = textwrap.dedent(body)
     if not body.strip():
         return []
@@ -533,9 +519,7 @@ def _base_class_sources(checkout: Path, lead: MatchSite, *, limit: int = 6) -> s
             continue
         base_path = checkout / symbol.file_path
         try:
-            base_tree = ast.parse(
-                base_path.read_text(encoding="utf-8", errors="replace")
-            )
+            base_tree = ast.parse(base_path.read_text(encoding="utf-8", errors="replace"))
         except (OSError, SyntaxError, ValueError):
             continue
         class_node = next(
@@ -599,7 +583,11 @@ def _related_implementation_sources(
     )
     if owner is None:
         return ""
-    base_names = {name for base in owner.bases if (name := _ast_name(base)) is not None}
+    base_names = {
+        name
+        for base in owner.bases
+        if (name := _ast_name(base)) is not None
+    }
     if not base_names:
         return ""
 
@@ -696,9 +684,7 @@ def _callee_sources(
             if key in seen or (skip_file and nxt.file_path == skip_file):
                 continue
             seen.add(key)
-            snippet = show_source(
-                checkout / nxt.file_path, checkout=checkout, around=nxt.line
-            )
+            snippet = show_source(checkout / nxt.file_path, checkout=checkout, around=nxt.line)
             if snippet:
                 parts.append(snippet)
             if len(parts) >= limit:

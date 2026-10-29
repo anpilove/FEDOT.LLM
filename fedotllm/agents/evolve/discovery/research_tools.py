@@ -49,11 +49,7 @@ def _exact_symbol_source(checkout: Path, symbol) -> str:
     node = None
     if symbol.kind == "class":
         node = next(
-            (
-                item
-                for item in tree.body
-                if isinstance(item, ast.ClassDef) and item.name == symbol.name
-            ),
+            (item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == symbol.name),
             None,
         )
     elif symbol.kind == "function":
@@ -90,10 +86,7 @@ def _exact_symbol_source(checkout: Path, symbol) -> str:
     start = max(0, int(node.lineno) - 1)
     end = min(len(lines), int(getattr(node, "end_lineno", node.lineno) or node.lineno))
     numbered = [f"{index + 1:5d}|{lines[index]}" for index in range(start, end)]
-    return (
-        f"# {symbol.file_path} — exact {symbol.kind} {symbol.parent + '.' if symbol.parent else ''}{symbol.name}\n"
-        + "\n".join(numbered)
-    )
+    return f"# {symbol.file_path} — exact {symbol.kind} {symbol.parent + '.' if symbol.parent else ''}{symbol.name}\n" + "\n".join(numbered)
 
 
 def _imported_names(code: str, module: str) -> list[str]:
@@ -140,11 +133,13 @@ def _exact_api_source(checkout: Path, query: str) -> str:
             owner = ""
     symbols = list(iter_symbols(checkout))
     if owner:
-        exact = [item for item in symbols if item.parent == owner and item.name == name]
+        exact = [
+            item
+            for item in symbols
+            if item.parent == owner and item.name == name
+        ]
         if not exact:
-            exact = [
-                item for item in symbols if item.name == owner and item.kind == "class"
-            ]
+            exact = [item for item in symbols if item.name == owner and item.kind == "class"]
     else:
         exact = [item for item in symbols if item.name == name]
         exact.sort(key=lambda item: item.kind != "class")
@@ -195,22 +190,12 @@ def _constructor_contract_source(checkout: Path, symbol, symbols: list) -> str:
             ),
             None,
         )
-        end = (
-            int(first_method.lineno - 1)
-            if first_method is not None
-            else int(
-                getattr(class_node, "end_lineno", class_node.lineno)
-                or class_node.lineno
-            )
+        end = int(first_method.lineno - 1) if first_method is not None else int(
+            getattr(class_node, "end_lineno", class_node.lineno) or class_node.lineno
         )
         start = max(0, int(class_node.lineno) - 1)
-        numbered = [
-            f"{index + 1:5d}|{file_lines[index]}"
-            for index in range(start, min(end, len(file_lines)))
-        ]
-        return f"# {rel} — constructor fields for {class_node.name}\n" + "\n".join(
-            numbered
-        )
+        numbered = [f"{index + 1:5d}|{file_lines[index]}" for index in range(start, min(end, len(file_lines)))]
+        return f"# {rel} — constructor fields for {class_node.name}\n" + "\n".join(numbered)
 
     parts = [header_source(node, lines, symbol.file_path)]
     base_names = [base.id for base in node.bases if isinstance(base, ast.Name)]
@@ -227,9 +212,7 @@ def _constructor_contract_source(checkout: Path, symbol, symbols: list) -> str:
             continue
         base_path = checkout / base_symbol.file_path
         try:
-            base_lines = base_path.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines()
+            base_lines = base_path.read_text(encoding="utf-8", errors="replace").splitlines()
             base_tree = ast.parse("\n".join(base_lines) + "\n", filename=str(base_path))
         except (OSError, SyntaxError, ValueError):
             continue
@@ -479,10 +462,8 @@ def focused_test(checkout: Path, node_id: str, *, timeout_s: float = 90) -> Test
             cmd=" ".join(cmd),
         )
     else:
-        status = (
-            "passed"
-            if proc.returncode == 0
-            else ("test_failures" if proc.returncode == 1 else "execution_error")
+        status = "passed" if proc.returncode == 0 else (
+            "test_failures" if proc.returncode == 1 else "execution_error"
         )
         result = TestResult(
             status=status,

@@ -38,22 +38,17 @@ def test_shared_code_selects_every_problem_family():
     assert select_task_ids_for_job(
         {"changed_files": ["fedot/core/data/data_split.py"]}, registry=registry
     ) == list_quality_task_ids(registry)
-    assert (
-        select_task_ids_for_job(
-            {"changed_files": ["fedot/core/data/data_split.py"]},
-            requested=(),
-            registry=registry,
-        )
-        == ()
-    )
+    assert select_task_ids_for_job(
+        {"changed_files": ["fedot/core/data/data_split.py"]},
+        requested=(),
+        registry=registry,
+    ) == ()
 
 
 def test_guarded_categorical_encoder_helper_routes_to_categorical_datasets():
     registry = load_quality_registry()
     job = {
-        "changed_files": [
-            "fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py"
-        ],
+        "changed_files": ["fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py"],
         "changed_symbols": ["OneHotEncodingImplementation._apply_one_hot_encoding"],
         "changed_code_tags": ["categorical"],
         "hypothesis": {
@@ -64,9 +59,7 @@ def test_guarded_categorical_encoder_helper_routes_to_categorical_datasets():
 
     selected = select_task_ids_for_job(job, registry=registry)
     expected = tuple(
-        dataset.task_id
-        for dataset in registry.datasets
-        if "categorical" in dataset.tags
+        dataset.task_id for dataset in registry.datasets if "categorical" in dataset.tags
     )
     assert selected == expected
     assert len(selected) == 11
@@ -92,9 +85,7 @@ def test_categorical_scope_stays_broad_if_code_or_hypothesis_is_ambiguous():
 
 
 def test_changed_code_tags_require_every_patch_edit_to_match_trait():
-    assert extract_change_tags(
-        ["if categorical_idx is not None:", "cat_features = raw"]
-    )
+    assert extract_change_tags(["if categorical_idx is not None:", "cat_features = raw"])
     assert extract_change_tags(["categorical_idx = idx", "return values"]) == []
 
 
@@ -116,9 +107,7 @@ def test_shared_and_unknown_changes_do_not_remove_non_categorical_datasets():
             "changed_code_tags": ["categorical"],
             "hypothesis": {"claim": "Preserve categorical features"},
         }
-        assert select_task_ids_for_job(job, registry=registry) == list_quality_task_ids(
-            registry
-        )
+        assert select_task_ids_for_job(job, registry=registry) == list_quality_task_ids(registry)
 
 
 def test_dedicated_encoder_general_methods_stay_broad():
@@ -126,38 +115,27 @@ def test_dedicated_encoder_general_methods_stay_broad():
     for symbols in (
         [],
         ["OneHotEncodingImplementation.transform"],
-        [
-            "OneHotEncodingImplementation._apply_one_hot_encoding",
-            "OneHotEncodingImplementation.transform",
-        ],
+        ["OneHotEncodingImplementation._apply_one_hot_encoding", "OneHotEncodingImplementation.transform"],
     ):
         job = {
-            "changed_files": [
-                "fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py"
-            ],
+            "changed_files": ["fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py"],
             "changed_symbols": symbols,
             "changed_code_tags": ["categorical"],
             "hypothesis": {"claim": "Preserve categorical features"},
         }
-        assert select_task_ids_for_job(job, registry=registry) == list_quality_task_ids(
-            registry
-        )
+        assert select_task_ids_for_job(job, registry=registry) == list_quality_task_ids(registry)
 
 
 def test_ast_error_prevents_categorical_narrowing():
     registry = load_quality_registry()
     job = {
-        "changed_files": [
-            "fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py"
-        ],
+        "changed_files": ["fedot/core/operations/evaluation/operation_implementations/data_operations/categorical_encoders.py"],
         "changed_symbols": ["OneHotEncodingImplementation._apply_one_hot_encoding"],
         "changed_code_tags": ["categorical"],
         "ast_errors": ["edit_not_found"],
         "hypothesis": {"claim": "Preserve categorical features"},
     }
-    assert select_task_ids_for_job(job, registry=registry) == list_quality_task_ids(
-        registry
-    )
+    assert select_task_ids_for_job(job, registry=registry) == list_quality_task_ids(registry)
 
 
 def test_regression_strategy_checks_regression_and_forecasting_datasets():
@@ -185,12 +163,7 @@ def test_ast_scope_covers_entire_edit_not_only_first_line(tmp_path):
     source.write_text(text, encoding="utf-8")
     symbols, errors = extract_changed_symbols(
         tmp_path,
-        [
-            {
-                "file_path": "encoder.py",
-                "old_code": "        return self.categorical_idx\n    def transform(self):\n",
-            }
-        ],
+        [{"file_path": "encoder.py", "old_code": "        return self.categorical_idx\n    def transform(self):\n"}],
     )
     assert symbols == ["Encoder"]
     assert errors == []
@@ -200,8 +173,7 @@ def test_module_level_edit_is_visible_as_unresolved_symbol(tmp_path):
     source = tmp_path / "encoder.py"
     source.write_text("categorical_default = None\n", encoding="utf-8")
     symbols, errors = extract_changed_symbols(
-        tmp_path,
-        [{"file_path": "encoder.py", "old_code": "categorical_default = None\n"}],
+        tmp_path, [{"file_path": "encoder.py", "old_code": "categorical_default = None\n"}],
     )
     assert symbols == []
     assert errors == ["encoder.py:edit_outside_symbol"]
@@ -217,13 +189,11 @@ def test_new_code_escaping_categorical_helper_prevents_narrowing(tmp_path):
     )
     symbols, errors = extract_changed_symbols(
         tmp_path,
-        [
-            {
-                "file_path": "encoder.py",
-                "old_code": "        return features[:, self.categorical_ids]\n",
-                "new_code": "        return features[:, self.categorical_ids]\ncategorical_default = True\n",
-            }
-        ],
+        [{
+            "file_path": "encoder.py",
+            "old_code": "        return features[:, self.categorical_ids]\n",
+            "new_code": "        return features[:, self.categorical_ids]\ncategorical_default = True\n",
+        }],
     )
     assert errors == ["encoder.py:new_edit_outside_symbol"]
 
@@ -245,23 +215,13 @@ def test_queue_preserves_guarded_encoder_helper_trait(tmp_path):
         encoding="utf-8",
     )
     candidate = PatchCandidate(
-        "guarded-encoder",
-        file_path=rel,
-        edits=[
-            PatchEdit(
-                rel,
-                "        return features[:, self.categorical_ids]\n",
-                "        return features[:, self.categorical_ids].astype(str)\n",
-            )
-        ],
+        "guarded-encoder", file_path=rel,
+        edits=[PatchEdit(rel, "        return features[:, self.categorical_ids]\n",
+                         "        return features[:, self.categorical_ids].astype(str)\n")],
     )
     path = enqueue_quality_job(
-        tmp_path,
-        candidate=candidate,
-        patch_text="encoder patch",
-        hint="",
-        priority="normal",
-        source_root=source,
+        tmp_path, candidate=candidate, patch_text="encoder patch",
+        hint="", priority="normal", source_root=source,
         hypothesis={"claim": "Preserve categorical features"},
     )
     job = json.loads(path.read_text(encoding="utf-8"))
@@ -319,9 +279,7 @@ def test_hypothesis_does_not_widen_task_specific_changed_code_scope():
         },
         registry=registry,
     ) == tuple(
-        dataset.task_id
-        for dataset in registry.datasets
-        if dataset.problem == "ts_forecasting"
+        dataset.task_id for dataset in registry.datasets if dataset.problem == "ts_forecasting"
     )
 
 
@@ -341,9 +299,7 @@ def test_autoregression_hypothesis_does_not_select_tabular_regression_tasks():
 
     assert scope["problem_families"] == ["ts_forecasting"]
     assert select_task_ids_for_job(job, registry=registry) == tuple(
-        dataset.task_id
-        for dataset in registry.datasets
-        if dataset.problem == "ts_forecasting"
+        dataset.task_id for dataset in registry.datasets if dataset.problem == "ts_forecasting"
     )
 
 
@@ -371,7 +327,8 @@ def test_model_implementation_paths_route_to_their_supported_task_families():
     for suffix, expected_families in cases.items():
         job = {
             "changed_files": [
-                "fedot/core/operations/evaluation/operation_implementations/" + suffix
+                "fedot/core/operations/evaluation/operation_implementations/"
+                + suffix
             ]
         }
         scope = analyze_quality_scope(job, registry)
@@ -547,9 +504,7 @@ def test_queue_keeps_shared_source_broad_despite_categorical_hypothesis(tmp_path
     assert job["changed_code_tags"] == ["categorical"]
     assert job["quality_scope"]["dataset_traits"] == []
     assert job["task_ids"] == expected
-    assert _job_quality_task_ids(
-        job, list_quality_task_ids(registry), registry
-    ) == tuple(expected)
+    assert _job_quality_task_ids(job, list_quality_task_ids(registry), registry) == tuple(expected)
 
 
 def test_quality_result_message_separates_no_gain_from_infrastructure_failure():

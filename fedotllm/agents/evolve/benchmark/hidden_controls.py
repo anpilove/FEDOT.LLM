@@ -33,11 +33,7 @@ from fedotllm.agents.evolve.execution.checkout import (
 from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.types import (
-    EvolveRunPolicy,
-    PatchCandidate,
-    PatchEdit,
-    MatchSite,
-    SnippetResult,
+    EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite, SnippetResult,
 )
 
 
@@ -55,9 +51,7 @@ class HiddenControl:
 
 
 class FileShortlist(BaseModel):
-    selected_indices: list[int] = Field(
-        default_factory=list, min_length=1, max_length=3
-    )
+    selected_indices: list[int] = Field(default_factory=list, min_length=1, max_length=3)
     rationale: str = ""
 
 
@@ -461,21 +455,15 @@ class ControllerLeadSelection(FileSelection):
 
 
 def _public_lead(
-    source: Path,
-    calls: _Calls,
-    contract: str,
-    observed: SnippetResult,
+    source: Path, calls: _Calls, contract: str, observed: SnippetResult,
     catalog: tuple[str, ...],
 ) -> MatchSite:
     """The same localization protocol for healthy and mutated checkouts."""
-    evidence = json.dumps(
-        {
-            "status": observed.status,
-            "stdout_tail": observed.stdout[-2_000:],
-            "stderr_tail": observed.stderr[-4_000:],
-        },
-        ensure_ascii=False,
-    )
+    evidence = json.dumps({
+        "status": observed.status,
+        "stdout_tail": observed.stdout[-2_000:],
+        "stderr_tail": observed.stderr[-4_000:],
+    }, ensure_ascii=False)
     context = (
         f"Investigate whether this public contract is satisfied:\n{contract}\n"
         f"Observed execution (not proof of a defect):\n{evidence}\n"
@@ -483,37 +471,26 @@ def _public_lead(
         "Do not assume a repair is necessary. The verifier will decide.\n"
     )
     shortlist = calls.create(
-        context
-        + "Choose up to three zero-based catalog indices.\n"
-        + _architecture_contexts(source, catalog),
-        FileShortlist,
-        stage="hidden_file_localization",
-        metadata={},
+        context + "Choose up to three zero-based catalog indices.\n" + _architecture_contexts(source, catalog),
+        FileShortlist, stage="hidden_file_localization", metadata={},
     )
-    indices = list(
-        dict.fromkeys(
-            index for index in shortlist.selected_indices if 0 <= index < len(catalog)
-        )
-    )
+    indices = list(dict.fromkeys(
+        index for index in shortlist.selected_indices if 0 <= index < len(catalog)
+    ))
     if not indices:
         raise ValueError("localizer returned no valid catalog entries")
     selected = calls.create(
-        context
-        + "\nInspected source:\n"
+        context + "\nInspected source:\n"
         + inspect_shortlist(source, catalog, indices)
         + "\nChoose an original catalog index and an exact source line inside "
         "the relevant class/function. Do not propose a patch.\n"
         + _architecture_contexts(source, catalog),
-        ControllerLeadSelection,
-        stage="hidden_file_navigation",
-        metadata={},
+        ControllerLeadSelection, stage="hidden_file_navigation", metadata={},
     )
     if not 0 <= selected.selected_index < len(catalog):
         raise ValueError("localizer returned an invalid catalog index")
     return MatchSite(
-        "execution",
-        catalog[selected.selected_index],
-        selected.line,
+        "execution", catalog[selected.selected_index], selected.line,
         why=f"Check the public contract; it may already hold: {contract}",
         evidence=(f"Observed public execution: {evidence}",),
         mechanism=selected.mechanism,
@@ -526,22 +503,14 @@ def _accepted_decisions(workspace: Path) -> list[dict]:
     path = workspace / "journal.jsonl"
     if not path.is_file():
         raise ValueError("main controller did not persist a decision journal")
-    rows = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     accepted = []
     for row in rows:
         # DEV keeps are provisional. FINAL may reject or ablate that patch.
         # Secondary correctness/maintenance/signal tracks end before FINAL.
         secondary = row.get("event") == "decision" and any(
-            row.get(flag)
-            for flag in (
-                "correctness_keep",
-                "maintenance_keep",
-                "metric_signal_keep",
-                "metric_goal_keep",
+            row.get(flag) for flag in (
+                "correctness_keep", "maintenance_keep", "metric_signal_keep", "metric_goal_keep"
             )
         )
         final = row.get("event") == "final" and row.get("keep_final")
@@ -553,22 +522,14 @@ def _accepted_decisions(workspace: Path) -> list[dict]:
 
 
 def _independent_assessment(
-    source: Path,
-    workspace: Path,
-    decisions: list[dict],
-    *,
-    probe: str,
-    healthy_observation: str,
-    healthy_case: bool,
+    source: Path, workspace: Path, decisions: list[dict], *,
+    probe: str, healthy_observation: str, healthy_case: bool,
 ) -> list[dict]:
     """Oracle results cannot alter the already recorded controller decisions."""
     assessed = []
     for index, decision in enumerate(decisions):
         tree = create_experiment_checkout(
-            source,
-            workspace,
-            run_id="independent",
-            candidate_id=f"patch-{index}",
+            source, workspace, run_id="independent", candidate_id=f"patch-{index}",
         )
         row = {
             "candidate": decision["candidate"],
@@ -591,12 +552,10 @@ def _independent_assessment(
                 row.update(
                     execution_ok=evaluable,
                     patched_status=checked.status,
-                    confirmed_fix=evaluable
-                    and not healthy_case
+                    confirmed_fix=evaluable and not healthy_case
                     and observation == healthy_observation,
                     false_accept=(healthy_case or observation != healthy_observation)
-                    if evaluable
-                    else None,
+                    if evaluable else None,
                     reason="" if evaluable else "independent probe unavailable",
                 )
         finally:
@@ -626,9 +585,7 @@ def run_hidden_control_benchmark(
     from fedotllm.agents.evolve.controller.campaign import run_once
 
     if architecture != "staged":
-        raise ValueError(
-            "main-controller hidden controls support only staged architecture"
-        )
+        raise ValueError("main-controller hidden controls support only staged architecture")
     source, workspace = source.resolve(), workspace.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     before = source_fingerprint(source)
@@ -641,25 +598,16 @@ def run_hidden_control_benchmark(
         healthy = run_fedot_snippet(source, control.probe)
         reference = _observation(healthy)
         for healthy_case in (False, True):
-            case_id = (
-                f"{'healthy' if healthy_case else 'mutation'}-{control.control_id}"
-            )
+            case_id = f"{'healthy' if healthy_case else 'mutation'}-{control.control_id}"
             case_workspace = workspace / run_id / case_id
             tree = create_experiment_checkout(
-                source,
-                workspace,
-                run_id=run_id,
-                candidate_id=case_id,
+                source, workspace, run_id=run_id, candidate_id=case_id,
             )
             row = {
-                "control_id": case_id,
-                "component": control.component,
-                "controller_accepted": False,
-                "accepted": False,
-                "confirmed_fix": False,
-                "execution_ok": False,
-                "status": "not_evaluated",
-                "assessments": [],
+                "control_id": case_id, "component": control.component,
+                "controller_accepted": False, "accepted": False,
+                "confirmed_fix": False, "execution_ok": False,
+                "status": "not_evaluated", "assessments": [],
             }
             try:
                 if reference is None:
@@ -667,13 +615,7 @@ def run_hidden_control_benchmark(
                 if not healthy_case:
                     mutation = PatchCandidate(
                         f"private-{control.control_id}",
-                        edits=[
-                            PatchEdit(
-                                control.file_path,
-                                control.old_code,
-                                control.defective_code,
-                            )
-                        ],
+                        edits=[PatchEdit(control.file_path, control.old_code, control.defective_code)],
                     )
                     if not apply_patch(tree, mutation):
                         raise ValueError("private mutation could not be applied")
@@ -682,36 +624,24 @@ def run_hidden_control_benchmark(
                     raise ValueError(f"fixture probe unavailable: {observed.status}")
                 if not healthy_case and _observation(observed) == reference:
                     raise ValueError("private mutation does not reproduce the defect")
-                lead = _public_lead(
-                    tree, calls, control.public_contract, observed, catalog
-                )
+                lead = _public_lead(tree, calls, control.public_contract, observed, catalog)
                 decision = run_once(
-                    checkout=tree,
-                    workspace=case_workspace,
+                    checkout=tree, workspace=case_workspace,
                     findings_path=case_workspace / "findings.jsonl",
-                    inference=inference,
-                    verifier_inference=inference,
-                    resume_lead=lead,
-                    max_leads=1,
-                    policy=EvolveRunPolicy(
-                        verify_manifest=False, fedot_quality_jobs=False
-                    ),
+                    inference=inference, verifier_inference=inference,
+                    resume_lead=lead, max_leads=1,
+                    policy=EvolveRunPolicy(verify_manifest=False, fedot_quality_jobs=False),
                 )
                 accepted = _accepted_decisions(case_workspace)
                 row.update(
-                    controller_accepted=bool(accepted),
-                    accepted=bool(accepted),
+                    controller_accepted=bool(accepted), accepted=bool(accepted),
                     controller_reason=decision.reason,
                     controller_infrastructure_error=decision.infrastructure_error,
                 )
                 # Nothing from this point is sent back to run_once/inference.
                 assessments = _independent_assessment(
-                    tree,
-                    case_workspace,
-                    accepted,
-                    probe=control.probe,
-                    healthy_observation=reference,
-                    healthy_case=healthy_case,
+                    tree, case_workspace, accepted, probe=control.probe,
+                    healthy_observation=reference, healthy_case=healthy_case,
                 )
                 execution_ok = (
                     not decision.infrastructure_error
@@ -727,8 +657,7 @@ def run_hidden_control_benchmark(
             except Exception as exc:
                 failure = classify_model_failure(exc)
                 row.update(
-                    status="evaluation_error",
-                    reason=str(failure)[:1000],
+                    status="evaluation_error", reason=str(failure)[:1000],
                     infrastructure=failure.infrastructure,
                 )
             finally:
@@ -743,47 +672,34 @@ def run_hidden_control_benchmark(
     losses = sum(not row["execution_ok"] for row in [*rows, *healthy_rows])
     unchanged = source_fingerprint(source) == before
     target_met = bool(controls) and (
-        confirmed == len(controls)
-        and healthy_rejections == len(controls)
-        and false_accepts == 0
-        and losses == 0
-        and unchanged
+        confirmed == len(controls) and healthy_rejections == len(controls)
+        and false_accepts == 0 and losses == 0 and unchanged
     )
     payload = {
-        "schema_version": 2,
-        "component": component_name,
+        "schema_version": 2, "component": component_name,
         "architecture": "staged",
         "validation_scope": "production_controller_with_public_contract_localization",
         "oracle_used_for_acceptance": False,
         "manifest_check_disabled_for_mutated_fixtures": True,
         "controls_are_regression_cases": True,
-        "ok": target_met,
-        "execution_ok": losses == 0 and unchanged,
-        "quality_target_met": target_met,
-        "source_unchanged": unchanged,
+        "ok": target_met, "execution_ok": losses == 0 and unchanged,
+        "quality_target_met": target_met, "source_unchanged": unchanged,
         "metrics": {
             "autonomous_confirmed_fixes": confirmed,
             "false_accepts": false_accepts,
-            "unassessed_accepts": sum(
-                item["false_accept"] is None for item in assessed
-            ),
+            "unassessed_accepts": sum(item["false_accept"] is None for item in assessed),
             "healthy_rejections": healthy_rejections,
             "evaluation_losses": losses,
             "infrastructure_failures": sum(
-                bool(
-                    row.get("infrastructure")
-                    or row.get("controller_infrastructure_error")
-                )
+                bool(row.get("infrastructure") or row.get("controller_infrastructure_error"))
                 for row in [*rows, *healthy_rows]
             ),
             "provider_requests": max(0, _usage_requests(inference) - requests_before),
         },
-        "cases": rows,
-        "healthy_cases": healthy_rows,
+        "cases": rows, "healthy_cases": healthy_rows,
     }
     (workspace / f"hidden_controls_{architecture}.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
     )
     return payload
 

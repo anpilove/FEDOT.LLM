@@ -132,10 +132,7 @@ def _run(
     spec = load_task(task_id)
     limit = timeout_s if timeout_s is not None else spec.timeout_s
     safe = task_id.replace("/", "_").replace(">", "_")
-    out = (
-        Path(os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent"))
-        / f"{safe}-{uuid.uuid4().hex[:8]}.json"
-    )
+    out = Path(os.environ.get("EVOLVE_AGENT_TMP", "/tmp/evolve-agent")) / f"{safe}-{uuid.uuid4().hex[:8]}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     root = str(repo_root())
     env = clean_subprocess_env(checkout, repo_root=repo_root())
@@ -167,9 +164,7 @@ def _run(
         )
     cmd_s = " ".join(cmd)
     if env_hash is None:
-        env_hash = _env_hash(
-            checkout, task_id, split=split, task_override=task_override
-        )
+        env_hash = _env_hash(checkout, task_id, split=split, task_override=task_override)
     try:
         proc = run_worker(cmd, cwd=root, env=env, timeout=limit)
         if proc.timed_out:
@@ -248,7 +243,9 @@ def _env_hash(
     digest.update(json.dumps(thread_environment(), sort_keys=True).encode())
     digest.update(split.encode())
     digest.update(score_protocol_fingerprint().encode())
-    digest.update(json.dumps(task_override or {}, sort_keys=True, default=str).encode())
+    digest.update(
+        json.dumps(task_override or {}, sort_keys=True, default=str).encode()
+    )
     lock = repo_root() / "uv.lock"
     if lock.is_file():
         digest.update(lock.read_bytes())

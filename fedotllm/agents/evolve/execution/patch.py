@@ -11,7 +11,6 @@ from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit
 
 _GUTTER = re.compile(r"^\s*\d+\|")
 
-
 def strip_gutter(text: str) -> str:
     """Drop `  123|` prefixes if the model copied numbered context."""
 
@@ -48,13 +47,12 @@ def hunk_list(candidate: PatchCandidate) -> list[tuple[str, str]]:
 def edit_list(candidate: PatchCandidate) -> list[PatchEdit]:
     if candidate.edits:
         return [
-            PatchEdit(
-                edit.file_path, strip_gutter(edit.old_code), strip_gutter(edit.new_code)
-            )
+            PatchEdit(edit.file_path, strip_gutter(edit.old_code), strip_gutter(edit.new_code))
             for edit in candidate.edits
         ]
     return [
-        PatchEdit(candidate.file_path, old, new) for old, new in hunk_list(candidate)
+        PatchEdit(candidate.file_path, old, new)
+        for old, new in hunk_list(candidate)
     ]
 
 
@@ -133,9 +131,7 @@ def apply_patch(
                     )
                 start, end, file_indent = located
                 model_indent = old.strip("\n").splitlines()[0]
-                model_indent = model_indent[
-                    : len(model_indent) - len(model_indent.lstrip())
-                ]
+                model_indent = model_indent[: len(model_indent) - len(model_indent.lstrip())]
                 body = _reindent(new.strip("\n"), model_indent, file_indent)
                 lines = patched.splitlines()
                 patched = "\n".join(lines[:start] + body.splitlines() + lines[end:])
@@ -202,10 +198,7 @@ def _replace_symbol_text(text: str, old_code: str, new_code: str) -> str | None:
     lines = text.splitlines(keepends=True)
     start = node.lineno - 1
     indent = lines[start][: len(lines[start]) - len(lines[start].lstrip())]
-    body = (
-        textwrap.indent(textwrap.dedent(new_code.strip("\n")), indent).rstrip("\n")
-        + "\n"
-    )
+    body = textwrap.indent(textwrap.dedent(new_code.strip("\n")), indent).rstrip("\n") + "\n"
     patched = "".join(lines[:start]) + body + "".join(lines[node.end_lineno :])
     try:
         ast.parse(patched)
@@ -215,9 +208,7 @@ def _replace_symbol_text(text: str, old_code: str, new_code: str) -> str | None:
 
 
 def _def_name(code: str) -> str | None:
-    match = re.search(
-        r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_]\w*)", code, re.MULTILINE
-    )
+    match = re.search(r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_]\w*)", code, re.MULTILINE)
     return match.group(1) if match else None
 
 

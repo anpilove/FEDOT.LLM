@@ -22,9 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fedotllm.agents.evolve.execution.checkout import source_commit, source_fingerprint
-from fedotllm.agents.evolve.controller.release import (
-    controller_version as _controller_version,
-)
+from fedotllm.agents.evolve.controller.release import controller_version as _controller_version
 from fedotllm.agents.evolve.execution.guard import repo_root
 from fedotllm.agents.evolve.execution.process import (
     clean_subprocess_env,
@@ -34,9 +32,7 @@ from fedotllm.agents.evolve.execution.process import (
 from fedotllm.agents.evolve.storage.journal import append_journal
 from fedotllm.agents.evolve.storage.quality_events import read_quality_events
 from fedotllm.agents.evolve.execution.storage_guard import (
-    require_storage,
-    storage_failure_text,
-    terminal_service_record,
+    require_storage, storage_failure_text, terminal_service_record,
 )
 
 
@@ -135,14 +131,11 @@ def _write_durable(path: Path, payload: dict):
 
 def _service_event(workspace: Path, event: str, **fields):
     """Append one durable lifecycle transition without replacing old evidence."""
-    append_journal(
-        workspace / "logs" / "service_events.jsonl",
-        {
-            "event": event,
-            "workspace": str(workspace),
-            **fields,
-        },
-    )
+    append_journal(workspace / "logs" / "service_events.jsonl", {
+        "event": event,
+        "workspace": str(workspace),
+        **fields,
+    })
 
 
 def _validate_ledger(ledger, config):
@@ -225,7 +218,8 @@ def _progress(workspace: Path, *, child_running: bool = False):
     terminal = sum(all(row[0] for row in revisions) for revisions in groups.values())
     measured = sum(all(row[1] for row in revisions) for revisions in groups.values())
     skipped = sum(
-        all(row[2] == "skipped" for row in revisions) for revisions in groups.values()
+        all(row[2] == "skipped" for row in revisions)
+        for revisions in groups.values()
     )
     finishes = {}
     for row in rows:
@@ -257,9 +251,7 @@ def _command(source, workspace, config, n_jobs, cpu_quota, stock_cache, kind):
     command = [
         fedot_python(source),
         "-m",
-        "fedotllm.agents.evolve.controller"
-        if kind == "quality-drain"
-        else "fedotllm.agents.evolve",
+        "fedotllm.agents.evolve.controller" if kind == "quality-drain" else "fedotllm.agents.evolve",
         "drain" if kind == "quality-drain" else kind,
         "--fedot",
         str(source),
@@ -433,36 +425,19 @@ def _serve_locked(source, workspace, config, n_jobs, cpu_quota, stock_cache):
                     "frozen service source/configuration mismatch; use a fresh workspace"
                 )
             launch_log = logs / "service-launch.log"
-            final_record = (
-                terminal_service_record(launch_log) if launch_log.is_file() else None
-            )
-            storage_record = (
-                final_record
-                if (
-                    final_record
-                    and final_record.get("child_running") is False
-                    and final_record.get("active_child") is None
-                    and (
-                        final_record.get("state") == "storage_error"
-                        or (
-                            final_record.get("state") == "artifact_error"
-                            and storage_failure_text(
-                                str(final_record.get("error") or "")
-                            )
-                        )
-                    )
-                )
-                else None
-            )
+            final_record = terminal_service_record(launch_log) if launch_log.is_file() else None
+            storage_record = final_record if (
+                final_record and final_record.get("child_running") is False
+                and final_record.get("active_child") is None
+                and (final_record.get("state") == "storage_error" or (
+                    final_record.get("state") == "artifact_error"
+                    and storage_failure_text(str(final_record.get("error") or ""))))
+            ) else None
             if not state_path.exists() and storage_record is None:
                 raise ValueError(
                     "missing durable service ledger; refusing to reset hunt/restart budget"
                 )
-            saved_state = (
-                dict(storage_record)
-                if storage_record is not None
-                else _read_object(state_path)
-            )
+            saved_state = dict(storage_record) if storage_record is not None else _read_object(state_path)
             if storage_record is not None:
                 saved_state["state"] = "storage_error"
             _validate_ledger(saved_state, config)
@@ -639,14 +614,9 @@ def _serve_locked(source, workspace, config, n_jobs, cpu_quota, stock_cache):
             )
             state["active_child"] = None
             publish()
-            if outcome.returncode == 75 or storage_failure_text(
-                outcome.stdout + outcome.stderr
-            ):
-                state.update(
-                    state="storage_error",
-                    completion="incomplete",
-                    error=f"storage failure in {log_path}; no automatic retry",
-                )
+            if outcome.returncode == 75 or storage_failure_text(outcome.stdout + outcome.stderr):
+                state.update(state="storage_error", completion="incomplete",
+                             error=f"storage failure in {log_path}; no automatic retry")
                 break
             if deadline - time.monotonic() <= 0:
                 state["state"] = "duration_exhausted"
@@ -692,9 +662,7 @@ def _serve_locked(source, workspace, config, n_jobs, cpu_quota, stock_cache):
     except (OSError, RuntimeError) as exc:
         failed_child = dict(state.get("active_child") or {}) or None
         state.update(
-            state="storage_error"
-            if isinstance(exc, OSError) and exc.errno in {28, 122}
-            else "artifact_error",
+            state="storage_error" if isinstance(exc, OSError) and exc.errno in {28, 122} else "artifact_error",
             completion="incomplete",
             error=f"{type(exc).__name__}: {exc}",
             child_running=False,

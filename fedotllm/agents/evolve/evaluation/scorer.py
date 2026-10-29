@@ -13,9 +13,7 @@ from typing import Iterator
 import numpy as np
 
 from fedotllm.agents.evolve.evaluation.tasks import load_task, workload_on_dataset
-from fedotllm.agents.evolve.evaluation.independent_data import (
-    PROTOCOL as INDEPENDENT_DATA_PROTOCOL,
-)
+from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL as INDEPENDENT_DATA_PROTOCOL
 from fedotllm.agents.evolve.types import TaskSpec
 
 
@@ -48,9 +46,7 @@ def _metric_arrays(target, prediction) -> tuple[np.ndarray, np.ndarray]:
     left = np.asarray(target, dtype=float).ravel()
     right = np.asarray(prediction, dtype=float).ravel()
     if left.size == 0 or left.size != right.size:
-        raise ValueError(
-            "metric requires nonempty, equal-length targets and predictions"
-        )
+        raise ValueError("metric requires nonempty, equal-length targets and predictions")
     if not np.isfinite(left).all() or not np.isfinite(right).all():
         raise ValueError("metric requires finite targets and predictions")
     return left, right
@@ -81,9 +77,7 @@ def load_scoring_split() -> Split:
 def _cases_root() -> Path:
     import fedot
 
-    root = (
-        Path(fedot.__file__).resolve().parents[1] / "examples" / "real_cases" / "data"
-    )
+    root = Path(fedot.__file__).resolve().parents[1] / "examples" / "real_cases" / "data"
     if root.is_dir():
         return root
     env = os.environ.get("FEDOTLLM_REPO_PATH")
@@ -134,9 +128,7 @@ def _table_xy(frame, spec: TaskSpec) -> tuple[np.ndarray, np.ndarray]:
 
     drop = set(spec.drop) | {spec.target}
     feat_cols = [col for col in frame.columns if col not in drop]
-    features = (
-        frame[feat_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-    )
+    features = frame[feat_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     raw = frame[spec.target]
     if spec.problem == "classification" and raw.dtype == object:
         labels = (raw.astype(str).str.lower() == "yes").astype(int).to_numpy()
@@ -152,11 +144,7 @@ def _tabular_input(features: np.ndarray, target: np.ndarray, *, problem: str):
     from fedot.core.repository.dataset_types import DataTypesEnum
     from fedot.core.repository.tasks import Task, TaskTypesEnum
 
-    task_type = (
-        TaskTypesEnum.regression
-        if problem == "regression"
-        else TaskTypesEnum.classification
-    )
+    task_type = TaskTypesEnum.regression if problem == "regression" else TaskTypesEnum.classification
     y = np.asarray(target)
     if y.ndim == 1:
         y = y.reshape(-1, 1)
@@ -187,11 +175,7 @@ def _text_input(features: np.ndarray, target: np.ndarray):
 def _split_indices(target: np.ndarray, *, test_size: float, seed: int, problem: str):
     from sklearn.model_selection import train_test_split
 
-    stratify = (
-        target
-        if problem in {"classification", "text"} and len(np.unique(target)) > 1
-        else None
-    )
+    stratify = target if problem in {"classification", "text"} and len(np.unique(target)) > 1 else None
     indices = np.arange(len(target))
     return train_test_split(
         indices,
@@ -251,9 +235,7 @@ def _separate_test_split(features, target, *, seed: int, problem: str, split_nam
     if split_name not in {"dev", "final"}:
         raise ValueError(f"separate test supports only DEV/FINAL, got {split_name!r}")
 
-    dev_idx, final_idx = _split_indices(
-        target, test_size=0.5, seed=seed, problem=problem
-    )
+    dev_idx, final_idx = _split_indices(target, test_size=0.5, seed=seed, problem=problem)
     idx = dev_idx if split_name == "dev" else final_idx
     return features[idx], target[idx]
 
@@ -299,11 +281,7 @@ def _make_split(
         x_train, y_train, x_test, y_test = _single_csv_split(
             texts, labels, seed=split_seed, problem="text", split_name=split_name
         )
-        return (
-            _text_input(x_train, y_train),
-            _text_input(x_test, y_test),
-            int(len(y_train)),
-        )
+        return _text_input(x_train, y_train), _text_input(x_test, y_test), int(len(y_train))
 
     train_df = pd.read_csv(_case_csv(spec.train_file))
     x_train, y_train = _table_xy(train_df, spec)
@@ -343,10 +321,7 @@ def _make_split(
 def _make_independent_split(spec: TaskSpec, split_name: str, *, fold=None):
     import pandas as pd
     from fedotllm.agents.evolve.evaluation.independent_data import (
-        _digest,
-        evidence,
-        table_split,
-        ts_indices,
+        _digest, evidence, table_split, ts_indices,
     )
 
     if spec.problem == "ts":
@@ -356,38 +331,24 @@ def _make_independent_split(spec: TaskSpec, split_name: str, *, fold=None):
         from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 
         frame = pd.read_csv(_case_csv(spec.train_file))
-        series = np.asarray(
-            pd.to_numeric(frame[spec.target], errors="coerce"), dtype=float
-        )
+        series = np.asarray(pd.to_numeric(frame[spec.target], errors="coerce"), dtype=float)
         series = series[np.isfinite(series)]
         if spec.history_size:
-            series = series[-spec.history_size :]
+            series = series[-spec.history_size:]
         horizon = spec.forecast_horizon or 12
-        train_ids, test_ids = ts_indices(
-            len(series), horizon, split=split_name, fold=fold
-        )
-        selected = series[: int(test_ids[-1]) + 1]
+        train_ids, test_ids = ts_indices(len(series), horizon, split=split_name, fold=fold)
+        selected = series[:int(test_ids[-1]) + 1]
         data = InputData(
-            idx=np.arange(len(selected)),
-            features=selected,
-            target=selected,
-            task=Task(
-                TaskTypesEnum.ts_forecasting,
-                TsForecastingParams(forecast_length=horizon),
-            ),
+            idx=np.arange(len(selected)), features=selected, target=selected,
+            task=Task(TaskTypesEnum.ts_forecasting, TsForecastingParams(forecast_length=horizon)),
             data_type=DataTypesEnum.ts,
         )
         train, test = train_test_data_setup(data)
         _assert_frozen_ts_boundary(selected, horizon, train, test)
         metadata = evidence(
-            data_hash=_digest(series.tolist()),
-            train=train_ids,
-            namespace="train",
-            validation=test_ids,
-            core=np.arange(len(series) - 3 * horizon),
-            split=split_name,
-            fold=fold,
-            kind="rolling_origin",
+            data_hash=_digest(series.tolist()), train=train_ids, namespace="train",
+            validation=test_ids, core=np.arange(len(series) - 3 * horizon),
+            split=split_name, fold=fold, kind="rolling_origin",
         )
         return train, test, len(train_ids), metadata
 
@@ -406,12 +367,7 @@ def _make_independent_split(spec: TaskSpec, split_name: str, *, fold=None):
         if spec.test_file:
             external = _table_xy(pd.read_csv(_case_csv(spec.test_file)), spec)
     x_train, y_train, x_test, y_test, metadata = table_split(
-        features,
-        target,
-        problem=spec.problem,
-        split=split_name,
-        fold=fold,
-        external=external,
+        features, target, problem=spec.problem, split=split_name, fold=fold, external=external,
     )
     if spec.problem == "text":
         train, test = _text_input(x_train, y_train), _text_input(x_test, y_test)
@@ -436,20 +392,14 @@ def _ts_split(spec: TaskSpec, *, split_name: str = "dev"):
     if spec.history_size and series.size > spec.history_size:
         series = series[-spec.history_size :]
     horizon = spec.forecast_horizon or 12
-    task = Task(
-        TaskTypesEnum.ts_forecasting, TsForecastingParams(forecast_length=horizon)
-    )
+    task = Task(TaskTypesEnum.ts_forecasting, TsForecastingParams(forecast_length=horizon))
     if split_name == "shadow":
         if series.size <= 3 * horizon:
-            raise ValueError(
-                "time series is too short for SHADOW, DEV and FINAL windows"
-            )
+            raise ValueError("time series is too short for SHADOW, DEV and FINAL windows")
         selected = series[: -2 * horizon]
     elif split_name == "dev":
         if series.size <= 2 * horizon:
-            raise ValueError(
-                "time series is too short for disjoint DEV and FINAL windows"
-            )
+            raise ValueError("time series is too short for disjoint DEV and FINAL windows")
         selected = series[:-horizon]
     else:
         selected = series
@@ -489,25 +439,18 @@ def _assert_frozen_ts_boundary(selected, horizon: int, train, test) -> None:
         )
 
 
-def _predict_score(
-    spec: TaskSpec, pipeline, test, observations: dict | None = None
-) -> float:
+def _predict_score(spec: TaskSpec, pipeline, test, observations: dict | None = None) -> float:
     if spec.metric == "holdout_roc_auc":
         pred = pipeline.predict(test, output_mode="probs")
         arr = np.asarray(pred.predict)
         scores = arr[:, -1] if arr.ndim == 2 else arr.ravel()
         if observations is not None:
-            observations.update(
-                target=np.asarray(test.target).ravel().tolist(),
-                prediction=scores.tolist(),
-            )
+            observations.update(target=np.asarray(test.target).ravel().tolist(), prediction=scores.tolist())
         return float(roc_auc_score(np.asarray(test.target), scores))
     pred = pipeline.predict(test)
     if observations is not None:
-        observations.update(
-            target=np.asarray(test.target).ravel().tolist(),
-            prediction=np.asarray(pred.predict).ravel().tolist(),
-        )
+        observations.update(target=np.asarray(test.target).ravel().tolist(),
+                            prediction=np.asarray(pred.predict).ravel().tolist())
     return float(rmse_score(np.asarray(test.target), np.asarray(pred.predict)))
 
 
@@ -548,9 +491,7 @@ def score_task(
                 train, test, n_train = _make_split(spec, split_name)
             elif protocol == INDEPENDENT_DATA_PROTOCOL:
                 train, test, n_train, data_evidence = _make_independent_split(
-                    spec,
-                    split_name,
-                    fold=override.get("resample_fold"),
+                    spec, split_name, fold=override.get("resample_fold"),
                 )
             else:
                 raise ValueError(f"unknown evaluation protocol: {protocol}")
@@ -571,13 +512,9 @@ def score_task(
                         else builder.add_node(node)
                     )
             elif spec.kind == "branch":
-                builder = builder.add_branch(spec.left, spec.right).join_branches(
-                    spec.join
-                )
+                builder = builder.add_branch(spec.left, spec.right).join_branches(spec.join)
             elif spec.kind == "branch_then":
-                builder = builder.add_branch(spec.left, spec.right).join_branches(
-                    spec.join
-                )
+                builder = builder.add_branch(spec.left, spec.right).join_branches(spec.join)
                 for node in spec.tail:
                     builder = builder.add_node(node)
             else:
@@ -594,8 +531,7 @@ def score_task(
             pipeline.fit(train)
             automl = (
                 _predict_score(spec, pipeline, test, observations=metric_observations)
-                if data_evidence
-                else _predict_score(spec, pipeline, test)
+                if data_evidence else _predict_score(spec, pipeline, test)
             )
             detail = (
                 f"ok split={split_name} split_seed={FROZEN_SPLIT_SEED} "

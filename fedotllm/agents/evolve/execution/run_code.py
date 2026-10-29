@@ -11,16 +11,9 @@ import time
 from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import repo_root
-from fedotllm.agents.evolve.execution.process import (
-    clean_subprocess_env,
-    fedot_python,
-    run_worker,
-)
+from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python, run_worker
 from fedotllm.agents.evolve.storage.journal import append_journal
-from fedotllm.agents.evolve.execution.snippet_policy import (
-    redact_snippet_output,
-    snippet_blocked,
-)
+from fedotllm.agents.evolve.execution.snippet_policy import redact_snippet_output, snippet_blocked
 from fedotllm.agents.evolve.types import SnippetResult
 
 MAX_STEPS = int(os.environ.get("FEDOTLLM_EXPLORE_STEPS", "6"))
@@ -37,19 +30,13 @@ def _echo_last_expression(code: str) -> str:
     if not tree.body or not isinstance(tree.body[-1], ast.Expr):
         return code
     last = tree.body[-1]
-    if (
-        isinstance(last.value, ast.Call)
-        and isinstance(last.value.func, ast.Name)
-        and last.value.func.id == "print"
-    ):
+    if isinstance(last.value, ast.Call) and isinstance(last.value.func, ast.Name) and last.value.func.id == "print":
         return code
     lines = code.splitlines()
     expr = "\n".join(lines[last.lineno - 1 : last.end_lineno])
     if expr[: len(expr) - len(expr.lstrip())]:
         return code
-    return "\n".join(
-        lines[: last.lineno - 1] + [f"print({expr.strip()})"] + lines[last.end_lineno :]
-    )
+    return "\n".join(lines[: last.lineno - 1] + [f"print({expr.strip()})"] + lines[last.end_lineno :])
 
 
 def _append_trace(path: Path | None, result: SnippetResult) -> None:
@@ -100,9 +87,7 @@ def run_fedot_snippet(
     try:
         python = fedot_python(checkout)
     except (FileNotFoundError, OSError) as exc:
-        result = SnippetResult(
-            status="unavailable", code=blob, detail=f"<unavailable: {exc}>"
-        )
+        result = SnippetResult(status="unavailable", code=blob, detail=f"<unavailable: {exc}>")
         _append_trace(trace_path, result)
         return result
 
@@ -125,16 +110,8 @@ def run_fedot_snippet(
             target_file = (checkout / trace_target["file_path"]).resolve()
             if not target_file.is_relative_to(checkout / "fedot"):
                 raise ValueError("trace target must belong to this FEDOT checkout")
-            cmd.extend(
-                [
-                    "--target-file",
-                    str(target_file),
-                    "--target-symbol",
-                    trace_target["symbol"],
-                    "--target-result",
-                    str(target_result),
-                ]
-            )
+            cmd.extend(["--target-file", str(target_file), "--target-symbol", trace_target["symbol"],
+                        "--target-result", str(target_result)])
         try:
             outcome = run_worker(
                 cmd,
@@ -160,9 +137,7 @@ def run_fedot_snippet(
                     stderr=redact_snippet_output(outcome.stderr[-MAX_OUTPUT_CHARS:]),
                     exit_code=outcome.returncode,
                     duration_s=time.perf_counter() - started,
-                    detail=""
-                    if outcome.returncode == 0
-                    else f"process exited {outcome.returncode}",
+                    detail="" if outcome.returncode == 0 else f"process exited {outcome.returncode}",
                 )
         except OSError as exc:
             result = SnippetResult(
@@ -172,8 +147,6 @@ def run_fedot_snippet(
                 detail=f"<could not run: {exc}>",
             )
         if trace_target and target_result.exists():
-            result.target_reached = json.loads(target_result.read_text())[
-                "target_reached"
-            ]
+            result.target_reached = json.loads(target_result.read_text())["target_reached"]
     _append_trace(trace_path, result)
     return result

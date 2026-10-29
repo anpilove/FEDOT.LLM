@@ -761,9 +761,7 @@ def _first_pick_rejection(
     """
 
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
-    if is_defaults and not _default_pick_matches_executed_operation(
-        parsed, picked, checkout
-    ):
+    if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
         return (
             "unexecuted_operation_default",
             "operation_id must name an operation from the runtime evidence and "
@@ -1048,9 +1046,7 @@ def _llm_pick(
             )
             preferred = [catalog[index] for index in indices]
             preferred_ids = {id(item) for item in preferred}
-            catalog = preferred + [
-                item for item in catalog if id(item) not in preferred_ids
-            ]
+            catalog = preferred + [item for item in catalog if id(item) not in preferred_ids]
             catalog_plan = {
                 "presented": True,
                 "selected_indices": indices,
@@ -1090,7 +1086,7 @@ def _llm_pick(
     per_file_steps = research_steps + 1
     excluded_exact = set(excluded_sites or ())
     excluded_semantic = set(excluded_semantic_sites or ())
-    for lead in () if external_stop else catalog:
+    for lead in (() if external_stop else catalog):
         if len(found) >= want or actions >= action_limit:
             budget_exhausted = actions >= action_limit
             break
@@ -1363,9 +1359,7 @@ def _llm_pick(
                 )
                 continue
             if status in {"search", "symbol", "callers", "docs"}:
-                from fedotllm.agents.evolve.discovery.research_tools import (
-                    run_research_tool,
-                )
+                from fedotllm.agents.evolve.discovery.research_tools import run_research_tool
 
                 tool_query, output = run_research_tool(
                     checkout, status, query=parsed.query, symbol=parsed.symbol

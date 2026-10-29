@@ -13,9 +13,7 @@ def test_error_classification_does_not_import_fedot(monkeypatch):
 
     def forbid_fedot_import(name, *args, **kwargs):
         if name == "fedot" or name.startswith("fedot."):
-            raise AssertionError(
-                "classifying an unrelated error must not initialize FEDOT"
-            )
+            raise AssertionError("classifying an unrelated error must not initialize FEDOT")
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", forbid_fedot_import)
@@ -29,7 +27,5 @@ def test_error_classification_recognizes_only_the_loaded_runtime_type(monkeypatc
     module = ModuleType("fedot.api.api_utils.timeout")
     module.FedotBudgetExceeded = FedotBudgetExceeded
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    assert (
-        worker._is_fedot_budget_timeout(FedotBudgetExceeded("budget exhausted")) is True
-    )
+    assert worker._is_fedot_budget_timeout(FedotBudgetExceeded("budget exhausted")) is True
     assert worker._is_fedot_budget_timeout(TimeoutError("unrelated timeout")) is False

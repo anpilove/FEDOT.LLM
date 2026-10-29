@@ -29,12 +29,7 @@ def calibrate_stock(
             rows.append(row)
             if journal is not None:
                 append_journal(journal, {"event": "stock", **row})
-    return {
-        "rows": rows,
-        "by_task": _summarize(rows),
-        "seeds": list(seeds),
-        "task_ids": list(task_ids),
-    }
+    return {"rows": rows, "by_task": _summarize(rows), "seeds": list(seeds), "task_ids": list(task_ids)}
 
 
 def _row(result: ScoreResult, seed: int) -> dict:
@@ -54,11 +49,7 @@ def _summarize(rows: list[dict]) -> dict[str, dict]:
         grouped[row["task_id"]].append(row)
     out: dict[str, dict] = {}
     for task_id, items in grouped.items():
-        ok = [
-            float(item["score"])
-            for item in items
-            if item["status"] == "ok" and _finite(item["score"])
-        ]
+        ok = [float(item["score"]) for item in items if item["status"] == "ok" and _finite(item["score"])]
         statuses = {item["status"] for item in items}
         stats: dict = {
             "n": len(items),

@@ -16,30 +16,16 @@ from fedotllm.agents.evolve.evaluation.fedot_quality import stock_cache_identity
 from fedotllm.agents.evolve.evaluation.smoke_data import smoke_registry
 
 
-def run_fixture(
-    tmp_path,
-    monkeypatch,
-    *,
-    variant="operations",
-    problem="regression",
-    policy="disabled-sqlite-v1",
-    enabled_at=None,
-    missing_attribute=False,
-):
+def run_fixture(tmp_path, monkeypatch, *, variant="operations", problem="regression",
+                policy="disabled-sqlite-v1", enabled_at=None, missing_attribute=False):
     """Simulate the two public FEDOT cache APIs and their disk side effects."""
     enum = Enum("TaskTypesEnum", ["classification", "regression", "ts_forecasting"])
-    flag_attrs = (
-        {
-            "use_operations_cache": "operations_cache",
-            "use_preprocessing_cache": "preprocessing_cache",
-            "use_predictions_cache": "predictions_cache",
-        }
-        if variant == "operations"
-        else {
-            "use_pipelines_cache": "pipelines_cache",
-            "use_preprocessing_cache": "preprocessing_cache",
-        }
-    )
+    flag_attrs = ({"use_operations_cache": "operations_cache",
+                   "use_preprocessing_cache": "preprocessing_cache",
+                   "use_predictions_cache": "predictions_cache"}
+                  if variant == "operations" else
+                  {"use_pipelines_cache": "pipelines_cache",
+                   "use_preprocessing_cache": "preprocessing_cache"})
 
     class ParamsRepository:
         @staticmethod
@@ -80,58 +66,28 @@ def run_fixture(
 
     for module_name, attrs in (
         ("fedot.api.main", {"Fedot": FixtureFedot}),
-        (
-            "fedot.api.api_utils.api_params_repository",
-            {"ApiParamsRepository": ParamsRepository},
-        ),
-        (
-            "fedot.core.repository.tasks",
-            {"TaskTypesEnum": enum, "TsForecastingParams": lambda **kwargs: kwargs},
-        ),
+        ("fedot.api.api_utils.api_params_repository", {"ApiParamsRepository": ParamsRepository}),
+        ("fedot.core.repository.tasks", {"TaskTypesEnum": enum,
+                                         "TsForecastingParams": lambda **kwargs: kwargs}),
     ):
         module = ModuleType(module_name)
         module.__dict__.update(attrs)
         monkeypatch.setitem(sys.modules, module_name, module)
-    metric = {
-        "classification": "roc_auc",
-        "regression": "rmse",
-        "ts_forecasting": "mae",
-    }[problem]
-    dataset = SimpleNamespace(
-        task_id="fixture", problem=problem, metric=metric, forecast_horizon=1
-    )
-    fold = {
-        "X_train": [1],
-        "y_train": [1],
-        "X_test": [1],
-        "y_test": [1],
-        "n_train": 1,
-        "n_test": 1,
-        "loader": "fixture",
-    }
+    metric = {"classification": "roc_auc", "regression": "rmse", "ts_forecasting": "mae"}[problem]
+    dataset = SimpleNamespace(task_id="fixture", problem=problem, metric=metric, forecast_horizon=1)
+    fold = {"X_train": [1], "y_train": [1], "X_test": [1], "y_test": [1],
+            "n_train": 1, "n_test": 1, "loader": "fixture"}
     monkeypatch.setattr(worker, "load_worker_fold", lambda spec: (dataset, fold))
-    monkeypatch.setattr(
-        worker, "configure_worker_runtime", lambda out: {"temp_dir": str(tmp_path)}
-    )
+    monkeypatch.setattr(worker, "configure_worker_runtime", lambda out: {"temp_dir": str(tmp_path)})
     spec = tmp_path / "spec.json"
     cv_folds = 3 if problem == "ts_forecasting" else 5
-    spec.write_text(
-        json.dumps(
-            {
-                "source_dataset": "fixture",
-                "timeout_minutes": 45,
-                "timeout_seconds": 3600,
-                "fedot_search_budget_seconds": 2700,
-                "cv_folds": cv_folds,
-                "max_pipeline_fit_time_seconds": 2700 // cv_folds,
-                "seed": 42,
-                "n_jobs": 4,
-                "preset": "best_quality",
-                "with_tuning": False,
-                "fedot_cache_policy": policy,
-            }
-        )
-    )
+    spec.write_text(json.dumps({"source_dataset": "fixture", "timeout_minutes": 45,
+                               "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+                               "cv_folds": cv_folds,
+                               "max_pipeline_fit_time_seconds": 2700 // cv_folds,
+                               "seed": 42, "n_jobs": 4,
+                               "preset": "best_quality", "with_tuning": False,
+                               "fedot_cache_policy": policy}))
     out = tmp_path / "payload.json"
     root_log = logging.getLogger()
     before_handlers, before_level = list(root_log.handlers), root_log.level
@@ -140,43 +96,29 @@ def run_fixture(
     finally:
         root_log.handlers[:] = before_handlers
         root_log.setLevel(before_level)
-    return (
-        rc,
-        json.loads(out.read_text()),
-        list(out.with_suffix(".fedot-cache").glob("*")),
-    )
+    return rc, json.loads(out.read_text()), list(out.with_suffix(".fedot-cache").glob("*"))
 
 
 @pytest.mark.parametrize("problem", ["classification", "regression", "ts_forecasting"])
 @pytest.mark.parametrize("variant", ["operations", "pipelines"])
 def test_disabled_policy_creates_no_sqlite_cache_on_supported_task_and_runtime(
-    tmp_path, monkeypatch, variant, problem
-):
+        tmp_path, monkeypatch, variant, problem):
     # Missing any public disable flag creates a database and breaks the new
     # protocol, even if fit and the final metric otherwise succeed.
-    rc, payload, caches = run_fixture(
-        tmp_path, monkeypatch, variant=variant, problem=problem
-    )
+    rc, payload, caches = run_fixture(tmp_path, monkeypatch, variant=variant, problem=problem)
     assert rc == 0, payload.get("detail")
     assert payload["status"] == "ok"
     assert caches == []
     observations = payload["metric_observations"]
     assert observations["fedot_cache_policy"] == "disabled-sqlite-v1"
     assert observations["fedot_cache_flags"] == (
-        {
-            "use_operations_cache": False,
-            "use_preprocessing_cache": False,
-            "use_predictions_cache": False,
-        }
-        if variant == "operations"
-        else {"use_pipelines_cache": False, "use_preprocessing_cache": False}
-    )
+        {"use_operations_cache": False, "use_preprocessing_cache": False, "use_predictions_cache": False}
+        if variant == "operations" else
+        {"use_pipelines_cache": False, "use_preprocessing_cache": False})
 
 
 @pytest.mark.parametrize("enabled_at", ["constructor", "fit"])
-def test_disabled_policy_rejects_runtime_that_keeps_or_reenables_a_cache(
-    tmp_path, monkeypatch, enabled_at
-):
+def test_disabled_policy_rejects_runtime_that_keeps_or_reenables_a_cache(tmp_path, monkeypatch, enabled_at):
     # Accepting a runtime that ignores its flags would report valid metrics
     # while retaining the storage growth that this protocol promises to avoid.
     rc, payload, _ = run_fixture(tmp_path, monkeypatch, enabled_at=enabled_at)
@@ -184,17 +126,13 @@ def test_disabled_policy_rejects_runtime_that_keeps_or_reenables_a_cache(
     assert payload["status"] == "crash"
     assert "cache policy" in payload["detail"].lower()
     assert "active" in payload["detail"].lower()
-    assert ("before fit" if enabled_at == "constructor" else "after fit") in payload[
-        "detail"
-    ].lower()
+    assert ("before fit" if enabled_at == "constructor" else "after fit") in payload["detail"].lower()
     assert payload["score"] is None
     assert payload["metric_observations"]["metric_outcome"] == "not_measured"
     assert payload["metric_observations"]["metric_valid"] is False
 
 
-def test_disabled_policy_rejects_missing_expected_composer_attribute(
-    tmp_path, monkeypatch
-):
+def test_disabled_policy_rejects_missing_expected_composer_attribute(tmp_path, monkeypatch):
     # Treating a missing cache attribute as None falsely accepts an unknown API.
     rc, payload, _ = run_fixture(tmp_path, monkeypatch, missing_attribute=True)
     assert rc == 2
@@ -203,9 +141,7 @@ def test_disabled_policy_rejects_missing_expected_composer_attribute(
 
 
 def test_explicit_legacy_policy_preserves_its_cache_behavior(tmp_path, monkeypatch):
-    rc, payload, caches = run_fixture(
-        tmp_path, monkeypatch, policy="isolated-worker-v1"
-    )
+    rc, payload, caches = run_fixture(tmp_path, monkeypatch, policy="isolated-worker-v1")
     assert rc == 0, payload.get("detail")
     assert payload["metric_observations"]["fedot_cache_policy"] == "isolated-worker-v1"
     assert len(caches) == 3
@@ -217,12 +153,8 @@ def test_new_production_and_smoke_protocols_cannot_reuse_legacy_stock_metrics():
     for registry in (registry_module.load_quality_registry(), smoke_registry()):
         assert registry.fedot_cache_policy == "disabled-sqlite-v1"
         legacy = replace(registry, fedot_cache_policy="isolated-worker-v1")
-        current_key = stock_cache_identity(
-            registry.datasets[0], registry, worker_runtime="fixture"
-        )
-        previous_key = stock_cache_identity(
-            registry.datasets[0], legacy, worker_runtime="fixture"
-        )
+        current_key = stock_cache_identity(registry.datasets[0], registry, worker_runtime="fixture")
+        previous_key = stock_cache_identity(registry.datasets[0], legacy, worker_runtime="fixture")
         assert current_key != previous_key
 
 
@@ -230,7 +162,4 @@ def test_registry_loader_accepts_explicit_legacy_policy(monkeypatch):
     raw = registry_module._load_raw()
     raw["fedot_cache_policy"] = "isolated-worker-v1"
     monkeypatch.setattr(registry_module, "_load_raw", lambda: raw)
-    assert (
-        registry_module.load_quality_registry().fedot_cache_policy
-        == "isolated-worker-v1"
-    )
+    assert registry_module.load_quality_registry().fedot_cache_policy == "isolated-worker-v1"

@@ -74,12 +74,8 @@ def test_quality_queue_drains_fifteen_proposals_through_configured_pair_cap(
                 (candidate_id,),
                 lambda item: item,
             )
-            if candidate_id in {
-                f"improvement-{index}" for index in range(expected_slots)
-            }:
-                assert release_first_wave.wait(3), (
-                    "test did not release the first proposal wave"
-                )
+            if candidate_id in {f"improvement-{index}" for index in range(expected_slots)}:
+                assert release_first_wave.wait(3), "test did not release the first proposal wave"
             return Decision(False, "no improvement", 0.0, stage="quality")
         finally:
             with lock:
@@ -98,18 +94,14 @@ def test_quality_queue_drains_fifteen_proposals_through_configured_pair_cap(
             }
             if max_pair_slots is not None:
                 kwargs["max_pair_slots"] = max_pair_slots
-            result_holder.append(
-                quality_executor.drain_quality_queue(source, workspace, **kwargs)
-            )
+            result_holder.append(quality_executor.drain_quality_queue(source, workspace, **kwargs))
         except BaseException as exc:
             errors.append(exc)
 
     runner = threading.Thread(target=drain, daemon=True)
     runner.start()
     try:
-        assert first_wave_full.wait(3), (
-            "queue did not admit the configured initial proposal wave"
-        )
+        assert first_wave_full.wait(3), "queue did not admit the configured initial proposal wave"
         with lock:
             assert len(active_proposals) == expected_slots
             assert peak_active_proposals == expected_slots
@@ -130,14 +122,10 @@ def test_quality_queue_drains_fifteen_proposals_through_configured_pair_cap(
 
         events = [
             json.loads(line)
-            for line in (workspace / "quality_jobs.jsonl")
-            .read_text(encoding="utf-8")
-            .splitlines()
+            for line in (workspace / "quality_jobs.jsonl").read_text(encoding="utf-8").splitlines()
         ]
         batch = next(
-            event
-            for event in events
-            if event.get("event") == "quality_scheduler_batch_started"
+            event for event in events if event.get("event") == "quality_scheduler_batch_started"
         )
         assert batch["parallel_proposals"] == expected_slots
         assert batch["dataset_pair_slots"] == expected_slots

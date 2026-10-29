@@ -40,11 +40,7 @@ def run_doctor(
             run_id=f"doctor-{uuid.uuid4().hex[:8]}",
             candidate_id="smoke",
         )
-        disjoint = (
-            experiment != source
-            and source not in experiment.parents
-            and experiment not in source.parents
-        )
+        disjoint = experiment != source and source not in experiment.parents and experiment not in source.parents
         checks["checkout"] = {
             "ok": disjoint,
             "source": str(source),
@@ -58,10 +54,7 @@ def run_doctor(
                 "controller_python": sys.executable,
             }
         except OSError as exc:
-            checks["interpreter"] = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
+            checks["interpreter"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
         snippet = run_fedot_snippet(
             experiment,
@@ -95,11 +88,7 @@ def run_doctor(
         # Attribute the failure to the first check that has not reported yet
         # instead of overwriting an already successful checkout check.
         failed = next(
-            (
-                name
-                for name in ("checkout", "interpreter", "fedot_import", "evaluator")
-                if name not in checks
-            ),
+            (name for name in ("checkout", "interpreter", "fedot_import", "evaluator") if name not in checks),
             "doctor",
         )
         checks[failed] = {
@@ -109,9 +98,7 @@ def run_doctor(
     finally:
         if experiment is not None and experiment.exists():
             try:
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
+                discard_experiment_checkout(experiment, workspace=workspace, source=source)
             except Exception as exc:
                 checks["cleanup"] = {
                     "ok": False,
@@ -119,10 +106,6 @@ def run_doctor(
                 }
 
     after = source_fingerprint(source)
-    checks["immutable_source"] = {
-        "ok": before == after,
-        "before": before,
-        "after": after,
-    }
+    checks["immutable_source"] = {"ok": before == after, "before": before, "after": after}
     ok = all(bool(item.get("ok")) for item in checks.values())
     return {"ok": ok, "checks": checks}

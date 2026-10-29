@@ -38,15 +38,9 @@ def main(argv: list[str] | None = None) -> int:
             if qualname is None:
                 # Python < 3.11 has no co_qualname; fall back to the bare name so a
                 # ``Class.method`` target still matches instead of silently never firing.
-                qualname = (
-                    args.target_symbol
-                    if frame.f_code.co_name == args.target_symbol.rsplit(".", 1)[-1]
-                    else frame.f_code.co_name
-                )
+                qualname = args.target_symbol if frame.f_code.co_name == args.target_symbol.rsplit(".", 1)[-1] else frame.f_code.co_name
             symbol = qualname.replace(".<locals>", "")
-            if symbol == args.target_symbol or symbol.startswith(
-                args.target_symbol + "."
-            ):
+            if symbol == args.target_symbol or symbol.startswith(args.target_symbol + "."):
                 reached = True
                 sys.settrace(None)
         return None

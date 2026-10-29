@@ -60,9 +60,7 @@ class RunBudgetSnapshot:
 
     @property
     def cost_limit_reached(self) -> bool:
-        return (
-            self.max_cost_usd is not None and self.actual_cost_usd >= self.max_cost_usd
-        )
+        return self.max_cost_usd is not None and self.actual_cost_usd >= self.max_cost_usd
 
     def to_dict(self) -> dict[str, int | float | bool | None]:
         return {
@@ -142,9 +140,7 @@ class EvolveRunBudget(AbstractContextManager["EvolveRunBudget"]):
         known_stages = {stage for stage, _ in unique}
         unknown = sorted(set(reserves) - known_stages)
         if unknown:
-            raise ValueError(
-                f"reserved query stages have no client: {', '.join(unknown)}"
-            )
+            raise ValueError(f"reserved query stages have no client: {', '.join(unknown)}")
         self._clients = tuple(unique)
         self.max_queries = max_queries
         self.max_cost_usd = float(max_cost_usd) if max_cost_usd is not None else None
@@ -188,10 +184,7 @@ class EvolveRunBudget(AbstractContextManager["EvolveRunBudget"]):
     def _reserve_query(self, stage: str) -> None:
         with self._lock:
             current_cost = self.actual_cost_usd
-            if (
-                self.max_queries is not None
-                and self.queries_started >= self.max_queries
-            ):
+            if self.max_queries is not None and self.queries_started >= self.max_queries:
                 raise EvolveBudgetExhausted(
                     "evolve_run_query_budget_exhausted: "
                     f"started={self.queries_started}, limit={self.max_queries}; "
@@ -246,13 +239,9 @@ class EvolveRunBudget(AbstractContextManager["EvolveRunBudget"]):
                 ):
                     logical = current_query_context()
                     logical_key = (
-                        (
-                            str(logical.get("call_group_id")),
-                            int(logical.get("query_number") or 0),
-                        )
-                        if logical.get("call_group_id")
-                        else (uuid.uuid4().hex, 0)
-                    )
+                        str(logical.get("call_group_id")),
+                        int(logical.get("query_number") or 0),
+                    ) if logical.get("call_group_id") else (uuid.uuid4().hex, 0)
                     path = _audit_path()
                     try:
                         self._reserve_query(_stage)

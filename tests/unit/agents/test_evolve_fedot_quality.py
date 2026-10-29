@@ -53,12 +53,9 @@ def test_quality_registry_is_full_openml_and_fixed_before_scores():
     assert registry.api == "fedot"
     assert registry.cpu_quota == 28
     assert registry.n_jobs_per_job == 4
-    assert (
-        job_spec(get_dataset("fedot-ts-beer", registry), registry=registry)[
-            "max_pipeline_fit_time_seconds"
-        ]
-        == 500
-    )
+    assert job_spec(get_dataset("fedot-ts-beer", registry), registry=registry)[
+        "max_pipeline_fit_time_seconds"
+    ] == 500
     ts_spec = job_spec(get_dataset("fedot-ts-beer", registry), registry=registry)
     assert ts_spec["max_pipeline_evaluation_time_seconds"] == 1500
     assert ts_spec["timeout_seconds"] == 5400
@@ -66,18 +63,12 @@ def test_quality_registry_is_full_openml_and_fixed_before_scores():
     assert ts_spec["fedot_timeout_policy"] == "return_best"
     assert ts_spec["final_fit_reserve_seconds"] == 1500
     assert ts_spec["timeout_minutes"] == 75.0
-    assert (
-        job_spec(get_dataset("openml-31-credit-g", registry), registry=registry)[
-            "max_pipeline_fit_time_seconds"
-        ]
-        == 180
-    )
-    assert (
-        job_spec(get_dataset("openml-31-credit-g", registry), registry=registry)[
-            "max_pipeline_evaluation_time_seconds"
-        ]
-        == 900
-    )
+    assert job_spec(get_dataset("openml-31-credit-g", registry), registry=registry)[
+        "max_pipeline_fit_time_seconds"
+    ] == 180
+    assert job_spec(get_dataset("openml-31-credit-g", registry), registry=registry)[
+        "max_pipeline_evaluation_time_seconds"
+    ] == 900
     assert tabular == (
         "openml-31-credit-g",
         "openml-10101-blood-transfusion",
@@ -137,31 +128,10 @@ def test_quality_registry_is_full_openml_and_fixed_before_scores():
     assert registry_json["selection"]["regression_suite"] == "OpenML-CTR23"
     assert registry.selection_study == 99
     registered_tasks = {
-        dataset.openml_task
-        for dataset in registry.datasets
-        if dataset.source == "openml_task"
+        dataset.openml_task for dataset in registry.datasets if dataset.source == "openml_task"
     }
     assert {
-        3,
-        6,
-        11,
-        12,
-        14,
-        15,
-        16,
-        18,
-        22,
-        23,
-        28,
-        29,
-        31,
-        32,
-        37,
-        43,
-        45,
-        49,
-        53,
-        219,
+        3, 6, 11, 12, 14, 15, 16, 18, 22, 23, 28, 29, 31, 32, 37, 43, 45, 49, 53, 219
     } <= registered_tasks
     assert {10101, 3917, 9952, 146818} <= registered_tasks
     for dataset in registry.datasets:
@@ -262,19 +232,12 @@ def test_historical_delta0_and_no_change_stay_hour_queue_eligible(tmp_path):
 
 def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller import campaign as loop
-    from fedotllm.agents.evolve.types import (
-        EvolveRunPolicy,
-        PatchCandidate,
-        PatchEdit,
-        MatchSite,
-    )
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
 
     source = tmp_path / "source"
     (source / "fedot").mkdir(parents=True)
     (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
-    (source / "fedot" / "a.py").write_text(
-        "def value():\n    return 1\n", encoding="utf-8"
-    )
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
     lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
     stock = {
         "catboost": ScoreResult("catboost", "ok", 0.86),
@@ -332,9 +295,7 @@ def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch
     assert job["quality_scope"]["confidence"] == "fallback"
     queued_event = next(
         json.loads(line)
-        for line in (workspace / "journal.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
+        for line in (workspace / "journal.jsonl").read_text(encoding="utf-8").splitlines()
         if json.loads(line).get("event") == "quality_queue"
     )
     assert queued_event["hypothesis"] == job["hypothesis"]
@@ -376,15 +337,11 @@ def test_enqueue_writes_campaign_root_not_run_subdir(tmp_path):
 def _pair(task_id: str, stock: float, patched: float, *, search=True, status="ok"):
     spec = job_spec(get_dataset(task_id))
     stock_result = ScoreResult(
-        task_id,
-        status,
-        stock,
+        task_id, status, stock,
         metric_observations={"metric_valid": True, "search_ran": search},
     )
     patched_result = ScoreResult(
-        task_id,
-        status,
-        patched,
+        task_id, status, patched,
         metric_observations={"metric_valid": True, "search_ran": search},
     )
     return {
@@ -481,9 +438,7 @@ def test_timeout_remains_infrastructure_error():
 def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructure():
     row = _pair("fedot-ts-traffic", 0.70, 0.80)
     row["patched_result"] = ScoreResult(
-        "fedot-ts-traffic",
-        "timeout",
-        float("nan"),
+        "fedot-ts-traffic", "timeout", float("nan"),
         detail="FEDOT return_best budget exhausted during final_refit",
         metric_observations={
             "failure_kind": "fedot_budget_timeout",
@@ -527,12 +482,8 @@ def _quality_rows_for_deltas(deltas, *, invalid_index=None):
     rows = []
     for index, (task_id, delta) in enumerate(zip(task_ids, deltas, strict=True)):
         spec = job_spec(get_dataset(task_id, registry), registry=registry)
-        stock = ScoreResult(
-            task_id,
-            "ok",
-            0.70,
-            metric_observations={"metric_valid": True, "search_ran": True},
-        )
+        stock = ScoreResult(task_id, "ok", 0.70,
+                            metric_observations={"metric_valid": True, "search_ran": True})
         patched = ScoreResult(
             task_id,
             "invalid" if index == invalid_index else "ok",
@@ -540,11 +491,8 @@ def _quality_rows_for_deltas(deltas, *, invalid_index=None):
             metric_observations={
                 "metric_valid": True,
                 "search_ran": True,
-                **(
-                    {"failure_kind": "fedot_fit_error", "failed_stage": "fit"}
-                    if index == invalid_index
-                    else {}
-                ),
+                **({"failure_kind": "fedot_fit_error", "failed_stage": "fit"}
+                   if index == invalid_index else {}),
             },
         )
         rows.append(
@@ -561,9 +509,7 @@ def _quality_rows_for_deltas(deltas, *, invalid_index=None):
 
 def test_quality_verdict_uses_majority_for_broad_and_two_wins_for_local():
     broad = decision_from_quality_jobs(_quality_rows_for_deltas([0.02] * 5 + [0.0] * 3))
-    local = decision_from_quality_jobs(
-        _quality_rows_for_deltas([0.02, 0.02] + [0.0] * 6)
-    )
+    local = decision_from_quality_jobs(_quality_rows_for_deltas([0.02, 0.02] + [0.0] * 6))
 
     assert broad.keep is True
     assert broad.quality_outcome == "broad_positive"
@@ -623,10 +569,7 @@ def test_queue_patch_strips_stock_prefix(tmp_path):
     checkout = tmp_path / "exp"
     target = checkout / "fedot" / "core" / "data" / "merge" / "data_merger.py"
     target.parent.mkdir(parents=True)
-    target.write_text(
-        "common_predicts = [output.predict[:predict_len] for output in self.outputs]\n",
-        encoding="utf-8",
-    )
+    target.write_text("common_predicts = [output.predict[:predict_len] for output in self.outputs]\n", encoding="utf-8")
     assert apply_queue_patch(
         checkout,
         candidate_id="tail-merge",
@@ -642,9 +585,7 @@ def test_queue_patch_strips_stock_prefix(tmp_path):
     assert "predict[-predict_len:]" in target.read_text(encoding="utf-8")
 
 
-def test_drain_runs_queued_candidates_without_separate_stock_wave(
-    tmp_path, monkeypatch
-):
+def test_drain_runs_queued_candidates_without_separate_stock_wave(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue
     from fedotllm.agents.evolve.controller.quality_queue import enqueue_quality_job
     from fedotllm.agents.evolve.types import Decision, PatchCandidate
@@ -656,7 +597,13 @@ def test_drain_runs_queued_candidates_without_separate_stock_wave(
     enqueue_quality_job(
         workspace,
         candidate=PatchCandidate(candidate_id="lgbm-toy", file_path="fedot/x.py"),
-        patch_text=("--- a/fedot/x.py\n+++ b/fedot/x.py\n@@\n-value = 1\n+value = 2\n"),
+        patch_text=(
+            "--- a/fedot/x.py\n"
+            "+++ b/fedot/x.py\n"
+            "@@\n"
+            "-value = 1\n"
+            "+value = 2\n"
+        ),
         hint="lgbm callback discarded; toy delta 0 is not a veto",
         priority="normal",
         probe_status="no_change",
@@ -665,7 +612,13 @@ def test_drain_runs_queued_candidates_without_separate_stock_wave(
     enqueue_quality_job(
         workspace,
         candidate=PatchCandidate(candidate_id="svd-hint", file_path="fedot/x.py"),
-        patch_text=("--- a/fedot/x.py\n+++ b/fedot/x.py\n@@\n-value = 1\n+value = 3\n"),
+        patch_text=(
+            "--- a/fedot/x.py\n"
+            "+++ b/fedot/x.py\n"
+            "@@\n"
+            "-value = 1\n"
+            "+value = 3\n"
+        ),
         hint="svd",
         priority="high",
         probe_status="changed",
@@ -744,12 +697,12 @@ def test_drain_keeps_candidate_failure_separate_from_drop_and_infrastructure(
         lambda _path, event: journal_events.append(event),
     )
 
-    payload = drain_quality_queue(source, workspace, task_ids=["openml-31-credit-g"])
+    payload = drain_quality_queue(
+        source, workspace, task_ids=["openml-31-credit-g"]
+    )
 
     proposal = json.loads(
-        (workspace / "quality_queue" / "patched-invalid.json").read_text(
-            encoding="utf-8"
-        )
+        (workspace / "quality_queue" / "patched-invalid.json").read_text(encoding="utf-8")
     )
     assert proposal["status"] == "candidate_error"
     assert proposal["infrastructure_error"] is False
@@ -762,9 +715,7 @@ def test_drain_keeps_candidate_failure_separate_from_drop_and_infrastructure(
     assert disposition["infrastructure_error"] is False
 
 
-def test_stock_cache_requires_exact_compute_profile_and_complete_identity(
-    tmp_path, monkeypatch
-):
+def test_stock_cache_requires_exact_compute_profile_and_complete_identity(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.evaluation import fedot_quality as fq
 
     cache = tmp_path / "stock_cache"
@@ -779,19 +730,13 @@ def test_stock_cache_requires_exact_compute_profile_and_complete_identity(
         n_jobs=10,
         source_sha256=fq._source_sha256(str(checkout.resolve())),
     )
-    leftover = (
-        cache / f"{registry.identity}__{dataset.task_id}__n10__s{registry.seed}.json"
-    )
-    leftover.write_text(
-        json.dumps({"status": "ok", "score": 0.77, "identity": wrong_profile})
-    )
+    leftover = cache / f"{registry.identity}__{dataset.task_id}__n10__s{registry.seed}.json"
+    leftover.write_text(json.dumps({"status": "ok", "score": 0.77, "identity": wrong_profile}))
     called = []
     monkeypatch.setattr(
         fq,
         "run_worker",
-        lambda *_args, **_kwargs: (
-            called.append(True) or WorkerOutcome(returncode=0, stdout="", stderr="")
-        ),
+        lambda *_args, **_kwargs: (called.append(True) or WorkerOutcome(returncode=0, stdout="", stderr="")),
     )
     result = fq.run_quality_side(
         dataset,
@@ -811,14 +756,9 @@ def test_stock_cache_requires_exact_compute_profile_and_complete_identity(
         source_sha256=fq._source_sha256(str(checkout.resolve())),
     )
     exact_path.write_text(
-        json.dumps(
-            {
-                "status": "ok",
-                "score": 0.77,
-                "metric_observations": {"metric_valid": True},
-                "identity": exact_identity,
-            }
-        ),
+        json.dumps({"status": "ok", "score": 0.77,
+                    "metric_observations": {"metric_valid": True},
+                    "identity": exact_identity}),
         encoding="utf-8",
     )
 
@@ -854,17 +794,13 @@ def test_stock_cache_rejects_success_score_without_valid_metric_attestation(
         dataset, registry, n_jobs=8, source_sha256=source_sha256
     )
     path = fq._stock_cache_path(dataset, registry, 8)
-    path.write_text(
-        json.dumps(
-            {
-                "task_id": dataset.task_id,
-                "status": "ok",
-                "score": 0.77,
-                "metric_observations": metric_observations,
-                "identity": identity,
-            }
-        )
-    )
+    path.write_text(json.dumps({
+        "task_id": dataset.task_id,
+        "status": "ok",
+        "score": 0.77,
+        "metric_observations": metric_observations,
+        "identity": identity,
+    }))
 
     result = fq._load_stock_cache(
         dataset, registry, 8, env_hash="test", source_sha256=source_sha256
@@ -873,9 +809,7 @@ def test_stock_cache_rejects_success_score_without_valid_metric_attestation(
     assert result is None
 
 
-def test_quality_worker_receives_task_deadline_separate_from_watchdog(
-    tmp_path, monkeypatch
-):
+def test_quality_worker_receives_task_deadline_separate_from_watchdog(tmp_path, monkeypatch):
     """The per-side limit must not be replaced by the longer guardian cap."""
     import sys
 
@@ -899,35 +833,24 @@ def test_quality_worker_receives_task_deadline_separate_from_watchdog(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("worker timed out", encoding="utf-8")
         output_path = Path(_cmd[_cmd.index("--out") + 1])
-        output_path.with_suffix(".stages.json").write_text(
-            json.dumps(
-                {
-                    "event": "heartbeat",
-                    "updated_at": "2026-10-14T22:10:41Z",
-                    "active_stage": "fit",
-                    "last_worker_output_line": "TunerInterface final_check",
-                    "task_id": "fedot-ts-beer",
-                    "side": "patch",
-                    "attempt": 1,
-                    "attempt_id": "quality:fedot-ts-beer:patch:1",
-                }
-            ),
-            encoding="utf-8",
-        )
+        output_path.with_suffix(".stages.json").write_text(json.dumps({
+            "event": "heartbeat",
+            "updated_at": "2026-10-14T22:10:41Z",
+            "active_stage": "fit",
+            "last_worker_output_line": "TunerInterface final_check",
+            "task_id": "fedot-ts-beer",
+            "side": "patch",
+            "attempt": 1,
+            "attempt_id": "quality:fedot-ts-beer:patch:1",
+        }), encoding="utf-8")
         return WorkerOutcome(
-            returncode=None,
-            stdout="worker timed out",
-            stderr="",
-            timed_out=True,
-            timeout_kind="task_timeout",
+            returncode=None, stdout="worker timed out", stderr="",
+            timed_out=True, timeout_kind="task_timeout",
         )
 
     monkeypatch.setattr(fq, "run_worker", timed_out_worker)
     result = fq.run_quality_side(
-        dataset,
-        checkout=checkout,
-        side="patch",
-        registry=registry,
+        dataset, checkout=checkout, side="patch", registry=registry,
     )
 
     assert 0 < received["timeout"] <= 5400.0
@@ -971,9 +894,7 @@ def test_successful_worker_payload_with_mismatched_identity_is_rejected(
     monkeypatch.setenv("EVOLVE_AGENT_TMP", str(tmp_path / "worker-artifacts"))
     monkeypatch.setattr(quality, "_fedot_commit", lambda _checkout: "fedot-commit")
     monkeypatch.setattr(quality, "_source_sha256", lambda _checkout: "source-sha")
-    monkeypatch.setattr(
-        quality, "interpreter_identity", lambda *_args, **_kwargs: "runtime"
-    )
+    monkeypatch.setattr(quality, "interpreter_identity", lambda *_args, **_kwargs: "runtime")
     monkeypatch.setattr(quality, "clean_subprocess_env", lambda *_args, **_kwargs: {})
     evaluation_identity = {"source_sha256": "current-source", "n_jobs": 4}
 
@@ -1018,9 +939,7 @@ def test_successful_worker_payload_with_mismatched_identity_is_rejected(
 
 
 @pytest.mark.parametrize("timed_out", [False, True])
-def test_concurrent_stock_cache_misses_share_one_baseline_training(
-    tmp_path, monkeypatch, timed_out
-):
+def test_concurrent_stock_cache_misses_share_one_baseline_training(tmp_path, monkeypatch, timed_out):
     from concurrent.futures import ThreadPoolExecutor
     import threading
     import time
@@ -1038,12 +957,8 @@ def test_concurrent_stock_cache_misses_share_one_baseline_training(
     monkeypatch.setattr(fq, "_fedot_commit", lambda _checkout: "commit-a")
     monkeypatch.setattr(fq, "_source_sha256", lambda _checkout: "source-a")
     monkeypatch.setattr(fq, "fedot_python", lambda _checkout: "/python")
-    monkeypatch.setattr(
-        fq, "interpreter_identity", lambda *_args, **_kwargs: "runtime-a"
-    )
-    monkeypatch.setattr(
-        fq, "clean_subprocess_env", lambda *_args, **_kwargs: {"PATH": ""}
-    )
+    monkeypatch.setattr(fq, "interpreter_identity", lambda *_args, **_kwargs: "runtime-a")
+    monkeypatch.setattr(fq, "clean_subprocess_env", lambda *_args, **_kwargs: {"PATH": ""})
 
     calls = 0
     calls_lock = threading.Lock()
@@ -1054,63 +969,46 @@ def test_concurrent_stock_cache_misses_share_one_baseline_training(
             calls += 1
         time.sleep(0.05)
         if timed_out:
-            return WorkerOutcome(
-                returncode=None, stdout="worker timed out", stderr="", timed_out=True
-            )
+            return WorkerOutcome(returncode=None, stdout="worker timed out", stderr="", timed_out=True)
         spec_path = Path(cmd[cmd.index("--spec-json") + 1])
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
         out_path = Path(cmd[cmd.index("--out") + 1])
-        out_path.write_text(
-            json.dumps(
-                {
-                    "task_id": dataset.task_id,
-                    "side": spec["side"],
-                    "attempt": spec["attempt"],
-                    "attempt_id": spec["attempt_id"],
-                    "worker_invocation_id": spec["worker_invocation_id"],
-                    "registry_identity": spec["registry_identity"],
-                    "evaluation_identity": spec.get("evaluation_identity"),
-                    "status": "ok",
-                    "score": 0.75,
-                    "duration_s": 0.05,
-                    "seed": registry.seed,
-                    "metric_observations": {"metric_valid": True},
-                }
-            )
-        )
+        out_path.write_text(json.dumps({
+            "task_id": dataset.task_id,
+            "side": spec["side"],
+            "attempt": spec["attempt"],
+            "attempt_id": spec["attempt_id"],
+            "worker_invocation_id": spec["worker_invocation_id"],
+            "registry_identity": spec["registry_identity"],
+            "evaluation_identity": spec.get("evaluation_identity"),
+            "status": "ok",
+            "score": 0.75,
+            "duration_s": 0.05,
+            "seed": registry.seed,
+            "metric_observations": {"metric_valid": True},
+        }))
         return WorkerOutcome(returncode=0, stdout="worker complete", stderr="")
 
     monkeypatch.setattr(fq, "run_worker", fake_worker)
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [
-            pool.submit(
-                fq.run_quality_side,
-                dataset,
-                checkout=checkout,
-                side="stock",
-                n_jobs=4,
-                registry=registry,
-            )
-            for _ in range(2)
-        ]
+        futures = [pool.submit(
+            fq.run_quality_side,
+            dataset,
+            checkout=checkout,
+            side="stock",
+            n_jobs=4,
+            registry=registry,
+        ) for _ in range(2)]
         results = [future.result(timeout=5) for future in futures]
 
     assert calls == 1
     expected_status = "timeout" if timed_out else "ok"
     assert [result.status for result in results] == [expected_status, expected_status]
     if timed_out:
-        assert all(
-            not result.metric_observations.get("cache_hit") for result in results
-        )
+        assert all(not result.metric_observations.get("cache_hit") for result in results)
     else:
         assert [result.score for result in results] == [0.75, 0.75]
-    assert (
-        sum(
-            bool(result.metric_observations.get("singleflight_shared"))
-            for result in results
-        )
-        == 1
-    )
+    assert sum(bool(result.metric_observations.get("singleflight_shared")) for result in results) == 1
 
 
 def test_stock_singleflight_reports_waiters_until_shared_fit_finishes(tmp_path):
@@ -1138,16 +1036,12 @@ def test_stock_singleflight_reports_waiters_until_shared_fit_finishes(tmp_path):
     owner_result = []
     follower_result = []
     follower_errors = []
-    owner = Thread(
-        target=lambda: owner_result.append(
-            fq._join_stock_flight(
-                cache_path,
-                identity_key="wait-observability-test",
-                cancellation_event=None,
-                compute=compute,
-            )
-        )
-    )
+    owner = Thread(target=lambda: owner_result.append(fq._join_stock_flight(
+        cache_path,
+        identity_key="wait-observability-test",
+        cancellation_event=None,
+        compute=compute,
+    )))
     owner.start()
     assert owner_entered.wait(timeout=2)
 
@@ -1157,17 +1051,13 @@ def test_stock_singleflight_reports_waiters_until_shared_fit_finishes(tmp_path):
 
     def join_follower():
         try:
-            follower_result.append(
-                fq._join_stock_flight(
-                    cache_path,
-                    identity_key="wait-observability-test",
-                    cancellation_event=None,
-                    compute=lambda: pytest.fail(
-                        "singleflight follower must not compute"
-                    ),
-                    on_waiting=on_waiting,
-                )
-            )
+            follower_result.append(fq._join_stock_flight(
+                cache_path,
+                identity_key="wait-observability-test",
+                cancellation_event=None,
+                compute=lambda: pytest.fail("singleflight follower must not compute"),
+                on_waiting=on_waiting,
+            ))
         except BaseException as exc:
             follower_errors.append(exc)
 
@@ -1235,14 +1125,12 @@ def test_shared_stock_wait_is_bounded_by_side_deadline(tmp_path):
         assert release_owner.wait(timeout=2)
         return ScoreResult(task_id="openml-31-credit-g", status="ok", score=0.75)
 
-    owner = Thread(
-        target=lambda: fq._join_stock_flight(
-            cache_path,
-            identity_key="bounded-shared-wait-test",
-            cancellation_event=None,
-            compute=compute,
-        )
-    )
+    owner = Thread(target=lambda: fq._join_stock_flight(
+        cache_path,
+        identity_key="bounded-shared-wait-test",
+        cancellation_event=None,
+        compute=compute,
+    ))
     owner.start()
     assert owner_entered.wait(timeout=2)
     started = time.monotonic()
@@ -1311,9 +1199,7 @@ def test_stock_side_records_timeout_when_cache_lock_outlives_side_budget(
     assert result.status == "timeout"
     assert result.metric_observations["timeout_kind"] == "stock cache file lock"
     assert result.metric_observations["worker_spawned"] is False
-    assert (
-        result.metric_observations["timeout_limit_seconds"] == registry.timeout_seconds
-    )
+    assert result.metric_observations["timeout_limit_seconds"] == registry.timeout_seconds
 
 
 def test_stock_warm_does_not_skip_identity_mismatch(tmp_path, monkeypatch):
@@ -1375,52 +1261,31 @@ def test_quality_job_selects_tabular_or_ts_by_patch_path():
     regression = _task_ids(registry, "regression")
     classification = _task_ids(registry, "classification")
     ts_ids = _task_ids(registry, "ts_forecasting")
-    assert (
-        select_task_ids_for_job(
-            {
-                "file_path": "fedot/core/operations/evaluation/operation_implementations/models/boostings_implementations.py"
-            }
-        )
-        == tabular
-    )
-    assert (
-        select_task_ids_for_job(
-            {
-                "file_path": (
-                    "fedot/core/operations/evaluation/operation_implementations/"
-                    "models/ts_implementations/statsmodels.py"
-                )
-            }
-        )
-        == ts_ids
-    )
-    assert (
-        select_task_ids_for_job(
-            {
-                "file_path": (
-                    "fedot/core/operations/evaluation/operation_implementations/"
-                    "data_operations/ts_transformations.py"
-                )
-            }
-        )
-        == ts_ids
-    )
-    assert (
-        select_task_ids_for_job(
-            {
-                "file_path": "fedot/core/operations/evaluation/operation_implementations/models/regression/ridge.py"
-            }
-        )
-        == regression
-    )
-    assert (
-        select_task_ids_for_job(
-            {
-                "file_path": "fedot/core/operations/evaluation/operation_implementations/models/classification/logit.py"
-            }
-        )
-        == classification
-    )
+    assert select_task_ids_for_job(
+        {"file_path": "fedot/core/operations/evaluation/operation_implementations/models/boostings_implementations.py"}
+    ) == tabular
+    assert select_task_ids_for_job(
+        {
+            "file_path": (
+                "fedot/core/operations/evaluation/operation_implementations/"
+                "models/ts_implementations/statsmodels.py"
+            )
+        }
+    ) == ts_ids
+    assert select_task_ids_for_job(
+        {
+            "file_path": (
+                "fedot/core/operations/evaluation/operation_implementations/"
+                "data_operations/ts_transformations.py"
+            )
+        }
+    ) == ts_ids
+    assert select_task_ids_for_job(
+        {"file_path": "fedot/core/operations/evaluation/operation_implementations/models/regression/ridge.py"}
+    ) == regression
+    assert select_task_ids_for_job(
+        {"file_path": "fedot/core/operations/evaluation/operation_implementations/models/classification/logit.py"}
+    ) == classification
     both = select_task_ids_for_job({"file_path": "fedot/core/data/data_split.py"})
     assert both == tabular + ts_ids
 
@@ -1462,9 +1327,7 @@ def test_fedot_public_ts_loader_holdout_dry_run(tmp_path, monkeypatch):
         load_fedot_public_ts(replace(dataset, data_sha256="0" * 64))
 
 
-def test_official_split_recovers_from_interrupted_shared_cache_write(
-    tmp_path, monkeypatch
-):
+def test_official_split_recovers_from_interrupted_shared_cache_write(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.evaluation import openml_fold
 
     monkeypatch.setenv("EVOLVE_QUALITY_DATA_CACHE", str(tmp_path / "shared-cache"))
@@ -1477,9 +1340,7 @@ def test_official_split_recovers_from_interrupted_shared_cache_write(
     # its truncate but before its JSON payload has reached disk.
     cached.write_text('{"train": [0,', encoding="utf-8")
     monkeypatch.setattr(
-        openml_fold,
-        "_download_split_indices",
-        lambda _dataset, *, n_rows: ([0, 1], [2]),
+        openml_fold, "_download_split_indices", lambda _dataset, *, n_rows: ([0, 1], [2])
     )
 
     assert openml_fold._official_indices(dataset, n_rows=3) == ([0, 1], [2])
@@ -1493,10 +1354,7 @@ def test_openml_task_loader_rejects_data_id_mismatch(monkeypatch):
     dataset = get_dataset("openml-31-credit-g")
     task = SimpleNamespace(
         dataset_id=dataset.openml_data + 1,
-        get_X_and_y=lambda **_kwargs: (
-            pd.DataFrame({"feature": [1, 2]}),
-            pd.Series([0, 1]),
-        ),
+        get_X_and_y=lambda **_kwargs: (pd.DataFrame({"feature": [1, 2]}), pd.Series([0, 1])),
         get_train_test_split_indices=lambda **_kwargs: ([0], [1]),
     )
     fake_openml = ModuleType("openml")
@@ -1505,18 +1363,14 @@ def test_openml_task_loader_rejects_data_id_mismatch(monkeypatch):
     monkeypatch.setattr(
         openml_fold,
         "_load_sklearn_and_splits",
-        lambda _dataset: pytest.fail(
-            "data mismatch must not fall back to another loader"
-        ),
+        lambda _dataset: pytest.fail("data mismatch must not fall back to another loader"),
     )
 
     with pytest.raises(RuntimeError, match="OpenML task/data ID mismatch"):
         openml_fold.load_registered_fold(dataset)
 
 
-def test_openml_task_loader_does_not_fallback_without_verified_task_metadata(
-    monkeypatch,
-):
+def test_openml_task_loader_does_not_fallback_without_verified_task_metadata(monkeypatch):
     from fedotllm.agents.evolve.evaluation import openml_fold
 
     dataset = get_dataset("openml-31-credit-g")
@@ -1537,9 +1391,7 @@ def test_openml_task_loader_does_not_fallback_without_verified_task_metadata(
         openml_fold.load_registered_fold(dataset)
 
 
-def test_public_ts_loader_recovers_from_interrupted_shared_cache_write(
-    tmp_path, monkeypatch
-):
+def test_public_ts_loader_recovers_from_interrupted_shared_cache_write(tmp_path, monkeypatch):
     import hashlib
     from dataclasses import replace
     from io import BytesIO
@@ -1572,9 +1424,7 @@ def test_public_ts_loader_recovers_from_interrupted_shared_cache_write(
     assert cached.read_bytes() == payload
 
 
-def test_fedot_local_ts_loader_uses_manifest_asset_and_last_horizon(
-    tmp_path, monkeypatch
-):
+def test_fedot_local_ts_loader_uses_manifest_asset_and_last_horizon(tmp_path, monkeypatch):
     import hashlib
     from dataclasses import replace
 
@@ -1604,9 +1454,7 @@ def test_fedot_local_ts_loader_uses_manifest_asset_and_last_horizon(
     assert fold["loader"] == "fedot.examples.real_cases.data"
 
 
-def test_quality_worker_environment_can_read_fedot_data_from_separate_source(
-    tmp_path, monkeypatch
-):
+def test_quality_worker_environment_can_read_fedot_data_from_separate_source(tmp_path, monkeypatch):
     import subprocess
     import sys
 
@@ -1631,9 +1479,7 @@ assert source == Path(os.environ['FEDOTLLM_REPO_CACHE']) / 'examples/data/ts/bee
 assert source.read_text() == 'value\\n1\\n2\\n'
 """
 
-    def run_worker(
-        _cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check
-    ):
+    def run_worker(_cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check):
         resource_check()
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("fake worker diagnostics", encoding="utf-8")
@@ -1665,9 +1511,7 @@ assert source.read_text() == 'value\\n1\\n2\\n'
     assert worker_log.read_text(encoding="utf-8") == "fake worker diagnostics"
 
 
-def test_quality_worker_environment_loads_local_ts_from_fedot_cache(
-    tmp_path, monkeypatch
-):
+def test_quality_worker_environment_loads_local_ts_from_fedot_cache(tmp_path, monkeypatch):
     import hashlib
     import subprocess
     import sys
@@ -1704,9 +1548,7 @@ assert list(fold['X_train']) == [10.0, 11.0]
 assert list(fold['y_test']) == [12.0, 13.0]
 """
 
-    def run_worker(
-        _cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check
-    ):
+    def run_worker(_cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check):
         resource_check()
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("worker reached local TS loader", encoding="utf-8")
@@ -1806,40 +1648,28 @@ Path(sys.argv[2]).write_text(json.dumps(result), encoding='utf-8')
         if remove_cache:
             env.pop("FEDOTLLM_REPO_CACHE", None)
         child_command = [
-            sys.executable,
-            "-c",
-            child_code,
-            str(spec_path),
-            str(out_path),
+            sys.executable, "-c", child_code, str(spec_path), str(out_path),
         ]
         return real_run_worker(child_command, env=env, **kwargs)
 
     monkeypatch.setattr(
-        fq,
-        "run_worker",
-        lambda command, **kwargs: invoke_worker(command, remove_cache=True, **kwargs),
+        fq, "run_worker", lambda command, **kwargs: invoke_worker(
+            command, remove_cache=True, **kwargs
+        ),
     )
     without_cache = fq.run_quality_side(
-        get_dataset("fedot-ts-temperature"),
-        checkout=checkout,
-        side="patch",
-        registry=load_quality_registry(),
-        proposal_id="cache-popen-test",
+        get_dataset("fedot-ts-temperature"), checkout=checkout, side="patch",
+        registry=load_quality_registry(), proposal_id="cache-popen-test",
     )
     assert without_cache.status == "invalid"
     assert "FEDOT data asset not found" in without_cache.log_tail
 
     monkeypatch.setattr(
-        fq,
-        "run_worker",
-        lambda command, **kwargs: invoke_worker(command, **kwargs),
+        fq, "run_worker", lambda command, **kwargs: invoke_worker(command, **kwargs),
     )
     with_cache = fq.run_quality_side(
-        get_dataset("fedot-ts-temperature"),
-        checkout=checkout,
-        side="patch",
-        registry=load_quality_registry(),
-        proposal_id="cache-popen-test",
+        get_dataset("fedot-ts-temperature"), checkout=checkout, side="patch",
+        registry=load_quality_registry(), proposal_id="cache-popen-test",
     )
     assert with_cache.status == "ok"
     assert with_cache.score == 1.25
@@ -1858,9 +1688,7 @@ def test_quality_worker_passes_opt_in_line_trace_controls(tmp_path, monkeypatch)
 
     captured = {}
 
-    def run_worker(
-        _cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check
-    ):
+    def run_worker(_cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check):
         captured.update(env)
         resource_check()
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1881,9 +1709,7 @@ def test_quality_worker_passes_opt_in_line_trace_controls(tmp_path, monkeypatch)
     assert result.status == "invalid"  # stub intentionally writes no metric result
 
 
-def test_quality_worker_passes_opt_in_operation_fit_trace_controls(
-    tmp_path, monkeypatch
-):
+def test_quality_worker_passes_opt_in_operation_fit_trace_controls(tmp_path, monkeypatch):
     import sys
 
     from fedotllm.agents.evolve.evaluation import fedot_quality as fq
@@ -1905,9 +1731,7 @@ def test_quality_worker_passes_opt_in_operation_fit_trace_controls(
     monkeypatch.delenv("FEDOT_TRACE_OPERATIONS_UNUSED", raising=False)
     captured = {}
 
-    def run_worker(
-        _cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check
-    ):
+    def run_worker(_cmd, *, cwd, env, timeout, watchdog_timeout, log_path, resource_check):
         captured.update(env)
         resource_check()
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1930,9 +1754,7 @@ def test_quality_worker_passes_opt_in_operation_fit_trace_controls(
     assert result.status == "invalid"  # stub intentionally writes no metric result
 
 
-def test_fedot_local_ts_loader_orders_metocean_encoded_timestamps(
-    tmp_path, monkeypatch
-):
+def test_fedot_local_ts_loader_orders_metocean_encoded_timestamps(tmp_path, monkeypatch):
     import hashlib
     from dataclasses import replace
 
@@ -1943,7 +1765,8 @@ def test_fedot_local_ts_loader_orders_metocean_encoded_timestamps(
     data_dir.mkdir(parents=True)
     source = data_dir / "metocean_data_train.csv"
     source.write_text(
-        "datetime,sea_height\n200906180,30\n200906172,10\n200906179,20\n200906181,40\n",
+        "datetime,sea_height\n"
+        "200906180,30\n200906172,10\n200906179,20\n200906181,40\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("FEDOTLLM_REPO_PATH", str(checkout))
@@ -1960,15 +1783,11 @@ def test_fedot_local_ts_loader_orders_metocean_encoded_timestamps(
 def test_worker_scores_regression_rmse_from_prediction():
     import numpy as np
 
-    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import (
-        _score_regression,
-    )
+    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import _score_regression
 
     actual = np.array([0.0, 2.0, 4.0])
     predicted = np.array([0.0, 1.0, 5.0])
-    assert _score_regression(actual, predicted, "rmse") == pytest.approx(
-        0.816496580927726
-    )
+    assert _score_regression(actual, predicted, "rmse") == pytest.approx(0.816496580927726)
 
 
 def test_worker_uses_regression_fallback_when_fedot_metric_fails():
@@ -2005,14 +1824,10 @@ def test_regression_quality_delta_is_relative_and_scale_independent():
     assert decision.keep is True
     assert decision.quality_outcome == "broad_positive"
     assert decision.target_delta is None
-    assert all(
-        value == pytest.approx(0.02) for value in decision.regression_deltas.values()
-    )
+    assert all(value == pytest.approx(0.02) for value in decision.regression_deltas.values())
 
 
-def test_quality_journal_keeps_hypothesis_scope_and_per_task_scores(
-    tmp_path, monkeypatch
-):
+def test_quality_journal_keeps_hypothesis_scope_and_per_task_scores(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller import quality_executor
     from fedotllm.agents.evolve.types import PatchCandidate
 
@@ -2037,9 +1852,7 @@ def test_quality_journal_keeps_hypothesis_scope_and_per_task_scores(
         tmp_path / "stock",
         tmp_path / "patched",
         journal=journal,
-        candidate=PatchCandidate(
-            "candidate-42", "fedot/core/operations/evaluation/regression.py"
-        ),
+        candidate=PatchCandidate("candidate-42", "fedot/core/operations/evaluation/regression.py"),
         task_ids=("openml-regression-abalone",),
         hypothesis=hypothesis,
         quality_scope=scope,
@@ -2108,19 +1921,14 @@ def test_quality_journal_links_each_side_to_worker_log_and_search_observations(
         task_ids=("openml-regression-abalone",),
     )
 
-    events = [
-        json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()
-    ]
+    events = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()]
     side_events = [
-        event
-        for event in events
+        event for event in events
         if event["event"].startswith("quality_task_side_")
         and event["event"] != "quality_task_side_waiting_stock_cache"
     ]
     wait_event = next(
-        event
-        for event in events
-        if event["event"] == "quality_task_side_waiting_stock_cache"
+        event for event in events if event["event"] == "quality_task_side_waiting_stock_cache"
     )
     assert [event["event"] for event in side_events] == [
         "quality_task_side_started",
@@ -2128,24 +1936,13 @@ def test_quality_journal_links_each_side_to_worker_log_and_search_observations(
         "quality_task_side_started",
         "quality_task_side_finished",
     ]
-    assert [event["side"] for event in side_events] == [
-        "stock",
-        "stock",
-        "patch",
-        "patch",
-    ]
+    assert [event["side"] for event in side_events] == ["stock", "stock", "patch", "patch"]
     assert all(event["n_jobs_per_side"] == 4 for event in side_events)
     assert all(event["cpu_quota"] == 28 for event in side_events)
     assert all(event["dataset_pair_slots"] == 7 for event in side_events)
-    assert (
-        side_events[1]["attempt_id"]
-        == "candidate-log-links:openml-regression-abalone:stock:1"
-    )
+    assert side_events[1]["attempt_id"] == "candidate-log-links:openml-regression-abalone:stock:1"
     expected_stock_paths = worker_artifact_paths(
-        "openml-regression-abalone",
-        "stock",
-        "candidate-log-links",
-        1,
+        "openml-regression-abalone", "stock", "candidate-log-links", 1,
         root=worker_root,
         worker_invocation_id=side_events[0]["worker_invocation_id"],
     )
@@ -2155,14 +1952,9 @@ def test_quality_journal_links_each_side_to_worker_log_and_search_observations(
     assert side_events[0]["proposal_id"] == "candidate-log-links"
     assert side_events[1]["result"]["worker_log_path"].endswith("stock.log")
     assert side_events[1]["worker_paths"]["worker_log_path"].endswith("stock.log")
-    assert (
-        side_events[3]["result"]["metric_observations"]["failure_kind"]
-        == "scoring_error"
-    )
+    assert side_events[3]["result"]["metric_observations"]["failure_kind"] == "scoring_error"
     assert side_events[3]["result"]["metric_observations"]["failed_stage"] == "metrics"
-    assert side_events[3]["result"]["metric_observations"][
-        "stage_status_path"
-    ].endswith(".stages.json")
+    assert side_events[3]["result"]["metric_observations"]["stage_status_path"].endswith(".stages.json")
     assert side_events[3]["result"]["metric_observations"]["worker_return_code"] == 2
     assert wait_event["wait_kind"] == "shared_stock_fit"
     assert wait_event["wait_elapsed_seconds"] == 12.0
@@ -2337,24 +2129,13 @@ def test_hourly_candidate_report_shows_task_metrics_and_disposition(tmp_path):
     assert payload["quality_message"] == proposal["quality_message"]
 
 
-def test_drain_runs_ts_tasks_for_ts_patch_and_keeps_toy_delta_zero(
-    tmp_path, monkeypatch
-):
+def test_drain_runs_ts_tasks_for_ts_patch_and_keeps_toy_delta_zero(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue
     from fedotllm.agents.evolve.controller.quality_queue import enqueue_quality_job
     from fedotllm.agents.evolve.types import Decision, PatchCandidate
 
     source = tmp_path / "FEDOT"
-    (
-        source
-        / "fedot"
-        / "core"
-        / "operations"
-        / "evaluation"
-        / "operation_implementations"
-        / "models"
-        / "ts_implementations"
-    ).mkdir(parents=True)
+    (source / "fedot" / "core" / "operations" / "evaluation" / "operation_implementations" / "models" / "ts_implementations").mkdir(parents=True)
     target = (
         source
         / "fedot"
@@ -2372,7 +2153,13 @@ def test_drain_runs_ts_tasks_for_ts_patch_and_keeps_toy_delta_zero(
     enqueue_quality_job(
         workspace,
         candidate=PatchCandidate(candidate_id="ar-toy-zero", file_path=rel),
-        patch_text=(f"--- a/{rel}\n+++ b/{rel}\n@@\n-value = 1\n+value = 2\n"),
+        patch_text=(
+            f"--- a/{rel}\n"
+            f"+++ b/{rel}\n"
+            "@@\n"
+            "-value = 1\n"
+            "+value = 2\n"
+        ),
         hint="hunt_enqueue_no_toy_veto",
         priority="normal",
         probe_status="no_change",
@@ -2397,19 +2184,13 @@ def test_drain_runs_ts_tasks_for_ts_patch_and_keeps_toy_delta_zero(
     payload = drain_quality_queue(source, workspace)
     assert payload["jobs"][0]["keep"] is True
     assert "Принимаем" in payload["jobs"][0]["quality_message"]
-    assert payload["jobs"][0]["task_ids"] == list(
-        _task_ids(load_quality_registry(), "ts_forecasting")
-    )
+    assert payload["jobs"][0]["task_ids"] == list(_task_ids(load_quality_registry(), "ts_forecasting"))
     assert seen == [("patch", _task_ids(load_quality_registry(), "ts_forecasting"))]
-    job = json.loads(
-        (workspace / "quality_queue" / "ar-toy-zero.json").read_text(encoding="utf-8")
-    )
+    job = json.loads((workspace / "quality_queue" / "ar-toy-zero.json").read_text(encoding="utf-8"))
     assert job["status"] == "keep"
     assert job["probe_status"] == "no_change"
     assert "quality_message" in job
-    disposition = next(
-        event for event in journal_events if event["event"] == "quality_disposition"
-    )
+    disposition = next(event for event in journal_events if event["event"] == "quality_disposition")
     assert disposition["status"] == "keep"
     assert disposition["task_ids"] == job["task_ids"]
     assert "Принимаем" in disposition["quality_message"]
@@ -2467,10 +2248,7 @@ def test_old_skipped_entry_is_rechecked_on_its_required_datasets(tmp_path, monke
     assert measured_task_ids == list(required_ts_ids)
     assert payload["jobs"][0]["status"] == "drop"
     assert payload["jobs"][0]["reason"] == "no_quality_gain"
-    assert (
-        sum(event.get("event") == "quality_disposition" for event in journal_events)
-        == 1
-    )
+    assert sum(event.get("event") == "quality_disposition" for event in journal_events) == 1
 
     resumed = drain_quality_queue(
         source,
@@ -2478,10 +2256,7 @@ def test_old_skipped_entry_is_rechecked_on_its_required_datasets(tmp_path, monke
         task_ids=_task_ids(load_quality_registry(), "classification"),
     )
     assert resumed["jobs"] == []
-    assert (
-        sum(event.get("event") == "quality_disposition" for event in journal_events)
-        == 1
-    )
+    assert sum(event.get("event") == "quality_disposition" for event in journal_events) == 1
 
 
 def test_drain_picks_up_jobs_enqueued_after_start(tmp_path, monkeypatch):
@@ -2506,9 +2281,7 @@ def test_drain_picks_up_jobs_enqueued_after_start(tmp_path, monkeypatch):
         if experiment.name == "first-job":
             enqueue_quality_job(
                 workspace,
-                candidate=PatchCandidate(
-                    candidate_id="late-job", file_path="fedot/x.py"
-                ),
+                candidate=PatchCandidate(candidate_id="late-job", file_path="fedot/x.py"),
                 patch_text=patch,
                 hint="arrived after drain started",
                 priority="normal",
@@ -2528,9 +2301,7 @@ def test_drain_picks_up_jobs_enqueued_after_start(tmp_path, monkeypatch):
     assert all(job["keep"] for job in payload["jobs"])
 
 
-def test_drain_evaluates_multiple_proposals_concurrently_with_shared_budget(
-    tmp_path, monkeypatch
-):
+def test_drain_evaluates_multiple_proposals_concurrently_with_shared_budget(tmp_path, monkeypatch):
     import threading
 
     from fedotllm.agents.evolve.controller.quality_executor import (
@@ -2578,17 +2349,8 @@ def test_drain_evaluates_multiple_proposals_concurrently_with_shared_budget(
                 events.append(("running", candidate_id))
         original_write_status(job_path, status, extra)
 
-    def fake_measure(
-        _source,
-        _experiment,
-        *,
-        candidate=None,
-        task_ids=None,
-        n_jobs=None,
-        cpu_quota=None,
-        pair_scheduler=None,
-        **_kwargs,
-    ):
+    def fake_measure(_source, _experiment, *, candidate=None, task_ids=None,
+                     n_jobs=None, cpu_quota=None, pair_scheduler=None, **_kwargs):
         assert n_jobs == 4
         assert cpu_quota == 8
         assert pair_scheduler.max_pairs == 2
@@ -2599,8 +2361,7 @@ def test_drain_evaluates_multiple_proposals_concurrently_with_shared_budget(
         return Decision(True, "quality_improved", 0.1, stage="quality")
 
     monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.quality_executor.write_job_status",
-        fake_status,
+        "fedotllm.agents.evolve.controller.quality_executor.write_job_status", fake_status
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.quality_executor.measure_fedot_quality",
@@ -2619,14 +2380,9 @@ def test_drain_evaluates_multiple_proposals_concurrently_with_shared_budget(
         ("patch", "candidate-b", ("openml-31-credit-g",)),
     }
     assert len(scheduler_ids) == 1
-    assert [job["candidate_id"] for job in result["jobs"]] == [
-        "candidate-a",
-        "candidate-b",
-    ]
+    assert [job["candidate_id"] for job in result["jobs"]] == ["candidate-a", "candidate-b"]
     scheduler_event = next(
-        event
-        for event in journal_events
-        if event["event"] == "quality_scheduler_batch_started"
+        event for event in journal_events if event["event"] == "quality_scheduler_batch_started"
     )
     assert scheduler_event["parallel_proposals"] == 2
     assert scheduler_event["dataset_pair_slots"] == 2
@@ -2640,10 +2396,7 @@ def test_drain_evaluates_multiple_proposals_concurrently_with_shared_budget(
     assert all(event["cpu_quota"] == 8 for event in candidate_events.values())
     assert all(event["n_jobs_per_side"] == 4 for event in candidate_events.values())
     assert all(event["dataset_pair_slots"] == 2 for event in candidate_events.values())
-    assert all(
-        event["resource_budget_scope"] == "campaign-shared"
-        for event in candidate_events.values()
-    )
+    assert all(event["resource_budget_scope"] == "campaign-shared" for event in candidate_events.values())
 
 
 def test_drain_marks_executor_crash_failed_not_running(tmp_path, monkeypatch):
@@ -2663,6 +2416,7 @@ def test_drain_marks_executor_crash_failed_not_running(tmp_path, monkeypatch):
         priority="normal",
     )
 
+
     def boom(*_args, **_kwargs):
         raise RuntimeError("fedot worker died")
 
@@ -2676,9 +2430,7 @@ def test_drain_marks_executor_crash_failed_not_running(tmp_path, monkeypatch):
     )
 
     payload = drain_quality_queue(source, workspace, task_ids=list_quality_task_ids())
-    job = json.loads(
-        (workspace / "quality_queue" / "crash-job.json").read_text(encoding="utf-8")
-    )
+    job = json.loads((workspace / "quality_queue" / "crash-job.json").read_text(encoding="utf-8"))
     assert job["status"] == "failed"
     assert job["status"] != "running"
     assert "не завершена" in job["quality_message"]
@@ -2757,15 +2509,15 @@ def test_quality_resume_recovers_finished_sides_and_interrupted_attempt(tmp_path
             "side": "stock",
             "attempt": 1,
             "registry_identity": "registry-v1",
-            "result": {
-                "status": "ok",
-                "score": 0.61,
-                "seed": 42,
-                "cmd": "python worker.py",
-                "metric_observations": {
-                    "metric_valid": True,
-                    "worker_log_path": "/tmp/beer-stock.log",
-                },
+                "result": {
+                    "status": "ok",
+                    "score": 0.61,
+                    "seed": 42,
+                    "cmd": "python worker.py",
+                    "metric_observations": {
+                        "metric_valid": True,
+                        "worker_log_path": "/tmp/beer-stock.log",
+                    },
             },
         },
         {
@@ -2818,9 +2570,7 @@ def test_enqueue_freezes_revision_and_never_overwrites_changed_patch(tmp_path):
 
     workspace = tmp_path / "campaign"
     candidate = PatchCandidate("proposal-1", file_path="fedot/model.py")
-    first_patch = (
-        "--- a/fedot/model.py\n+++ b/fedot/model.py\n@@\n-value = 1\n+value = 2\n"
-    )
+    first_patch = "--- a/fedot/model.py\n+++ b/fedot/model.py\n@@\n-value = 1\n+value = 2\n"
     first_path = enqueue_quality_job(
         workspace,
         candidate=candidate,
@@ -2832,17 +2582,14 @@ def test_enqueue_freezes_revision_and_never_overwrites_changed_patch(tmp_path):
     frozen = json.loads(first_path.read_text(encoding="utf-8"))
     write_job_status(first_path, "drop", {"reason": "measured"})
 
-    assert (
-        enqueue_quality_job(
-            workspace,
-            candidate=candidate,
-            patch_text=first_patch,
-            hint="repeated enqueue",
-            priority="low",
-            hypothesis={"claim": "Different text must not rewrite a frozen revision"},
-        )
-        == first_path
-    )
+    assert enqueue_quality_job(
+        workspace,
+        candidate=candidate,
+        patch_text=first_patch,
+        hint="repeated enqueue",
+        priority="low",
+        hypothesis={"claim": "Different text must not rewrite a frozen revision"},
+    ) == first_path
     assert json.loads(first_path.read_text(encoding="utf-8"))["status"] == "drop"
 
     second_path = enqueue_quality_job(
@@ -2861,10 +2608,7 @@ def test_enqueue_freezes_revision_and_never_overwrites_changed_patch(tmp_path):
     assert revised["proposal_id"] == "proposal-1"
     assert revised["quality_scope_frozen"] is True
     assert revised["registry_identity"]
-    assert (
-        json.loads(first_path.read_text(encoding="utf-8"))["patch_sha256"]
-        == frozen["patch_sha256"]
-    )
+    assert json.loads(first_path.read_text(encoding="utf-8"))["patch_sha256"] == frozen["patch_sha256"]
 
 
 def test_quality_pair_reuses_finished_sides_after_restart(monkeypatch):
@@ -2969,48 +2713,33 @@ def test_quality_pair_never_retries_timeout_with_transient_marker(monkeypatch):
     assert result["patched_result"].score == 0.75
 
 
-def test_quality_resume_reuses_finished_timeout_and_runs_opposite_side(
-    tmp_path, monkeypatch
-):
+def test_quality_resume_reuses_finished_timeout_and_runs_opposite_side(tmp_path, monkeypatch):
     import json
     from pathlib import Path
 
     import fedotllm.agents.evolve.evaluation.fedot_quality as quality
     from fedotllm.agents.evolve.controller.quality_executor import _recover_side_state
-    from fedotllm.agents.evolve.evaluation.quality_registry import (
-        get_dataset,
-        load_quality_registry,
-    )
+    from fedotllm.agents.evolve.evaluation.quality_registry import get_dataset, load_quality_registry
     from fedotllm.agents.evolve.types import ScoreResult
 
     task_id = "fedot-ts-beer"
     journal = tmp_path / "quality_jobs.jsonl"
-    journal.write_text(
-        json.dumps(
-            {
-                "event": "quality_task_side_started",
-                "candidate": "candidate-timeout",
-                "task_id": task_id,
-                "side": "stock",
-                "attempt": 1,
-                "registry_identity": load_quality_registry().identity,
-            }
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "event": "quality_task_side_finished",
-                "candidate": "candidate-timeout",
-                "task_id": task_id,
-                "side": "stock",
-                "attempt": 1,
-                "registry_identity": load_quality_registry().identity,
-                "result": {"status": "timeout", "detail": "timeout after 3600s"},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    journal.write_text(json.dumps({
+        "event": "quality_task_side_started",
+        "candidate": "candidate-timeout",
+        "task_id": task_id,
+        "side": "stock",
+        "attempt": 1,
+        "registry_identity": load_quality_registry().identity,
+    }) + "\n" + json.dumps({
+        "event": "quality_task_side_finished",
+        "candidate": "candidate-timeout",
+        "task_id": task_id,
+        "side": "stock",
+        "attempt": 1,
+        "registry_identity": load_quality_registry().identity,
+        "result": {"status": "timeout", "detail": "timeout after 3600s"},
+    }) + "\n", encoding="utf-8")
     prior_results, attempts = _recover_side_state(
         journal,
         candidate_id="candidate-timeout",
@@ -3145,9 +2874,7 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.evaluation import fedot_quality, quality_registry
     from fedotllm.agents.evolve.execution import checkout
 
-    monkeypatch.setattr(
-        fedot_quality, "bind_stock_cache", lambda _path: tmp_path / "cache"
-    )
+    monkeypatch.setattr(fedot_quality, "bind_stock_cache", lambda _path: tmp_path / "cache")
     monkeypatch.setattr(
         fedot_quality,
         "run_quality_stock_jobs",

@@ -91,21 +91,13 @@ def _visible_case(case: MicroCase, source: Path) -> tuple[str, int]:
 
     target = source / case.prompt.file_path
     if not target.is_file():
-        raise FileNotFoundError(
-            f"allowed source file is missing: {case.prompt.file_path}"
-        )
+        raise FileNotFoundError(f"allowed source file is missing: {case.prompt.file_path}")
     text = target.read_text(encoding="utf-8", errors="replace")
     source_context = build_fedot_context(source, case.prompt.file_path)
-    library_context = (
-        source_context.render(max_chars=6_000) if source_context is not None else ""
-    )
+    library_context = source_context.render(max_chars=6_000) if source_context is not None else ""
     return (
         model_facing_context(case)
-        + (
-            "\n\nFEDOT architecture context:\n" + library_context
-            if library_context
-            else ""
-        )
+        + ("\n\nFEDOT architecture context:\n" + library_context if library_context else "")
         + "\n\nComplete allowed source file:\n"
         + f"--- {case.prompt.file_path} ---\n"
         + text,
@@ -247,9 +239,7 @@ def _selected_cases(case_ids: Iterable[str] | None) -> tuple[MicroCase, ...]:
     cases = micro_cases()
     if case_ids is None:
         return cases
-    requested = tuple(
-        dict.fromkeys(str(value).strip() for value in case_ids if str(value).strip())
-    )
+    requested = tuple(dict.fromkeys(str(value).strip() for value in case_ids if str(value).strip()))
     by_id = {case.prompt.case_id: case for case in cases}
     unknown = [case_id for case_id in requested if case_id not in by_id]
     if unknown:
@@ -454,7 +444,9 @@ def run_micro_agent_benchmark(
                     for stage in sorted(calls.attempted)
                 },
             },
-            "provider_requests": max(0, _usage_requests(inference) - requests_before),
+            "provider_requests": max(
+                0, _usage_requests(inference) - requests_before
+            ),
         },
         "cases": rows,
     }

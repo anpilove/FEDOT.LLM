@@ -185,9 +185,7 @@ def _add_llm_budget(parser: argparse.ArgumentParser, *, max_queries: int) -> Non
     parser.add_argument("--llm-reserve-fixer-queries", type=int, default=12)
 
 
-def _add_quality_args(
-    parser: argparse.ArgumentParser, *, workspace: str, tasks_help: str
-) -> None:
+def _add_quality_args(parser: argparse.ArgumentParser, *, workspace: str, tasks_help: str) -> None:
     _add_fedot(parser)
     parser.add_argument("--tasks", default="", help=tasks_help)
     parser.add_argument("--n-jobs", type=int, default=None)
@@ -222,62 +220,44 @@ def _add_campaign_args(parser: argparse.ArgumentParser, *, max_hypotheses: int) 
     parser.add_argument("--max-edits", type=int, default=4)
     parser.add_argument("--max-actions", type=int, default=30)
     parser.add_argument(
-        "--max-measurement-pairs",
-        type=int,
-        default=160,
+        "--max-measurement-pairs", type=int, default=160,
         help="Hard cap on stock/patched benchmark pairs; -1 disables this cap",
     )
     parser.add_argument(
-        "--reserve-final-measurement-pairs",
-        type=int,
-        default=54,
+        "--reserve-final-measurement-pairs", type=int, default=54,
         help="Pairs reserved for the frozen FINAL batch",
     )
     parser.add_argument(
-        "--max-measurement-seconds",
-        type=float,
-        default=None,
+        "--max-measurement-seconds", type=float, default=None,
         help="Hard wall-clock ceiling for paired measurements; omitted means no time ceiling",
     )
     parser.add_argument(
-        "--reserve-final-measurement-seconds",
-        type=float,
-        default=0.0,
+        "--reserve-final-measurement-seconds", type=float, default=0.0,
         help="Wall-clock time reserved for the frozen FINAL batch",
     )
     parser.add_argument(
-        "--transfer-screen-sources",
-        type=int,
-        default=3,
+        "--transfer-screen-sources", type=int, default=3,
         help="Pre-registered dataset sources in the cheap transfer screen",
     )
     _add_llm_budget(parser, max_queries=30)
     parser.add_argument(
-        "--site-cooldown-campaigns",
-        type=int,
-        default=1,
+        "--site-cooldown-campaigns", type=int, default=1,
         help="Temporarily skip exact sites from this many completed campaigns",
     )
     parser.add_argument(
-        "--lift-tasks",
-        default="",
+        "--lift-tasks", default="",
         help="Comma-separated frozen DEV workloads allowed to establish improvement",
     )
     parser.add_argument(
-        "--protect-tasks",
-        default="",
+        "--protect-tasks", default="",
         help="Comma-separated frozen workloads that must not regress; default is the full suite",
     )
     parser.add_argument(
-        "--coverage-tasks",
-        type=int,
-        default=None,
+        "--coverage-tasks", type=int, default=None,
         help="Collect execution evidence for the first N selected workloads (default: 12 diverse workloads)",
     )
     parser.add_argument(
-        "--findings",
-        type=Path,
-        default=default_findings_path(),
+        "--findings", type=Path, default=default_findings_path(),
         help="Append-only cross-run findings dataset",
     )
 
@@ -327,46 +307,28 @@ def _build_parser() -> argparse.ArgumentParser:
             "to classification/regression/forecasting or all tasks for shared/unknown changes"
         ),
     )
-    p.add_argument(
-        "--continue-on-error",
-        action="store_true",
-        help="Continue other improvements after exhausted dataset retries",
-    )
-    p.add_argument(
-        "--max-pair-slots",
-        type=int,
-        default=7,
-        help="Maximum concurrent dataset pairs (default 7; explicit diagnostic cap up to 8)",
-    )
+    p.add_argument("--continue-on-error", action="store_true",
+                   help="Continue other improvements after exhausted dataset retries")
+    p.add_argument("--max-pair-slots", type=int, default=7,
+                   help="Maximum concurrent dataset pairs (default 7; explicit diagnostic cap up to 8)")
 
-    p = sub.add_parser(
-        "quality-watch",
-        help="Serve a durable quality campaign with bounded child lifetimes",
-    )
+    p = sub.add_parser("quality-watch", help="Serve a durable quality campaign with bounded child lifetimes")
     _add_fedot(p)
     _add_workspace(p, "/tmp/evolve-agent-quality-service")
     from fedotllm.agents.evolve.controller.__main__ import add_service_arguments
-
     add_service_arguments(p)
 
-    p = sub.add_parser(
-        "metric-finalize",
-        help="Resume only an already frozen metric FINAL batch; no LLM",
-    )
+    p = sub.add_parser("metric-finalize", help="Resume only an already frozen metric FINAL batch; no LLM")
     _add_fedot(p)
     p.add_argument("--metric-study", type=Path, required=True)
 
-    p = sub.add_parser(
-        "doctor", help="Validate frozen FEDOT, datasets, runner and evaluator"
-    )
+    p = sub.add_parser("doctor", help="Validate frozen FEDOT, datasets, runner and evaluator")
     _add_fedot(p)
     _add_workspace(p, "/tmp/evolve-agent-doctor")
     p.add_argument("--task", default="catboost")
     p.add_argument("--skip-evaluator", action="store_true")
 
-    p = sub.add_parser(
-        "benchmark", help="Run a deterministic Evolve component benchmark"
-    )
+    p = sub.add_parser("benchmark", help="Run a deterministic Evolve component benchmark")
     p.add_argument(
         "--component",
         required=True,
@@ -391,9 +353,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_fedot(p)
     _add_workspace(p, "/tmp/evolve-agent-benchmark")
     _add_presets(p)
-    p.add_argument(
-        "--architecture", choices=("monolith", "staged", "committee"), default="staged"
-    )
+    p.add_argument("--architecture", choices=("monolith", "staged", "committee"), default="staged")
     p.add_argument("--cases", default="", help="Comma-separated private micro case ids")
     p.add_argument("--committee-size", type=int, default=3)
     _add_llm_budget(p, max_queries=40)
@@ -407,9 +367,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_fedot(p)
     _add_presets(p)
 
-    p = sub.add_parser(
-        "run", help="Discover a site, patch, KEEP/DROP on the quality suite"
-    )
+    p = sub.add_parser("run", help="Discover a site, patch, KEEP/DROP on the quality suite")
     _add_workspace(p, "/tmp/evolve-agent-run")
     _add_campaign_args(p, max_hypotheses=5)
 
@@ -426,9 +384,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace", type=Path, required=True)
     _add_campaign_args(p, max_hypotheses=1)
 
-    p = sub.add_parser(
-        "findings", help="Summarize or import the cross-run findings dataset"
-    )
+    p = sub.add_parser("findings", help="Summarize or import the cross-run findings dataset")
     p.add_argument("--dataset", type=Path, default=default_findings_path())
     p.add_argument(
         "--import-workspace",
@@ -438,14 +394,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Import a completed or interrupted campaign workspace (repeatable)",
     )
 
-    p = sub.add_parser(
-        "scoreboard", help="DEV getting_better vs FINAL getting_better_final"
-    )
+    p = sub.add_parser("scoreboard", help="DEV getting_better vs FINAL getting_better_final")
     _add_workspace(p, "/tmp/evolve-agent-run")
 
-    p = sub.add_parser(
-        "replay", help="Dump cmd/log_tail/diff from journal. Harness-only."
-    )
+    p = sub.add_parser("replay", help="Dump cmd/log_tail/diff from journal. Harness-only.")
     _add_workspace(p, "/tmp/evolve-agent-run")
     p.add_argument("--candidate", default=None)
 
@@ -455,9 +407,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seeds", default="1,2,3,4,5,6,7,8,9,10")
     p.add_argument("--tasks", default="catboost,lgbm,rf")
 
-    p = sub.add_parser(
-        "recall", help="Phase 1: offline file Recall@k. LLM pick optional."
-    )
+    p = sub.add_parser("recall", help="Phase 1: offline file Recall@k. LLM pick optional.")
     _add_fedot(p)
     _add_presets(p)
     _add_workspace(p, "/tmp/evolve-agent-recall")
@@ -469,19 +419,13 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_workspace(p, "/tmp/evolve-agent-oracle")
     p.add_argument("--split", default="dev", choices=("dev", "test"))
     p.add_argument("--limit", type=int, default=5)
-    p.add_argument(
-        "--replay-tests",
-        action="store_true",
-        help="Gate saved patches with FEDOT unit tests",
-    )
+    p.add_argument("--replay-tests", action="store_true", help="Gate saved patches with FEDOT unit tests")
     p.add_argument(
         "--replay-holdout",
         action="store_true",
         help="DEV metric on saved patches. Not the e2e scoreboard.",
     )
-    p.add_argument(
-        "--files", default="", help="Comma-separated FEDOT paths; overrides split/limit"
-    )
+    p.add_argument("--files", default="", help="Comma-separated FEDOT paths; overrides split/limit")
     return parser
 
 
@@ -599,9 +543,7 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
     return 0 if decision.keep else 1
 
 
-def _cmd_quality_drain(
-    args: argparse.Namespace, parser: argparse.ArgumentParser
-) -> int:
+def _cmd_quality_drain(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue
     from fedotllm.agents.evolve.evaluation.fedot_quality import bind_stock_cache
     from fedotllm.agents.evolve.evaluation.quality_registry import (
@@ -639,25 +581,20 @@ def _cmd_quality_drain(
         continue_on_error=getattr(args, "continue_on_error", False),
     )
     _print_json(payload)
-    failed = any(job.get("status") not in {"keep", "drop"} for job in payload["jobs"])
+    failed = any(
+        job.get("status") not in {"keep", "drop"}
+        for job in payload["jobs"]
+    )
     return EXIT_INFRASTRUCTURE if not payload["stock_ok"] or failed else 0
 
 
-def _cmd_quality_watch(
-    args: argparse.Namespace, parser: argparse.ArgumentParser
-) -> int:
+def _cmd_quality_watch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from fedotllm.agents.evolve.controller.__main__ import serve
-
     return serve(args, parser)
 
 
-def _cmd_metric_finalize(
-    args: argparse.Namespace, parser: argparse.ArgumentParser
-) -> int:
-    from fedotllm.agents.evolve.controller.metric_study import (
-        BATCH_SIZE,
-        finalize_batch,
-    )
+def _cmd_metric_finalize(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from fedotllm.agents.evolve.controller.metric_study import BATCH_SIZE, finalize_batch
     from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
 
     if not (args.metric_study / "final-batch.json").exists():
@@ -667,9 +604,7 @@ def _cmd_metric_finalize(
     return 0 if payload["metric_confirmed_count"] == BATCH_SIZE else 2
 
 
-def _cmd_eval_contract(
-    args: argparse.Namespace, parser: argparse.ArgumentParser
-) -> int:
+def _cmd_eval_contract(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from fedotllm.agents.evolve.controller.campaign import eval_contract
 
     payload = eval_contract()
@@ -720,9 +655,7 @@ def _cmd_benchmark(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         fixer_reserve = (
             0
             if unlimited
-            else _bounded_fixer_reserve(
-                args.llm_max_queries, args.llm_reserve_fixer_queries
-            )
+            else _bounded_fixer_reserve(args.llm_max_queries, args.llm_reserve_fixer_queries)
         )
         budget_context = EvolveRunBudget(
             clients,
@@ -843,9 +776,7 @@ def _cmd_repair(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     return 0
 
 
-def _validate_campaign_args(
-    args: argparse.Namespace, parser: argparse.ArgumentParser
-) -> None:
+def _validate_campaign_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     if args.metric_only and args.metric_study is None:
         parser.error("--metric-only requires --metric-study")
     if args.max_measurement_pairs < -1:
@@ -860,16 +791,12 @@ def _validate_campaign_args(
         args.max_measurement_seconds is not None
         and args.reserve_final_measurement_seconds > args.max_measurement_seconds
     ):
-        parser.error(
-            "--reserve-final-measurement-seconds exceeds --max-measurement-seconds"
-        )
+        parser.error("--reserve-final-measurement-seconds exceeds --max-measurement-seconds")
     if (
         args.max_measurement_pairs >= 0
         and args.reserve_final_measurement_pairs > args.max_measurement_pairs
     ):
-        parser.error(
-            "--reserve-final-measurement-pairs exceeds --max-measurement-pairs"
-        )
+        parser.error("--reserve-final-measurement-pairs exceeds --max-measurement-pairs")
     if args.transfer_screen_sources < 2:
         parser.error("--transfer-screen-sources must be at least 2")
     if args.coverage_tasks is not None and args.coverage_tasks < 1:
@@ -882,10 +809,7 @@ def _resume_branch(
     """Recover the candidate or Scout lead saved by an interrupted campaign."""
     from fedotllm.agents.evolve.execution.checkout import source_fingerprint
     from fedotllm.agents.evolve.protocol import acceptance_protocol_fingerprint
-    from fedotllm.agents.evolve.storage.checkpoint import (
-        checkpoint_leads,
-        load_checkpoint,
-    )
+    from fedotllm.agents.evolve.storage.checkpoint import checkpoint_leads, load_checkpoint
     from fedotllm.agents.evolve.storage.journal import resolve_run_workspace
     from fedotllm.agents.evolve.storage.replay import (
         load_resume_branch,
@@ -927,13 +851,9 @@ def _resume_branch(
             patch_hash=branch["patch_hash"],
             evaluation_protocol_hash=acceptance_protocol_fingerprint(),
         )
-    feedback = (
-        feedback
-        or str(branch.get("resume_diagnostic") or "")
-        or (
-            "Resume the exact saved source candidate after interruption and "
-            "complete its independent probe, test, and metric checks."
-        )
+    feedback = feedback or str(branch.get("resume_diagnostic") or "") or (
+        "Resume the exact saved source candidate after interruption and "
+        "complete its independent probe, test, and metric checks."
     )
     return branch, feedback
 
@@ -956,9 +876,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
     scout, verifier, fixer = _stage_inferences(args.presets)
     if scout is None or fixer is None:
-        print(
-            "FEDOTLLM_LLM_API_KEY is not set; propose_patch will no-op", file=sys.stderr
-        )
+        print("FEDOTLLM_LLM_API_KEY is not set; propose_patch will no-op", file=sys.stderr)
     checkout = resolve_fedot_src()
     resume_branch: dict | None = None
     resume_feedback = ""
@@ -1016,21 +934,15 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             lift_ids=lift_ids,
             protect_ids=protect_ids,
             resume_lead=resume_branch["lead"] if resume_branch else None,
-            resume_verification=resume_branch["verification"]
-            if resume_branch
-            else None,
+            resume_verification=resume_branch["verification"] if resume_branch else None,
             resume_candidate=resume_branch.get("candidate") if resume_branch else None,
             resume_feedback=resume_feedback,
             run_id=run_id,
             config=EvolveAgentConfig(
                 metric_only=args.metric_only,
-                metric_study_path=str(args.metric_study.resolve())
-                if args.metric_study
-                else "",
+                metric_study_path=str(args.metric_study.resolve()) if args.metric_study else "",
                 max_measurement_pairs=(
-                    None
-                    if args.max_measurement_pairs < 0
-                    else args.max_measurement_pairs
+                    None if args.max_measurement_pairs < 0 else args.max_measurement_pairs
                 ),
                 reserve_final_measurement_pairs=args.reserve_final_measurement_pairs,
                 max_measurement_seconds=args.max_measurement_seconds,

@@ -44,10 +44,7 @@ from fedotllm.agents.evolve.execution.checkout import (
     source_fingerprint,
 )
 from fedotllm.agents.evolve.execution.process import interpreter_identity
-from fedotllm.agents.evolve.execution.storage_guard import (
-    StorageCapacityError,
-    storage_failure_text,
-)
+from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError, storage_failure_text
 from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.storage.journal import (
     JournalCorruptionError,
@@ -55,16 +52,8 @@ from fedotllm.agents.evolve.storage.journal import (
     repair_incomplete_jsonl_tail,
     write_json_atomic,
 )
-from fedotllm.agents.evolve.storage.quality_events import (
-    read_quality_events,
-    save_quality_event,
-)
-from fedotllm.agents.evolve.types import (
-    Decision,
-    PatchCandidate,
-    PatchEdit,
-    ScoreResult,
-)
+from fedotllm.agents.evolve.storage.quality_events import read_quality_events, save_quality_event
+from fedotllm.agents.evolve.types import Decision, PatchCandidate, PatchEdit, ScoreResult
 
 
 class QualityQueueAlreadyRunning(RuntimeError):
@@ -95,11 +84,7 @@ def _controller_stack_trace(workspace: Path):
 
     def warn(error):
         try:
-            print(
-                f"controller stack diagnostic warning: {error}",
-                file=sys.stderr,
-                flush=True,
-            )
+            print(f"controller stack diagnostic warning: {error}", file=sys.stderr, flush=True)
         except Exception:
             pass
 
@@ -112,9 +97,7 @@ def _controller_stack_trace(workspace: Path):
     if not _CONTROLLER_TRACE_RESERVATION.acquire(blocking=False):
         metadata["state"] = "skipped_process_sampler_busy"
         save_metadata()
-        warn(
-            "another drain in this process already owns the stack sampler; capture skipped"
-        )
+        warn("another drain in this process already owns the stack sampler; capture skipped")
         yield
         return
 
@@ -122,17 +105,11 @@ def _controller_stack_trace(workspace: Path):
     trace_status = {}
     try:
         try:
-            interval = float(
-                os.environ.get("EVOLVE_QUALITY_TRACE_INTERVAL_SECONDS", "15")
-            )
+            interval = float(os.environ.get("EVOLVE_QUALITY_TRACE_INTERVAL_SECONDS", "15"))
             if not math.isfinite(interval) or interval <= 0:
-                raise ValueError(
-                    "controller trace interval must be finite and positive"
-                )
+                raise ValueError("controller trace interval must be finite and positive")
             sampler_context = periodic_stack_samples(
-                stack_path,
-                interval_seconds=interval,
-                scope="controller_process_threads",
+                stack_path, interval_seconds=interval, scope="controller_process_threads",
             )
             trace_status = sampler_context.__enter__()
             metadata.update(trace_status)
@@ -173,12 +150,8 @@ def _recover_durable_worker_result(
         paths = event.get("worker_paths")
         if not isinstance(paths, dict):
             return None
-        recorded_result = event.get("worker_result_path") or paths.get(
-            "worker_result_path"
-        )
-        recorded_stage = event.get("stage_status_path") or paths.get(
-            "stage_status_path"
-        )
+        recorded_result = event.get("worker_result_path") or paths.get("worker_result_path")
+        recorded_stage = event.get("stage_status_path") or paths.get("stage_status_path")
         if not recorded_result or not recorded_stage:
             return None
         result_path = Path(recorded_result).expanduser()
@@ -198,28 +171,22 @@ def _recover_durable_worker_result(
             or not evaluation_identity
             or not isinstance(expected_spec, dict)
             or not {
-                "n_jobs",
-                "timeout_seconds",
-                "fedot_search_budget_seconds",
+                "n_jobs", "timeout_seconds", "fedot_search_budget_seconds"
             }.issubset(expected_spec)
         ):
             return None
         invocation_id = event.get("worker_invocation_id")
         if invocation_id is not None or paths.get("worker_invocation_id") is not None:
-            if (
-                not isinstance(invocation_id, str)
-                or len(invocation_id) != 32
-                or any(c not in "0123456789abcdef" for c in invocation_id)
-                or paths.get("worker_invocation_id") != invocation_id
-                or result_path.parent.name != invocation_id
-            ):
+            if (not isinstance(invocation_id, str) or len(invocation_id) != 32
+                    or any(c not in "0123456789abcdef" for c in invocation_id)
+                    or paths.get("worker_invocation_id") != invocation_id
+                    or result_path.parent.name != invocation_id):
                 return None
             # The journal is the source of truth after controller restart; the
             # current environment's artifact root belongs to another invocation.
             expected_paths = paths
-            if str(result_path) != paths.get("worker_result_path") or str(
-                stage_path
-            ) != paths.get("stage_status_path"):
+            if (str(result_path) != paths.get("worker_result_path")
+                    or str(stage_path) != paths.get("stage_status_path")):
                 return None
         else:
             # Historical events predate physical invocation nonces.
@@ -231,19 +198,14 @@ def _recover_durable_worker_result(
             or stage_path.is_symlink()
             or result_path.parent.is_symlink()
             or stage_path.parent.is_symlink()
-            or result_path.resolve()
-            != Path(expected_paths["worker_result_path"]).resolve()
-            or stage_path.resolve()
-            != Path(expected_paths["stage_status_path"]).resolve()
+            or result_path.resolve() != Path(expected_paths["worker_result_path"]).resolve()
+            or stage_path.resolve() != Path(expected_paths["stage_status_path"]).resolve()
             or stage_path.resolve() != result_path.with_suffix(".stages.json").resolve()
         ):
             return None
         timeout_path = result_path.with_suffix(".timeout.json")
         recorded_timeout = paths.get("timeout_manifest_path")
-        if (
-            recorded_timeout
-            and Path(recorded_timeout).expanduser().resolve() != timeout_path.resolve()
-        ):
+        if recorded_timeout and Path(recorded_timeout).expanduser().resolve() != timeout_path.resolve():
             return None
         if (
             timeout_path.is_file()
@@ -272,16 +234,11 @@ def _recover_durable_worker_result(
             }
             if invocation_id is not None:
                 timeout_identity["worker_invocation_id"] = invocation_id
-            if any(
-                timeout_payload.get(key) != value
-                for key, value in timeout_identity.items()
-            ):
+            if any(timeout_payload.get(key) != value for key, value in timeout_identity.items()):
                 return None
             for key in ("worker_result_path", "stage_status_path", "worker_log_path"):
                 expected_path = paths.get(key)
-                if not expected_path or timeout_payload.get(key) != str(
-                    Path(expected_path).expanduser()
-                ):
+                if not expected_path or timeout_payload.get(key) != str(Path(expected_path).expanduser()):
                     return None
             timeout_kind = timeout_payload.get("timeout_kind")
             if (
@@ -302,10 +259,7 @@ def _recover_durable_worker_result(
             ):
                 return None
             side_elapsed, worker_elapsed = (float(value) for value in elapsed_values)
-            if not all(
-                math.isfinite(value) and value >= 0
-                for value in (side_elapsed, worker_elapsed)
-            ):
+            if not all(math.isfinite(value) and value >= 0 for value in (side_elapsed, worker_elapsed)):
                 return None
             observations = {
                 "task_id": task_id,
@@ -335,43 +289,23 @@ def _recover_durable_worker_result(
             stage_observations = timeout_payload.get("stage_observations")
             if isinstance(stage_observations, dict):
                 protected = {
-                    "task_id",
-                    "side",
-                    "attempt",
-                    "attempt_id",
-                    "proposal_id",
-                    "registry_identity",
-                    "evaluation_identity",
-                    "failure_kind",
-                    "metric_outcome",
-                    "metric_valid",
-                    "timeout_kind",
-                    "elapsed_seconds",
-                    "side_elapsed_seconds",
-                    "worker_elapsed_seconds",
-                    "timeout_manifest_path",
-                    "worker_result_path",
-                    "stage_status_path",
-                    "worker_log_path",
-                    "recovered_parent_timeout_manifest",
-                    "worker_invocation_id",
-                    "worker_paths",
+                    "task_id", "side", "attempt", "attempt_id", "proposal_id",
+                    "registry_identity", "evaluation_identity", "failure_kind",
+                    "metric_outcome", "metric_valid", "timeout_kind", "elapsed_seconds",
+                    "side_elapsed_seconds", "worker_elapsed_seconds", "timeout_manifest_path",
+                    "worker_result_path", "stage_status_path", "worker_log_path",
+                    "recovered_parent_timeout_manifest", "worker_invocation_id", "worker_paths",
                 }
-                observations.update(
-                    {
-                        key: value
-                        for key, value in stage_observations.items()
-                        if key not in protected
-                    }
-                )
+                observations.update({
+                    key: value
+                    for key, value in stage_observations.items()
+                    if key not in protected
+                })
             return ScoreResult(
                 task_id=task_id,
                 status="timeout",
                 score=float("nan"),
-                detail=str(
-                    timeout_payload.get("detail")
-                    or f"{timeout_kind} recovered from timeout manifest"
-                ),
+                detail=str(timeout_payload.get("detail") or f"{timeout_kind} recovered from timeout manifest"),
                 duration_s=side_elapsed,
                 env_hash=f"{registry_identity}|{task_id}|{side}|{expected_spec.get('n_jobs', '')}",
                 cmd="",
@@ -385,10 +319,7 @@ def _recover_durable_worker_result(
         if payload.get("task_id") != task_id:
             return None
         for artifact in (payload, stage):
-            if (
-                invocation_id is not None
-                and artifact.get("worker_invocation_id") != invocation_id
-            ):
+            if invocation_id is not None and artifact.get("worker_invocation_id") != invocation_id:
                 return None
             if (
                 artifact.get("proposal_id") != candidate_id
@@ -416,11 +347,7 @@ def _recover_durable_worker_result(
         }
         if any(stage.get(key) != value for key, value in expected_identity.items()):
             return None
-        if (
-            payload.get("stage_status_path")
-            and Path(payload["stage_status_path"]).expanduser().resolve()
-            != stage_path.resolve()
-        ):
+        if payload.get("stage_status_path") and Path(payload["stage_status_path"]).expanduser().resolve() != stage_path.resolve():
             return None
         if payload.get("status") != "ok":
             # The worker publishes its exact terminal failure before the parent
@@ -439,30 +366,22 @@ def _recover_durable_worker_result(
                 env_hash=f"{registry_identity}|{task_id}|{side}|{expected_spec.get('n_jobs', '')}",
                 cmd="",
             )
-            result.metric_observations.update(
-                {
-                    "worker_result_path": str(result_path),
-                    "stage_status_path": str(stage_path),
-                    "worker_log_path": str(paths.get("worker_log_path") or ""),
-                    "recovered_worker_result": True,
-                    "worker_invocation_id": invocation_id,
-                    "worker_paths": dict(paths),
-                }
-            )
+            result.metric_observations.update({
+                "worker_result_path": str(result_path),
+                "stage_status_path": str(stage_path),
+                "worker_log_path": str(paths.get("worker_log_path") or ""),
+                "recovered_worker_result": True,
+                "worker_invocation_id": invocation_id,
+                "worker_paths": dict(paths),
+            })
             return result
         if observations.get("metric_valid") is not True:
             return None
         for key in (
-            "n_jobs",
-            "timeout_seconds",
-            "fedot_search_budget_seconds",
-            "preset",
-            "seed",
+            "n_jobs", "timeout_seconds", "fedot_search_budget_seconds", "preset", "seed",
             "cv_folds",
-            "max_pipeline_fit_time_seconds",
-            "max_pipeline_fit_policy",
-            "max_pipeline_evaluation_time_seconds",
-            "max_pipeline_evaluation_policy",
+            "max_pipeline_fit_time_seconds", "max_pipeline_fit_policy",
+            "max_pipeline_evaluation_time_seconds", "max_pipeline_evaluation_policy",
         ):
             if key in expected_spec and stage.get(key) != expected_spec[key]:
                 return None
@@ -472,16 +391,14 @@ def _recover_durable_worker_result(
             env_hash=f"{registry_identity}|{task_id}|{side}|{expected_spec.get('n_jobs', '')}",
             cmd="",
         )
-        result.metric_observations.update(
-            {
-                "worker_result_path": str(result_path),
-                "stage_status_path": str(stage_path),
-                "worker_log_path": str(paths.get("worker_log_path") or ""),
-                "recovered_worker_result": True,
-                "worker_invocation_id": invocation_id,
-                "worker_paths": dict(paths),
-            }
-        )
+        result.metric_observations.update({
+            "worker_result_path": str(result_path),
+            "stage_status_path": str(stage_path),
+            "worker_log_path": str(paths.get("worker_log_path") or ""),
+            "recovered_worker_result": True,
+            "worker_invocation_id": invocation_id,
+            "worker_paths": dict(paths),
+        })
         return result
     except (OSError, RuntimeError, TypeError, ValueError, OverflowError, KeyError):
         return None
@@ -540,10 +457,7 @@ def _recover_side_state(
         if (
             str(event.get("candidate") or "") != candidate_id
             or str(event.get("registry_identity") or "") != registry_identity
-            or (
-                evaluation_identity is not None
-                and event.get("evaluation_identity") != evaluation_identity
-            )
+            or (evaluation_identity is not None and event.get("evaluation_identity") != evaluation_identity)
         ):
             continue
         task_id = str(event.get("task_id") or "")
@@ -556,16 +470,14 @@ def _recover_side_state(
         attempts[key] = max(attempts.get(key, 0), attempt)
         latest_event[key] = event
         is_active_attempt = phase in {
-            "quality_task_side_started",
-            "quality_task_worker_spawned",
+            "quality_task_side_started", "quality_task_worker_spawned",
             "quality_task_side_waiting_stock_cache",
         }
         latest_phase[key] = "quality_task_side_started" if is_active_attempt else phase
         if is_active_attempt:
             results.pop(key, None)
         if phase not in {
-            "quality_task_side_finished",
-            "quality_task_side_reused",
+            "quality_task_side_finished", "quality_task_side_reused",
             "quality_task_side_interrupted",
         }:
             continue
@@ -581,9 +493,7 @@ def _recover_side_state(
             )
         except (TypeError, ValueError, OverflowError) as exc:
             raw_observations = payload.get("metric_observations")
-            observations = (
-                dict(raw_observations) if isinstance(raw_observations, dict) else {}
-            )
+            observations = dict(raw_observations) if isinstance(raw_observations, dict) else {}
             observations["failure_kind"] = "unverified_metric"
             observations["metric_validation_error"] = str(exc)
             result = ScoreResult(
@@ -599,9 +509,7 @@ def _recover_side_state(
             if isinstance(recorded_paths, dict):
                 result.metric_observations["worker_paths"] = dict(recorded_paths)
                 if recorded_paths.get("worker_invocation_id"):
-                    result.metric_observations["worker_invocation_id"] = recorded_paths[
-                        "worker_invocation_id"
-                    ]
+                    result.metric_observations["worker_invocation_id"] = recorded_paths["worker_invocation_id"]
         results[key] = result
 
     # A process can stop after the durable `started` event but before `finished`.
@@ -627,29 +535,12 @@ def _recover_side_state(
                     **{
                         name: previous[name]
                         for name in (
-                            "candidate",
-                            "candidate_revision_id",
-                            "proposal_id",
-                            "patch_revision",
-                            "task_id",
-                            "side",
-                            "attempt",
-                            "attempt_id",
-                            "registry_identity",
-                            "evaluation_identity",
-                            "n_jobs_per_side",
-                            "cpu_quota",
-                            "dataset_pair_slots",
-                            "resource_budget_scope",
-                            "worker_paths",
-                            "worker_invocation_id",
-                            "worker_spec_path",
-                            "worker_result_path",
-                            "worker_log_path",
-                            "stage_status_path",
-                            "hypothesis",
-                            "quality_scope",
-                            "spec",
+                            "candidate", "candidate_revision_id", "proposal_id", "patch_revision",
+                            "task_id", "side", "attempt", "attempt_id", "registry_identity",
+                            "evaluation_identity", "n_jobs_per_side", "cpu_quota",
+                            "dataset_pair_slots", "resource_budget_scope", "worker_paths", "worker_invocation_id",
+                            "worker_spec_path", "worker_result_path", "worker_log_path",
+                            "stage_status_path", "hypothesis", "quality_scope", "spec",
                         )
                         if name in previous
                     },
@@ -659,8 +550,7 @@ def _recover_side_state(
                         "status": recovered_result.status,
                         "score": (
                             recovered_result.score
-                            if math.isfinite(float(recovered_result.score))
-                            else None
+                            if math.isfinite(float(recovered_result.score)) else None
                         ),
                         "detail": recovered_result.detail,
                         "traceback": recovered_result.traceback,
@@ -669,9 +559,7 @@ def _recover_side_state(
                         "seed": recovered_result.seed,
                         "env_hash": recovered_result.env_hash,
                         "cmd": recovered_result.cmd,
-                        "worker_log_path": recovered_result.metric_observations.get(
-                            "worker_log_path"
-                        ),
+                        "worker_log_path": recovered_result.metric_observations.get("worker_log_path"),
                         "metric_observations": recovered_result.metric_observations,
                         "log_tail": recovered_result.log_tail,
                     },
@@ -696,29 +584,12 @@ def _recover_side_state(
                 **{
                     name: previous[name]
                     for name in (
-                        "candidate",
-                        "candidate_revision_id",
-                        "proposal_id",
-                        "patch_revision",
-                        "task_id",
-                        "side",
-                        "attempt",
-                        "attempt_id",
-                        "registry_identity",
-                        "evaluation_identity",
-                        "n_jobs_per_side",
-                        "cpu_quota",
-                        "dataset_pair_slots",
-                        "resource_budget_scope",
-                        "worker_paths",
-                        "worker_invocation_id",
-                        "worker_spec_path",
-                        "worker_result_path",
-                        "worker_log_path",
-                        "stage_status_path",
-                        "hypothesis",
-                        "quality_scope",
-                        "spec",
+                        "candidate", "candidate_revision_id", "proposal_id", "patch_revision",
+                        "task_id", "side", "attempt", "attempt_id", "registry_identity",
+                        "evaluation_identity", "n_jobs_per_side", "cpu_quota",
+                        "dataset_pair_slots", "resource_budget_scope", "worker_paths", "worker_invocation_id",
+                        "worker_spec_path", "worker_result_path", "worker_log_path",
+                        "stage_status_path", "hypothesis", "quality_scope", "spec",
                     )
                     if name in previous
                 },
@@ -795,12 +666,8 @@ def measure_fedot_quality(
         key = (str(spec["source_dataset"]), side, attempt)
         if key not in legacy_callback_plans:
             legacy_callback_plans[key] = create_worker_artifact_plan(
-                key[0],
-                side,
-                candidate.candidate_id if candidate is not None else experiment.name,
-                attempt,
-                artifact_root=artifact_root,
-            )
+                key[0], side, candidate.candidate_id if candidate is not None else experiment.name,
+                attempt, artifact_root=artifact_root)
         return dict(legacy_callback_plans[key])
 
     registry = registry or load_quality_registry()
@@ -808,9 +675,7 @@ def measure_fedot_quality(
     effective_n_jobs = int(registry.n_jobs_per_job if n_jobs is None else n_jobs)
     effective_cpu_quota = int(registry.cpu_quota if cpu_quota is None else cpu_quota)
     evaluation_identity = {
-        "registry_sha256": hashlib.sha256(
-            json.dumps(asdict(registry), sort_keys=True).encode()
-        ).hexdigest(),
+        "registry_sha256": hashlib.sha256(json.dumps(asdict(registry), sort_keys=True).encode()).hexdigest(),
         "stock_source_sha256": source_fingerprint(source),
         "patch_source_sha256": source_fingerprint(experiment),
         "n_jobs": effective_n_jobs,
@@ -840,14 +705,11 @@ def measure_fedot_quality(
     def record_side_event(spec, side, phase, result, attempt):
         if journal is None:
             return
-        candidate_id = (
-            candidate.candidate_id if candidate is not None else experiment.name
-        )
+        candidate_id = candidate.candidate_id if candidate is not None else experiment.name
         source_proposal_id = proposal_id or candidate_id
         worker_paths = event_worker_paths(spec, side, attempt)
         event_name = (
-            "quality_task_worker_spawned"
-            if phase == "spawned"
+            "quality_task_worker_spawned" if phase == "spawned"
             else f"quality_task_side_{phase}"
         )
         payload = {
@@ -865,9 +727,7 @@ def measure_fedot_quality(
             "n_jobs_per_side": effective_n_jobs,
             "cpu_quota": effective_cpu_quota,
             "dataset_pair_slots": effective_pair_slots(),
-            "resource_budget_scope": "campaign-shared"
-            if pair_scheduler is not None
-            else "call-local",
+            "resource_budget_scope": "campaign-shared" if pair_scheduler is not None else "call-local",
             **scheduler_observations(),
             "stock_flight_id": spec.get("stock_flight_id"),
             "worker_paths": worker_paths,
@@ -887,11 +747,7 @@ def measure_fedot_quality(
             "spec": spec,
         }
         worker_pid = spec.get("worker_pid") if phase == "spawned" else None
-        if (
-            isinstance(worker_pid, int)
-            and not isinstance(worker_pid, bool)
-            and worker_pid > 0
-        ):
+        if isinstance(worker_pid, int) and not isinstance(worker_pid, bool) and worker_pid > 0:
             payload["worker_pid"] = worker_pid
         if "scheduler_queue_wait_seconds" in spec:
             payload["scheduler_queue_wait_seconds"] = spec[
@@ -902,57 +758,36 @@ def measure_fedot_quality(
             if "worker_spawned" in observations:
                 payload["worker_spawned"] = observations["worker_spawned"]
             observed_paths = {
-                "worker_log_path": str(
-                    observations.get("worker_log_path")
-                    or worker_paths["worker_log_path"]
-                ),
-                "worker_result_path": str(
-                    observations.get("worker_result_path")
-                    or worker_paths["worker_result_path"]
-                ),
-                "stage_status_path": str(
-                    observations.get("stage_status_path")
-                    or worker_paths["stage_status_path"]
-                ),
+                "worker_log_path": str(observations.get("worker_log_path") or worker_paths["worker_log_path"]),
+                "worker_result_path": str(observations.get("worker_result_path") or worker_paths["worker_result_path"]),
+                "stage_status_path": str(observations.get("stage_status_path") or worker_paths["stage_status_path"]),
             }
             if observations.get("singleflight_shared") or observations.get("cache_hit"):
-                payload["shared_worker_paths"] = dict(
-                    observations.get("worker_paths") or observed_paths
-                )
+                payload["shared_worker_paths"] = dict(observations.get("worker_paths") or observed_paths)
                 if observations.get("worker_invocation_id"):
-                    payload["shared_worker_paths"]["worker_invocation_id"] = (
-                        observations["worker_invocation_id"]
-                    )
+                    payload["shared_worker_paths"]["worker_invocation_id"] = observations["worker_invocation_id"]
             else:
                 # Production worker paths are immutable from the started event.
                 # Legacy test runners can report only logs, without a plan.
                 if not spec.get("worker_paths"):
                     worker_paths.update(observed_paths)
-            payload.update(
-                {
-                    "worker_paths": worker_paths,
-                    "worker_log_path": worker_paths["worker_log_path"],
-                    "worker_result_path": worker_paths["worker_result_path"],
-                    "stage_status_path": worker_paths["stage_status_path"],
-                    "artifact_state": (
-                        "reused"
-                        if phase == "reused"
-                        else "stock_cache_hit"
-                        if observations.get("cache_hit")
-                        else "singleflight_shared"
-                        if observations.get("singleflight_shared")
-                        else "timed_out_waiting_stock_cache"
-                        if observations.get("worker_spawned") is False
-                        else "finished"
-                    ),
-                }
-            )
+            payload.update({
+                "worker_paths": worker_paths,
+                "worker_log_path": worker_paths["worker_log_path"],
+                "worker_result_path": worker_paths["worker_result_path"],
+                "stage_status_path": worker_paths["stage_status_path"],
+                "artifact_state": (
+                    "reused" if phase == "reused"
+                    else "stock_cache_hit" if observations.get("cache_hit")
+                    else "singleflight_shared" if observations.get("singleflight_shared")
+                    else "timed_out_waiting_stock_cache"
+                    if observations.get("worker_spawned") is False
+                    else "finished"
+                ),
+            })
             for key in (
-                "wait_kind",
-                "timeout_kind",
-                "timeout_limit_seconds",
-                "side_elapsed_seconds",
-                "worker_elapsed_seconds",
+                "wait_kind", "timeout_kind", "timeout_limit_seconds",
+                "side_elapsed_seconds", "worker_elapsed_seconds",
                 "worker_timeout_budget_seconds",
             ):
                 if key in observations:
@@ -967,9 +802,7 @@ def measure_fedot_quality(
                 "seed": result.seed,
                 "env_hash": result.env_hash,
                 "cmd": result.cmd,
-                "worker_log_path": (result.metric_observations or {}).get(
-                    "worker_log_path"
-                ),
+                "worker_log_path": (result.metric_observations or {}).get("worker_log_path"),
                 "metric_observations": result.metric_observations,
                 "log_tail": result.log_tail,
             }
@@ -978,9 +811,7 @@ def measure_fedot_quality(
     def record_side_wait(spec, side, wait_kind, elapsed_seconds, attempt):
         if journal is None:
             return
-        candidate_id = (
-            candidate.candidate_id if candidate is not None else experiment.name
-        )
+        candidate_id = candidate.candidate_id if candidate is not None else experiment.name
         event = save_quality_event(
             journal,
             {
@@ -998,28 +829,20 @@ def measure_fedot_quality(
                 "n_jobs_per_side": effective_n_jobs,
                 "cpu_quota": effective_cpu_quota,
                 "dataset_pair_slots": effective_pair_slots(),
-                "resource_budget_scope": "campaign-shared"
-                if pair_scheduler is not None
-                else "call-local",
+                "resource_budget_scope": "campaign-shared" if pair_scheduler is not None else "call-local",
                 **scheduler_observations(),
                 "worker_paths": event_worker_paths(spec, side, attempt),
-                "worker_invocation_id": event_worker_paths(spec, side, attempt)[
-                    "worker_invocation_id"
-                ],
+                "worker_invocation_id": event_worker_paths(spec, side, attempt)["worker_invocation_id"],
                 "wait_kind": wait_kind,
                 "wait_elapsed_seconds": elapsed_seconds,
                 "pair_slot_held_during_wait": False,
                 "wait_does_not_hold_compute_worker": pair_scheduler is not None,
-                "singleflight_role": "waiter"
-                if pair_scheduler is not None
-                else "synchronous_waiter",
+                "singleflight_role": "waiter" if pair_scheduler is not None else "synchronous_waiter",
                 "stock_flight_id": spec.get("stock_flight_id"),
                 "owner_worker_shared": pair_scheduler is not None,
                 "worker_spawned": False,
                 "stock_wait_subscriber_mode": (
-                    "nonblocking_future"
-                    if pair_scheduler is not None
-                    else "synchronous"
+                    "nonblocking_future" if pair_scheduler is not None else "synchronous"
                 ),
                 "artifact_state": "waiting_stock_cache",
                 "hypothesis": hypothesis or {},
@@ -1031,9 +854,7 @@ def measure_fedot_quality(
 
     prior_side_results, prior_attempt_counts = _recover_side_state(
         journal or Path("/dev/null"),
-        candidate_id=candidate.candidate_id
-        if candidate is not None
-        else experiment.name,
+        candidate_id=candidate.candidate_id if candidate is not None else experiment.name,
         task_ids=tuple(ids),
         registry_identity=registry.identity,
         evaluation_identity=evaluation_identity,
@@ -1048,12 +869,9 @@ def measure_fedot_quality(
         on_side_event=record_side_event if journal is not None else None,
         prior_side_results=prior_side_results,
         prior_attempt_counts=prior_attempt_counts,
-        proposal_id=candidate.candidate_id
-        if candidate is not None
-        else experiment.name,
+        proposal_id=candidate.candidate_id if candidate is not None else experiment.name,
         evaluation_identity=evaluation_identity,
-        artifact_root=artifact_root,
-        stock_cache_root=stock_cache_root,
+        artifact_root=artifact_root, stock_cache_root=stock_cache_root,
         pair_scheduler=pair_scheduler,
         pair_group_id=pair_group_id,
         on_side_wait=record_side_wait if journal is not None else None,
@@ -1064,14 +882,9 @@ def measure_fedot_quality(
         decision.final_keep = None
         decision.quality_outcome = "not_evaluated"
         decision.reason = "partial_dataset_check; full frozen scope remains required"
-        decision.unresolved_task_ids = tuple(
-            dict.fromkeys(
-                (
-                    *decision.unresolved_task_ids,
-                    *(item for item in required_task_ids if item not in ids),
-                )
-            )
-        )
+        decision.unresolved_task_ids = tuple(dict.fromkeys(
+            (*decision.unresolved_task_ids, *(item for item in required_task_ids if item not in ids))
+        ))
     if journal is not None:
         append_journal(
             journal,
@@ -1098,9 +911,7 @@ def measure_fedot_quality(
                         "stock_traceback": row["stock_result"].traceback[-4000:],
                         "patched_traceback": row["patched_result"].traceback[-4000:],
                         "stock_observations": row["stock_result"].metric_observations,
-                        "patched_observations": row[
-                            "patched_result"
-                        ].metric_observations,
+                        "patched_observations": row["patched_result"].metric_observations,
                         "quality_delta": _quality_delta(
                             row["spec"], row["stock"], row["patched"]
                         ),
@@ -1166,9 +977,7 @@ def _parse_unified_hunks(patch_text: str) -> list[PatchEdit]:
     return edits
 
 
-def apply_queue_patch(
-    checkout: Path, *, candidate_id: str, file_path: str, patch_text: str
-) -> bool:
+def apply_queue_patch(checkout: Path, *, candidate_id: str, file_path: str, patch_text: str) -> bool:
     edits = _parse_unified_hunks(patch_text)
     if not edits:
         return False
@@ -1199,9 +1008,7 @@ def _job_quality_task_ids(
         # entries are different: retry their entire required set, even if their
         # runnable list was overwritten with an empty value.
         was_skipped = str(job.get("status") or "") == "skipped"
-        frozen_required = (
-            (required or recorded) if was_skipped else (recorded or required)
-        )
+        frozen_required = (required or recorded) if was_skipped else (recorded or required)
         selected = tuple(task_id for task_id in frozen_required if task_id in all_ids)
         if selected:
             if was_skipped:
@@ -1221,9 +1028,7 @@ def _job_quality_task_ids(
         job, requested=recorded or required or pool or all_ids, registry=registry
     )
     if selected:
-        return tuple(task_id for task_id in selected if task_id in all_ids) or tuple(
-            selected
-        )
+        return tuple(task_id for task_id in selected if task_id in all_ids) or tuple(selected)
     fallback = select_task_ids_for_job(
         job, requested=required or all_ids, registry=registry
     )
@@ -1260,16 +1065,8 @@ def _drain_quality_queue_locked(
     registry = registry or load_quality_registry()
     pool = task_ids or list_quality_task_ids(registry)
     workspace = workspace.resolve()
-    artifact_root = (
-        Path(artifact_root).expanduser().resolve()
-        if artifact_root is not None
-        else workspace / "worker_artifacts"
-    )
-    stock_cache_root = (
-        Path(stock_cache_root or stock_cache).expanduser().resolve()
-        if (stock_cache_root is not None or stock_cache is not None)
-        else workspace / "stock_cache"
-    )
+    artifact_root = Path(artifact_root).expanduser().resolve() if artifact_root is not None else workspace / "worker_artifacts"
+    stock_cache_root = Path(stock_cache_root or stock_cache).expanduser().resolve() if (stock_cache_root is not None or stock_cache is not None) else workspace / "stock_cache"
     workspace.mkdir(parents=True, exist_ok=True)
     journal = journal or (workspace / "quality_jobs.jsonl")
     processed: set[str] = set()
@@ -1281,8 +1078,7 @@ def _drain_quality_queue_locked(
         queued = [
             job
             for job in list_queued_jobs(workspace)
-            if str(job.get("status") or "queued")
-            in {"queued", "running", "partial", "skipped", ""}
+            if str(job.get("status") or "queued") in {"queued", "running", "partial", "skipped", ""}
             and str(job.get("candidate_id") or job.get("_path") or "") not in processed
         ]
         if not queued:
@@ -1309,24 +1105,14 @@ def _drain_quality_queue_locked(
             if continue_on_error and job.get("required_task_ids"):
                 selection_job["task_ids"] = job["required_task_ids"]
             job_ids = _job_quality_task_ids(selection_job, pool, registry)
-            scope = (
-                job.get("quality_scope") if job.get("quality_scope_frozen") else None
-            )
+            scope = job.get("quality_scope") if job.get("quality_scope_frozen") else None
             scope = scope or analyze_quality_scope(job, registry)
-            required_ids = tuple(
-                job.get("required_task_ids") or job.get("task_ids") or job_ids
-            )
+            required_ids = tuple(job.get("required_task_ids") or job.get("task_ids") or job_ids)
             blocked_reason = ""
-            if (
-                job.get("registry_identity")
-                and job["registry_identity"] != registry.identity
-            ):
+            if job.get("registry_identity") and job["registry_identity"] != registry.identity:
                 blocked_reason = "registry_mismatch"
             elif (job.get("check_identity") or {}).get("registry_sha256") not in {
-                None,
-                hashlib.sha256(
-                    json.dumps(asdict(registry), sort_keys=True).encode()
-                ).hexdigest(),
+                None, hashlib.sha256(json.dumps(asdict(registry), sort_keys=True).encode()).hexdigest()
             }:
                 blocked_reason = "registry_mismatch"
             elif set(required_ids) - set(list_quality_task_ids(registry)):
@@ -1337,30 +1123,18 @@ def _drain_quality_queue_locked(
                 if source_fingerprint(source) != job["source_sha256"]:
                     blocked_reason = "source_mismatch"
             if job.get("quality_scope_frozen") and not job.get("scope_policy_version"):
-                fresh_job = {
-                    key: value for key, value in job.items() if key != "quality_scope"
-                }
+                fresh_job = {key: value for key, value in job.items() if key != "quality_scope"}
                 expected_ids = select_task_ids_for_job(
-                    fresh_job,
-                    requested=list_quality_task_ids(registry),
-                    registry=registry,
+                    fresh_job, requested=list_quality_task_ids(registry), registry=registry
                 )
                 if set(required_ids) != set(expected_ids):
                     blocked_reason = blocked_reason or "routing_scope_changed"
             if blocked_reason:
-                item = {
-                    "candidate_id": candidate_id,
-                    "status": "blocked",
-                    "reason": blocked_reason,
-                    "keep": None,
-                    "quality_outcome": "not_evaluated",
-                    "task_ids": list(required_ids),
-                }
+                item = {"candidate_id": candidate_id, "status": "blocked",
+                        "reason": blocked_reason, "keep": None, "quality_outcome": "not_evaluated",
+                        "task_ids": list(required_ids)}
                 write_job_status(job_path, "blocked", item)
-                append_journal(
-                    journal,
-                    {**item, "event": "quality_disposition", "candidate": candidate_id},
-                )
+                append_journal(journal, {**item, "event": "quality_disposition", "candidate": candidate_id})
                 results.append(item)
                 processed.add(job_key)
                 return
@@ -1416,19 +1190,15 @@ def _drain_quality_queue_locked(
             write_job_status(
                 job_path,
                 "running",
-                {
-                    "required_task_ids": list(required_ids),
-                    "quality_scope": scope,
-                    "evaluated_task_ids": list(job_ids),
-                },
+                {"required_task_ids": list(required_ids), "quality_scope": scope,
+                 "evaluated_task_ids": list(job_ids)},
             )
             append_journal(
                 journal,
                 {
                     "event": "quality_candidate_started",
                     "candidate": candidate_id,
-                    "candidate_revision_id": job.get("candidate_revision_id")
-                    or candidate_id,
+                    "candidate_revision_id": job.get("candidate_revision_id") or candidate_id,
                     "proposal_id": job.get("proposal_id") or candidate_id,
                     "patch_revision": job.get("patch_revision"),
                     "patch_sha256": job.get("patch_sha256"),
@@ -1465,30 +1235,17 @@ def _drain_quality_queue_locked(
                     write_job_status(
                         job_path,
                         "apply_failed",
-                        {
-                            "reason": reason,
-                            "keep": None,
-                            "quality_outcome": "not_evaluated",
-                            "unresolved_task_ids": list(required_ids),
-                            "quality_message": quality_message,
-                        },
+                        {"reason": reason, "keep": None, "quality_outcome": "not_evaluated",
+                         "unresolved_task_ids": list(required_ids),
+                         "quality_message": quality_message},
                     )
-                    append_journal(
-                        journal,
-                        {
-                            "event": "quality_disposition",
-                            "candidate": candidate_id,
-                            "registry_identity": registry.identity,
-                            "status": "apply_failed",
-                            "reason": reason,
-                            "keep": None,
-                            "quality_outcome": "not_evaluated",
-                            "task_ids": list(required_ids),
-                            "evaluated_task_ids": [],
-                            "unresolved_task_ids": list(required_ids),
-                            "quality_message": quality_message,
-                        },
-                    )
+                    append_journal(journal, {
+                        "event": "quality_disposition", "candidate": candidate_id,
+                        "registry_identity": registry.identity, "status": "apply_failed",
+                        "reason": reason, "keep": None, "quality_outcome": "not_evaluated",
+                        "task_ids": list(required_ids), "evaluated_task_ids": [],
+                        "unresolved_task_ids": list(required_ids), "quality_message": quality_message,
+                    })
                     results.append(
                         {
                             "candidate_id": candidate_id,
@@ -1503,28 +1260,12 @@ def _drain_quality_queue_locked(
                     )
                     return
                 expected_patch_hash = str(job.get("patch_sha256") or "")
-                if (
-                    expected_patch_hash
-                    and hashlib.sha256(patch_path.read_bytes()).hexdigest()
-                    != expected_patch_hash
-                ):
-                    item = {
-                        "candidate_id": candidate_id,
-                        "status": "apply_failed",
-                        "reason": "patch_hash_mismatch",
-                        "keep": None,
-                        "quality_outcome": "not_evaluated",
-                        "task_ids": list(required_ids),
-                    }
+                if expected_patch_hash and hashlib.sha256(patch_path.read_bytes()).hexdigest() != expected_patch_hash:
+                    item = {"candidate_id": candidate_id, "status": "apply_failed",
+                            "reason": "patch_hash_mismatch", "keep": None,
+                            "quality_outcome": "not_evaluated", "task_ids": list(required_ids)}
                     write_job_status(job_path, "apply_failed", item)
-                    append_journal(
-                        journal,
-                        {
-                            **item,
-                            "event": "quality_disposition",
-                            "candidate": candidate_id,
-                        },
-                    )
+                    append_journal(journal, {**item, "event": "quality_disposition", "candidate": candidate_id})
                     results.append(item)
                     return
                 tree = create_experiment_checkout(
@@ -1553,30 +1294,17 @@ def _drain_quality_queue_locked(
                     write_job_status(
                         job_path,
                         "apply_failed",
-                        {
-                            "reason": reason,
-                            "keep": None,
-                            "quality_outcome": "not_evaluated",
-                            "unresolved_task_ids": list(required_ids),
-                            "quality_message": quality_message,
-                        },
+                        {"reason": reason, "keep": None, "quality_outcome": "not_evaluated",
+                         "unresolved_task_ids": list(required_ids),
+                         "quality_message": quality_message},
                     )
-                    append_journal(
-                        journal,
-                        {
-                            "event": "quality_disposition",
-                            "candidate": candidate_id,
-                            "registry_identity": registry.identity,
-                            "status": "apply_failed",
-                            "reason": reason,
-                            "keep": None,
-                            "quality_outcome": "not_evaluated",
-                            "task_ids": list(required_ids),
-                            "evaluated_task_ids": [],
-                            "unresolved_task_ids": list(required_ids),
-                            "quality_message": quality_message,
-                        },
-                    )
+                    append_journal(journal, {
+                        "event": "quality_disposition", "candidate": candidate_id,
+                        "registry_identity": registry.identity, "status": "apply_failed",
+                        "reason": reason, "keep": None, "quality_outcome": "not_evaluated",
+                        "task_ids": list(required_ids), "evaluated_task_ids": [],
+                        "unresolved_task_ids": list(required_ids), "quality_message": quality_message,
+                    })
                     results.append(
                         {
                             "candidate_id": candidate_id,
@@ -1609,16 +1337,9 @@ def _drain_quality_queue_locked(
                     pair_group_id=pair_group_id,
                     proposal_id=str(job.get("proposal_id") or candidate_id),
                     patch_revision=job.get("patch_revision"),
-                    artifact_root=artifact_root,
-                    stock_cache_root=stock_cache_root,
+                    artifact_root=artifact_root, stock_cache_root=stock_cache_root,
                 )
-                status = (
-                    "keep"
-                    if decision.keep is True
-                    else "drop"
-                    if decision.keep is False
-                    else "partial"
-                )
+                status = "keep" if decision.keep is True else "drop" if decision.keep is False else "partial"
                 if decision.infrastructure_error:
                     status = "infrastructure_error"
                 elif decision.quality_failure:
@@ -1626,26 +1347,15 @@ def _drain_quality_queue_locked(
                 elif decision.keep is None and decision.unresolved_task_ids:
                     status = "partial"
                 incomplete_scope = set(job_ids) != set(required_ids)
-                if (
-                    incomplete_scope
-                    and not decision.quality_failure
-                    and not decision.infrastructure_error
-                ):
+                if incomplete_scope and not decision.quality_failure and not decision.infrastructure_error:
                     status = "partial"
                     decision.keep = None
                     decision.final_keep = None
                     decision.quality_outcome = "not_evaluated"
-                    decision.reason = (
-                        "partial_dataset_check; full frozen scope remains required"
-                    )
-                    decision.unresolved_task_ids = tuple(
-                        dict.fromkeys(
-                            (
-                                *decision.unresolved_task_ids,
-                                *(item for item in required_ids if item not in job_ids),
-                            )
-                        )
-                    )
+                    decision.reason = "partial_dataset_check; full frozen scope remains required"
+                    decision.unresolved_task_ids = tuple(dict.fromkeys(
+                        (*decision.unresolved_task_ids, *(item for item in required_ids if item not in job_ids))
+                    ))
                 quality_message = quality_result_message(
                     {
                         "candidate_id": candidate_id,
@@ -1729,30 +1439,14 @@ def _drain_quality_queue_locked(
                 # Storage/launch failures are systemic: starting the next
                 # improvement would risk unrecorded measurements.
                 if isinstance(exc, shutil.Error) and storage_failure_text(str(exc)):
-                    entries = (
-                        exc.args[0]
-                        if exc.args and isinstance(exc.args[0], list)
-                        else []
-                    )
-                    destinations = [
-                        str(entry[1])
-                        for entry in entries
-                        if isinstance(entry, (tuple, list))
-                        and len(entry) == 3
-                        and storage_failure_text(str(entry[2]))
-                    ]
-                    destination = (
-                        destinations[0]
-                        if destinations
-                        else str(
-                            tree
-                            or workspace / "experiments/quality-drain" / candidate_id
-                        )
-                    )
+                    entries = exc.args[0] if exc.args and isinstance(exc.args[0], list) else []
+                    destinations = [str(entry[1]) for entry in entries
+                                    if isinstance(entry, (tuple, list)) and len(entry) == 3
+                                    and storage_failure_text(str(entry[2]))]
+                    destination = (destinations[0] if destinations else
+                                   str(tree or workspace / "experiments/quality-drain" / candidate_id))
                     raise StorageCapacityError(
-                        28,
-                        f"checkout storage failure for proposal {candidate_id}: {exc}",
-                        destination,
+                        28, f"checkout storage failure for proposal {candidate_id}: {exc}", destination
                     ) from exc
                 raise
             except Exception as exc:
@@ -1827,23 +1521,17 @@ def _drain_quality_queue_locked(
                     try:
                         if original_error is not None and pair_scheduler is not None:
                             idle_timeout = float(registry.watchdog_seconds) + 30.0
-                            if not pair_scheduler.wait_for_compute_idle(
-                                timeout=idle_timeout
-                            ):
+                            if not pair_scheduler.wait_for_compute_idle(timeout=idle_timeout):
                                 raise TimeoutError(
                                     "quality workers did not exit before checkout cleanup; "
                                     f"preserving proposal checkout after {idle_timeout:g}s"
                                 )
-                        discard_experiment_checkout(
-                            tree, workspace=workspace, source=source
-                        )
+                        discard_experiment_checkout(tree, workspace=workspace, source=source)
                     except Exception as cleanup_error:
                         if original_error is None:
                             raise
                         if hasattr(original_error, "add_note"):
-                            original_error.add_note(
-                                f"experiment cleanup failed at {tree}: {cleanup_error}"
-                            )
+                            original_error.add_note(f"experiment cleanup failed at {tree}: {cleanup_error}")
                 try:
                     payload = json.loads(job_path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
@@ -1853,20 +1541,14 @@ def _drain_quality_queue_locked(
                 if status == "running":
                     try:
                         write_job_status(
-                            job_path,
-                            "queued",
-                            {
-                                "reason": "executor_interrupted; resumable from quality journal",
-                                "keep": None,
-                            },
+                            job_path, "queued",
+                            {"reason": "executor_interrupted; resumable from quality journal", "keep": None},
                         )
                     except OSError as persist_error:
                         if original_error is None:
                             raise
                         if hasattr(original_error, "add_note"):
-                            original_error.add_note(
-                                f"queue recovery status could not be saved at {job_path}: {persist_error}"
-                            )
+                            original_error.add_note(f"queue recovery status could not be saved at {job_path}: {persist_error}")
                     status = "queued"
                 elif status not in {"queued", "running", ""}:
                     processed.add(job_key)
@@ -1890,9 +1572,7 @@ def _drain_quality_queue_locked(
                 pair_scheduler.skip_group(group_id)
 
         proposal_n_jobs = int(n_jobs if n_jobs is not None else registry.n_jobs_per_job)
-        total_cpu_quota = int(
-            cpu_quota if cpu_quota is not None else registry.cpu_quota
-        )
+        total_cpu_quota = int(cpu_quota if cpu_quota is not None else registry.cpu_quota)
         if proposal_n_jobs <= 0 or total_cpu_quota < proposal_n_jobs:
             raise ValueError("cpu_quota cannot fund one n_jobs dataset pair")
         if isinstance(max_pair_slots, bool) or not isinstance(max_pair_slots, int):
@@ -1900,33 +1580,26 @@ def _drain_quality_queue_locked(
         if max_pair_slots < 1 or max_pair_slots > 8:
             raise ValueError("max_pair_slots must be between 1 and 8")
         pair_slots = min(max_pair_slots, total_cpu_quota // proposal_n_jobs)
-        append_journal(
-            journal,
-            {
-                "event": "quality_scheduler_batch_started",
-                "registry_identity": registry.identity,
-                "candidate_ids": [str(job.get("candidate_id") or "") for job in queued],
-                "parallel_proposals": min(len(queued), pair_slots),
-                "dataset_pair_slots": pair_slots,
-                "cpu_slots": pair_slots * proposal_n_jobs,
-                "cpu_quota": total_cpu_quota,
-                "n_jobs_per_side": proposal_n_jobs,
-                "policy": "fair-shared-pair-pool-v3",
-            },
-        )
+        append_journal(journal, {
+            "event": "quality_scheduler_batch_started",
+            "registry_identity": registry.identity,
+            "candidate_ids": [str(job.get("candidate_id") or "") for job in queued],
+            "parallel_proposals": min(len(queued), pair_slots),
+            "dataset_pair_slots": pair_slots,
+            "cpu_slots": pair_slots * proposal_n_jobs,
+            "cpu_quota": total_cpu_quota,
+            "n_jobs_per_side": proposal_n_jobs,
+            "policy": "fair-shared-pair-pool-v3",
+        })
         initial_groups = min(len(queued), pair_slots)
-        pair_scheduler = SharedPairScheduler(
-            max_pairs=pair_slots, initial_groups=initial_groups
-        )
+        pair_scheduler = SharedPairScheduler(max_pairs=pair_slots, initial_groups=initial_groups)
         proposal_executor = ThreadPoolExecutor(max_workers=min(len(queued), pair_slots))
         pending = {}
         next_job = 0
         first_error = None
         try:
             for _ in range(min(len(queued), pair_slots)):
-                future = proposal_executor.submit(
-                    process_job, queued[next_job], total_cpu_quota
-                )
+                future = proposal_executor.submit(process_job, queued[next_job], total_cpu_quota)
                 pending[future] = total_cpu_quota
                 next_job += 1
             while pending:
@@ -1962,8 +1635,7 @@ def _drain_quality_queue_locked(
     stock_rows: dict[tuple[str, str], dict] = {}
     for event in read_quality_events(journal):
         if (
-            event.get("event")
-            not in {"quality_task_side_finished", "quality_task_side_reused"}
+            event.get("event") not in {"quality_task_side_finished", "quality_task_side_reused"}
             or event.get("side") != "stock"
             or event.get("registry_identity") != registry.identity
         ):
@@ -1977,28 +1649,21 @@ def _drain_quality_queue_locked(
                 "task_id": task_id,
                 "status": result.get("status"),
                 "score": result.get("score"),
-                "search_ran": bool(
-                    (result.get("metric_observations") or {}).get("search_ran")
-                ),
-                "cache_hit": bool(
-                    (result.get("metric_observations") or {}).get("cache_hit")
-                ),
+                "search_ran": bool((result.get("metric_observations") or {}).get("search_ran")),
+                "cache_hit": bool((result.get("metric_observations") or {}).get("cache_hit")),
                 "singleflight_shared": bool(
                     (result.get("metric_observations") or {}).get("singleflight_shared")
                 ),
             }
     stock_summary = list(stock_rows.values())
-    results.sort(
-        key=lambda row: result_order.get(
-            str(row.get("candidate_id") or ""), len(result_order)
-        )
-    )
+    results.sort(key=lambda row: result_order.get(
+        str(row.get("candidate_id") or ""), len(result_order)
+    ))
     return {
         "mode": "drain",
         "registry_identity": registry.identity,
         "task_ids": list(dict.fromkeys(row["task_id"] for row in stock_summary)),
-        "stock_ok": bool(stock_summary)
-        and all(row["status"] == "ok" for row in stock_summary),
+        "stock_ok": bool(stock_summary) and all(row["status"] == "ok" for row in stock_summary),
         "stock": stock_summary,
         "stock_cache_hits": [
             f"{row['candidate_id']}:{row['task_id']}"
@@ -2047,8 +1712,7 @@ def drain_quality_queue(
             cpu_quota=cpu_quota,
             max_pair_slots=max_pair_slots,
             stock_cache=stock_cache,
-            artifact_root=artifact_root,
-            stock_cache_root=stock_cache_root,
+            artifact_root=artifact_root, stock_cache_root=stock_cache_root,
             continue_on_error=continue_on_error,
             registry=registry,
         )

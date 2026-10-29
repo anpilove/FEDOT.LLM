@@ -33,9 +33,7 @@ from fedotllm.agents.evolve.execution.smoke import import_error
 from fedotllm.agents.evolve.evaluation.tasks import hidden_exam
 from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit, MatchSite
 
-_RUNTIME = frozenset(
-    {"fit", "transform", "predict", "predict_proba", "predict_for_fit"}
-)
+_RUNTIME = frozenset({"fit", "transform", "predict", "predict_proba", "predict_for_fit"})
 
 
 def oracle_lead(checkout: Path, file_path: str) -> MatchSite | None:
@@ -52,9 +50,7 @@ def oracle_lead(checkout: Path, file_path: str) -> MatchSite | None:
                 signals=lead.signals,
             )
     line, name = _first_runtime(target)
-    return MatchSite(
-        channel="oracle", file_path=file_path, line=line, why=f"function {name}"
-    )
+    return MatchSite(channel="oracle", file_path=file_path, line=line, why=f"function {name}")
 
 
 def _first_runtime(path: Path) -> tuple[int, str]:
@@ -63,10 +59,7 @@ def _first_runtime(path: Path) -> tuple[int, str]:
     except (OSError, SyntaxError, ValueError):
         return 1, "file"
     for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name in _RUNTIME
-        ):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in _RUNTIME:
             return int(getattr(node, "lineno", 1) or 1), node.name
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -90,9 +83,7 @@ def measure_repair(
     if files:
         gold = [path for path in files if (source / path).is_file()]
     else:
-        gold = [path for path in split_gold()[split] if (source / path).is_file()][
-            : max(1, limit)
-        ]
+        gold = [path for path in split_gold()[split] if (source / path).is_file()][: max(1, limit)]
     in_pool = set(unique_files(static_leads(source)))
     rows: list[dict[str, Any]] = []
     for index, rel in enumerate(gold, start=1):
@@ -101,9 +92,7 @@ def measure_repair(
         )
         lead = oracle_lead(tree, rel)
         if lead is None:
-            rows.append(
-                {"file_path": rel, "status": "missing_lead", "in_pool": rel in in_pool}
-            )
+            rows.append({"file_path": rel, "status": "missing_lead", "in_pool": rel in in_pool})
             discard_experiment_checkout(tree, workspace=workspace, source=source)
             continue
         candidate = fix_lead(tree, lead, inference=inference, workspace=workspace)
@@ -149,9 +138,7 @@ def _saved_attempts(workspace: Path) -> list[dict[str, Any]]:
     return attempts
 
 
-def load_saved_candidate(
-    workspace: Path, candidate_id: str, file_path: str
-) -> PatchCandidate | None:
+def load_saved_candidate(workspace: Path, candidate_id: str, file_path: str) -> PatchCandidate | None:
     folder = workspace / "candidates" / candidate_id
     edits_file = folder / "edits.json"
     if edits_file.is_file():
@@ -202,9 +189,7 @@ def gate_saved_repairs(
         rel = attempt["file_path"]
         candidate = load_saved_candidate(workspace, cid, rel)
         if candidate is None:
-            rows.append(
-                {"candidate_id": cid, "file_path": rel, "status": "missing_artifact"}
-            )
+            rows.append({"candidate_id": cid, "file_path": rel, "status": "missing_artifact"})
             continue
         tree = create_experiment_checkout(
             source, workspace, run_id=run_id, candidate_id=f"case-{index}"
@@ -262,27 +247,13 @@ def holdout_saved_repairs(
         rel = attempt["file_path"]
         candidate = load_saved_candidate(workspace, cid, rel)
         if candidate is None:
-            rows.append(
-                {
-                    "candidate_id": cid,
-                    "file_path": rel,
-                    "status": "apply_fail",
-                    "keep": False,
-                }
-            )
+            rows.append({"candidate_id": cid, "file_path": rel, "status": "apply_fail", "keep": False})
             continue
         tree = create_experiment_checkout(
             source, workspace, run_id=run_id, candidate_id=f"case-{index}"
         )
         if not apply_patch(tree, candidate):
-            rows.append(
-                {
-                    "candidate_id": cid,
-                    "file_path": rel,
-                    "status": "apply_fail",
-                    "keep": False,
-                }
-            )
+            rows.append({"candidate_id": cid, "file_path": rel, "status": "apply_fail", "keep": False})
             discard_experiment_checkout(tree, workspace=workspace, source=source)
             continue
         patched = measure_patched(exam_ids, checkout=tree)

@@ -21,18 +21,12 @@ def test_source_context_maps_implementation_to_public_operation_and_params():
         "PolyFeaturesImplementation",
         "EncodedInvariantImplementation",
     )
-    operation = next(
-        item
-        for item in source_context.operations
-        if item.operation_id == "poly_features"
-    )
+    operation = next(item for item in source_context.operations if item.operation_id == "poly_features")
     assert operation.implementation == "PolyFeaturesImplementation"
     assert {"degree", "interaction_only"} <= set(operation.declared_params)
     assert "pipeline data transformation implementation" in source_context.lifecycle
     assert any(item.kind == "operation_dispatch" for item in source_context.callers)
-    assert any(
-        "test_data_operations" in item.file_path for item in source_context.tests
-    )
+    assert any("test_data_operations" in item.file_path for item in source_context.tests)
 
 
 def test_source_context_follows_base_to_related_public_operations():
@@ -47,9 +41,7 @@ def test_source_context_follows_base_to_related_public_operations():
     )
 
     assert source_context is not None
-    operations = {
-        item.operation_id: dict(item.defaults) for item in source_context.operations
-    }
+    operations = {item.operation_id: dict(item.defaults) for item in source_context.operations}
     assert operations["lagged"] == {"window_size": 0}
     assert operations["sparse_lagged"]["window_size"] == 0
     assert source_context.bases[0] == "LaggedImplementation"
@@ -63,12 +55,8 @@ def test_source_context_is_deterministic_compact_and_source_grounded():
         "fedot/core/operations/evaluation/operation_implementations/"
         "models/discriminant_analysis.py"
     )
-    first = build_fedot_context(
-        source, path, symbol="LDAImplementation.check_and_correct_params"
-    )
-    second = build_fedot_context(
-        source, path, symbol="LDAImplementation.check_and_correct_params"
-    )
+    first = build_fedot_context(source, path, symbol="LDAImplementation.check_and_correct_params")
+    second = build_fedot_context(source, path, symbol="LDAImplementation.check_and_correct_params")
 
     assert first == second
     assert first is not None

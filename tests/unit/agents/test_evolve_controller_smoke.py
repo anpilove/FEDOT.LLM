@@ -13,9 +13,7 @@ from fedotllm.agents.evolve.controller import quality_queue
 from fedotllm.agents.evolve.evaluation import fedot_quality
 
 
-def test_worker_artifact_validation_requires_nonempty_logs_and_json_inside_workspace(
-    tmp_path,
-):
+def test_worker_artifact_validation_requires_nonempty_logs_and_json_inside_workspace(tmp_path):
     from fedotllm.agents.evolve.controller.smoke import validate_worker_artifacts
 
     workspace = tmp_path / "smoke"
@@ -24,28 +22,16 @@ def test_worker_artifact_validation_requires_nonempty_logs_and_json_inside_works
     log = artifacts / "quality-log-fixture.log"
     stage = artifacts / "quality-out-fixture.stages.json"
     log.write_text("worker started\n", encoding="utf-8")
-    identity = {
-        "proposal_id": "proposal-1",
-        "task_id": "fixture",
-        "side": "stock",
-        "attempt": 1,
-        "attempt_id": "proposal-1:fixture:stock:1",
-    }
-    stage.write_text(
-        json.dumps({"event": "finished", "last_stage": "metrics", **identity}),
-        encoding="utf-8",
-    )
+    identity = {"proposal_id":"proposal-1", "task_id":"fixture", "side":"stock",
+                "attempt":1, "attempt_id":"proposal-1:fixture:stock:1"}
+    stage.write_text(json.dumps({"event":"finished", "last_stage":"metrics", **identity}),
+                     encoding="utf-8")
     event = {
-        "event": "quality_task_side_finished",
-        "candidate": "proposal-1",
-        **identity,
-        "artifact_state": "finished",
-        "worker_paths": {"worker_log_path": str(log), "stage_status_path": str(stage)},
-        "result": {
-            "status": "ok",
-            "worker_log_path": str(log),
-            "metric_observations": {"stage_status_path": str(stage)},
-        },
+        "event":"quality_task_side_finished", "candidate":"proposal-1",
+        **identity, "artifact_state":"finished",
+        "worker_paths":{"worker_log_path":str(log), "stage_status_path":str(stage)},
+        "result":{"status":"ok", "worker_log_path":str(log),
+                  "metric_observations":{"stage_status_path":str(stage)}},
     }
 
     report = validate_worker_artifacts(workspace, [event])
@@ -66,26 +52,14 @@ def test_worker_artifact_validation_reports_missing_required_file(tmp_path, miss
     stage = artifacts / "quality-out-fixture.stages.json"
     log.write_text("worker started\n", encoding="utf-8")
     stage.write_text('{"event":"finished"}', encoding="utf-8")
-    (
-        artifacts
-        / (
-            "quality-log-fixture.log"
-            if missing == "worker_log"
-            else "quality-out-fixture.stages.json"
-        )
-    ).unlink()
+    (artifacts / ("quality-log-fixture.log" if missing == "worker_log"
+                  else "quality-out-fixture.stages.json")).unlink()
     event = {
-        "event": "quality_task_side_finished",
-        "candidate": "proposal-1",
-        "task_id": "fixture",
-        "side": "stock",
-        "artifact_state": "finished",
-        "worker_paths": {"worker_log_path": str(log), "stage_status_path": str(stage)},
-        "result": {
-            "status": "ok",
-            "worker_log_path": str(log),
-            "metric_observations": {"stage_status_path": str(stage)},
-        },
+        "event":"quality_task_side_finished", "candidate":"proposal-1",
+        "task_id":"fixture", "side":"stock", "artifact_state":"finished",
+        "worker_paths":{"worker_log_path":str(log), "stage_status_path":str(stage)},
+        "result":{"status":"ok", "worker_log_path":str(log),
+                  "metric_observations":{"stage_status_path":str(stage)}},
     }
 
     report = validate_worker_artifacts(workspace, [event])
@@ -103,45 +77,24 @@ def test_worker_artifact_validation_requires_event_identity_in_stage_sidecar(tmp
     log = artifacts / "worker.log"
     stage = artifacts / "worker.stages.json"
     log.write_text("worker started\n", encoding="utf-8")
-    identity = {
-        "proposal_id": "proposal-1",
-        "task_id": "fixture",
-        "side": "stock",
-        "attempt": 1,
-        "attempt_id": "proposal-1:fixture:stock:1",
-    }
+    identity = {"proposal_id":"proposal-1", "task_id":"fixture", "side":"stock",
+                "attempt":1, "attempt_id":"proposal-1:fixture:stock:1"}
     stage_identity = dict(identity)
     stage_identity.pop("task_id")
-    stage.write_text(
-        json.dumps({"event": "end", "last_stage": "metrics", **stage_identity}),
-        encoding="utf-8",
-    )
+    stage.write_text(json.dumps({"event":"end", "last_stage":"metrics", **stage_identity}),
+                     encoding="utf-8")
 
-    report = validate_worker_artifacts(
-        workspace,
-        [
-            {
-                "event": "quality_task_side_finished",
-                "candidate": "proposal-1",
-                **identity,
-                "worker_paths": {
-                    "worker_log_path": str(log),
-                    "stage_status_path": str(stage),
-                },
-                "result": {
-                    "status": "ok",
-                    "metric_observations": {"metric_valid": True},
-                },
-            }
-        ],
-    )
+    report = validate_worker_artifacts(workspace, [{
+        "event":"quality_task_side_finished", "candidate":"proposal-1",
+        **identity,
+        "worker_paths":{"worker_log_path":str(log), "stage_status_path":str(stage)},
+        "result":{"status":"ok", "metric_observations":{"metric_valid":True}},
+    }])
 
     assert not report["complete"]
-    assert any(
-        issue["artifact"] == "stage_status"
-        and issue["reason"] == "identity_missing:task_id"
-        for issue in report["issues"]
-    )
+    assert any(issue["artifact"] == "stage_status"
+               and issue["reason"] == "identity_missing:task_id"
+               for issue in report["issues"])
 
 
 def test_worker_artifact_validation_rejects_event_without_attempt_identity(tmp_path):
@@ -153,70 +106,33 @@ def test_worker_artifact_validation_rejects_event_without_attempt_identity(tmp_p
     log = artifacts / "worker.log"
     stage = artifacts / "worker.stages.json"
     log.write_text("worker started\n", encoding="utf-8")
-    stage.write_text(
-        json.dumps(
-            {
-                "event": "end",
-                "last_stage": "metrics",
-                "proposal_id": "proposal-1",
-                "task_id": "fixture",
-                "side": "stock",
-                "attempt": 1,
-                "attempt_id": "proposal-1:fixture:stock:1",
-            }
-        ),
-        encoding="utf-8",
-    )
+    stage.write_text(json.dumps({"event":"end", "last_stage":"metrics",
+                                 "proposal_id":"proposal-1", "task_id":"fixture",
+                                 "side":"stock", "attempt":1,
+                                 "attempt_id":"proposal-1:fixture:stock:1"}), encoding="utf-8")
 
-    report = validate_worker_artifacts(
-        workspace,
-        [
-            {
-                "event": "quality_task_side_finished",
-                "candidate": "proposal-1",
-                "task_id": "fixture",
-                "side": "stock",
-                "attempt": 1,
-                "worker_paths": {
-                    "worker_log_path": str(log),
-                    "stage_status_path": str(stage),
-                },
-                "result": {
-                    "status": "ok",
-                    "metric_observations": {"metric_valid": True},
-                },
-            }
-        ],
-    )
+    report = validate_worker_artifacts(workspace, [{
+        "event":"quality_task_side_finished", "candidate":"proposal-1",
+        "task_id":"fixture", "side":"stock", "attempt":1,
+        "worker_paths":{"worker_log_path":str(log), "stage_status_path":str(stage)},
+        "result":{"status":"ok", "metric_observations":{"metric_valid":True}},
+    }])
 
     assert not report["complete"]
-    assert any(
-        issue["artifact"] == "event"
-        and issue["reason"] == "identity_missing:attempt_id"
-        for issue in report["issues"]
-    )
+    assert any(issue["artifact"] == "event"
+               and issue["reason"] == "identity_missing:attempt_id"
+               for issue in report["issues"])
 
 
 def test_worker_artifact_validation_does_not_claim_cache_hits_are_new_workers(tmp_path):
     from fedotllm.agents.evolve.controller.smoke import validate_worker_artifacts
 
-    report = validate_worker_artifacts(
-        tmp_path / "smoke",
-        [
-            {
-                "event": "quality_task_side_finished",
-                "candidate": "proposal-1",
-                "task_id": "fixture",
-                "side": "stock",
-                "artifact_state": "stock_cache_hit",
-                "worker_paths": {
-                    "worker_log_path": "/absent/log",
-                    "stage_status_path": "/absent/stage",
-                },
-                "result": {"status": "ok", "metric_observations": {"cache_hit": True}},
-            }
-        ],
-    )
+    report = validate_worker_artifacts(tmp_path / "smoke", [{
+        "event":"quality_task_side_finished", "candidate":"proposal-1",
+        "task_id":"fixture", "side":"stock", "artifact_state":"stock_cache_hit",
+        "worker_paths":{"worker_log_path":"/absent/log", "stage_status_path":"/absent/stage"},
+        "result":{"status":"ok", "metric_observations":{"cache_hit":True}},
+    }])
 
     assert not report["complete"]
     assert report["issues"] == []
@@ -224,44 +140,27 @@ def test_worker_artifact_validation_does_not_claim_cache_hits_are_new_workers(tm
     assert report["reused_results"] == 1
 
 
-def test_worker_artifact_validation_does_not_require_artifacts_when_waiter_never_spawned(
-    tmp_path,
-):
+def test_worker_artifact_validation_does_not_require_artifacts_when_waiter_never_spawned(tmp_path):
     from fedotllm.agents.evolve.controller.smoke import validate_worker_artifacts
 
     workspace = tmp_path / "smoke"
     artifacts = workspace / "worker_artifacts"
     artifacts.mkdir(parents=True)
-    report = validate_worker_artifacts(
-        workspace,
-        [
-            {
-                "event": "quality_task_side_finished",
-                "candidate": "proposal-1",
-                "task_id": "fixture",
-                "side": "stock",
-                "attempt": 1,
-                "artifact_state": "finished",
-                "result": {
-                    "status": "timeout",
-                    "detail": "shared stock fit wait exceeded deadline",
-                    "metric_observations": {
-                        "worker_spawned": False,
-                        "wait_kind": "shared stock fit",
-                    },
-                },
-            }
-        ],
-    )
+    report = validate_worker_artifacts(workspace, [{
+        "event":"quality_task_side_finished", "candidate":"proposal-1",
+        "task_id":"fixture", "side":"stock", "attempt":1,
+        "artifact_state":"finished",
+        "result":{"status":"timeout", "detail":"shared stock fit wait exceeded deadline",
+                  "metric_observations":{"worker_spawned":False,
+                                         "wait_kind":"shared stock fit"}},
+    }])
 
     assert report["issues"] == []
     assert report["checked_workers"] == 0
     assert report["waited_without_worker"] == 1
 
 
-def test_worker_artifact_validation_rejects_empty_log_invalid_stage_and_escape(
-    tmp_path,
-):
+def test_worker_artifact_validation_rejects_empty_log_invalid_stage_and_escape(tmp_path):
     from fedotllm.agents.evolve.controller.smoke import validate_worker_artifacts
 
     workspace = tmp_path / "smoke"
@@ -275,40 +174,17 @@ def test_worker_artifact_validation_rejects_empty_log_invalid_stage_and_escape(
     bad_stage.write_text("not-json", encoding="utf-8")
     (artifacts / "escape.log").symlink_to(outside)
     events = [
-        {
-            "event": "quality_task_side_finished",
-            "candidate": "proposal-1",
-            "task_id": "fixture",
-            "side": "stock",
-            "attempt": 1,
-            "artifact_state": "finished",
-            "worker_paths": {
-                "worker_log_path": str(empty_log),
-                "stage_status_path": str(bad_stage),
-            },
-            "result": {
-                "status": "ok",
-                "worker_log_path": str(empty_log),
-                "metric_observations": {"stage_status_path": str(bad_stage)},
-            },
-        },
-        {
-            "event": "quality_task_side_finished",
-            "candidate": "proposal-1",
-            "task_id": "fixture",
-            "side": "patch",
-            "attempt": 1,
-            "artifact_state": "finished",
-            "worker_paths": {
-                "worker_log_path": str(artifacts / "escape.log"),
-                "stage_status_path": str(bad_stage),
-            },
-            "result": {
-                "status": "crash",
-                "worker_log_path": str(artifacts / "escape.log"),
-                "metric_observations": {"stage_status_path": str(bad_stage)},
-            },
-        },
+        {"event":"quality_task_side_finished", "candidate":"proposal-1", "task_id":"fixture",
+         "side":"stock", "attempt":1, "artifact_state":"finished",
+         "worker_paths":{"worker_log_path":str(empty_log), "stage_status_path":str(bad_stage)},
+         "result":{"status":"ok", "worker_log_path":str(empty_log),
+                   "metric_observations":{"stage_status_path":str(bad_stage)}}},
+        {"event":"quality_task_side_finished", "candidate":"proposal-1", "task_id":"fixture",
+         "side":"patch", "attempt":1, "artifact_state":"finished",
+         "worker_paths":{"worker_log_path":str(artifacts / "escape.log"),
+                         "stage_status_path":str(bad_stage)},
+         "result":{"status":"crash", "worker_log_path":str(artifacts / "escape.log"),
+                   "metric_observations":{"stage_status_path":str(bad_stage)}}},
     ]
 
     report = validate_worker_artifacts(workspace, events)
@@ -321,14 +197,8 @@ def test_worker_artifact_validation_rejects_empty_log_invalid_stage_and_escape(
 
 
 def test_smoke_data_is_small_repeatable_and_separate_from_quality_registry():
-    from fedotllm.agents.evolve.evaluation.smoke_data import (
-        load_smoke_fold,
-        smoke_registry,
-    )
-    from fedotllm.agents.evolve.evaluation.quality_registry import (
-        get_dataset,
-        load_quality_registry,
-    )
+    from fedotllm.agents.evolve.evaluation.smoke_data import load_smoke_fold, smoke_registry
+    from fedotllm.agents.evolve.evaluation.quality_registry import get_dataset, load_quality_registry
     from fedotllm.agents.evolve.evaluation.quality_registry import job_spec
 
     registry = smoke_registry()
@@ -336,17 +206,12 @@ def test_smoke_data_is_small_repeatable_and_separate_from_quality_registry():
     assert registry.watchdog_seconds == 600
     assert registry.n_jobs_per_job == 4
     assert not registry.with_tuning
-    assert dict(registry.composer_options) == {"pop_size": 4, "num_of_generations": 2}
+    assert dict(registry.composer_options) == {"pop_size":4, "num_of_generations":2}
     assert {row.problem for row in registry.datasets} == {
-        "classification",
-        "regression",
-        "ts_forecasting",
-    }
+        "classification", "regression", "ts_forecasting"}
     for dataset in registry.datasets:
         assert job_spec(dataset, registry=registry)["composer_options"] == {
-            "pop_size": 4,
-            "num_of_generations": 2,
-        }
+            "pop_size":4, "num_of_generations":2}
         first = load_smoke_fold(dataset)
         second = load_smoke_fold(dataset)
         assert 0 < first["n_train"] <= 128
@@ -367,7 +232,7 @@ def test_quality_registry_rejects_coerced_composer_option_values(monkeypatch, va
     from fedotllm.agents.evolve.evaluation import quality_registry
 
     raw = quality_registry._load_raw()
-    raw["composer_options"] = {"pop_size": value}
+    raw["composer_options"] = {"pop_size":value}
     monkeypatch.setattr(quality_registry, "_load_raw", lambda: raw)
 
     with pytest.raises(ValueError, match="composer_options"):
@@ -375,9 +240,7 @@ def test_quality_registry_rejects_coerced_composer_option_values(monkeypatch, va
 
 
 @pytest.mark.parametrize("value", [[], "", 0, None])
-def test_quality_registry_rejects_falsey_non_object_composer_options(
-    monkeypatch, value
-):
+def test_quality_registry_rejects_falsey_non_object_composer_options(monkeypatch, value):
     from fedotllm.agents.evolve.evaluation import quality_registry
 
     raw = quality_registry._load_raw()
@@ -419,7 +282,7 @@ def test_quality_registry_rejects_unknown_candidate_dispatcher(monkeypatch):
         quality_registry.load_quality_registry()
 
 
-PROTOCOL_WORKER = """\
+PROTOCOL_WORKER = '''\
 import json
 from pathlib import Path
 import sys
@@ -459,12 +322,10 @@ stage = {"task_id":spec["source_dataset"], "side":spec["side"],
          "proposal_id":spec["proposal_id"], "event":"failed" if broken else "end",
          "last_stage":"import" if broken else "metrics"}
 out.with_suffix('.stages.json').write_text(json.dumps(stage))
-"""
+'''
 
 
-def test_smoke_advances_after_failed_proposal_and_recovers_without_refitting(
-    tmp_path, monkeypatch
-):
+def test_smoke_advances_after_failed_proposal_and_recovers_without_refitting(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller.smoke import run_smoke
 
     source = tmp_path / "FEDOT"
@@ -489,21 +350,9 @@ def test_smoke_advances_after_failed_proposal_and_recovers_without_refitting(
     assert (source / "fedot/__init__.py").read_bytes() == original
     assert not (tmp_path / "quality_queue").exists()
     assert not (tmp_path / "runs/quality_queue").exists()
-    events = [
-        json.loads(line)
-        for line in (workspace / "check/quality_jobs.jsonl").read_text().splitlines()
-    ]
-    assert (
-        len(
-            [
-                row
-                for row in events
-                if row["event"] == "quality_task_side_reused"
-                and row["candidate"] == "smoke-02-control"
-            ]
-        )
-        == 6
-    )
+    events = [json.loads(line) for line in (workspace / "check/quality_jobs.jsonl").read_text().splitlines()]
+    assert len([row for row in events if row["event"] == "quality_task_side_reused"
+                and row["candidate"] == "smoke-02-control"]) == 6
     with pytest.raises(FileExistsError):
         run_smoke(source, workspace)
 
@@ -515,8 +364,7 @@ def test_smoke_does_not_hide_unexpected_stock_failure(tmp_path, monkeypatch):
     (source / "fedot").mkdir(parents=True)
     (source / "fedot/__init__.py").write_text('"""FEDOT fixture."""\n')
     (source / "smoke_protocol_fixture.py").write_text(
-        PROTOCOL_WORKER.replace("unexpected_stock = False", "unexpected_stock = True")
-    )
+        PROTOCOL_WORKER.replace("unexpected_stock = False", "unexpected_stock = True"))
     monkeypatch.setenv("FEDOTLLM_REPO_PYTHON", sys.executable)
     monkeypatch.setattr(fedot_quality, "WORKER_MODULE", "smoke_protocol_fixture")
     report = run_smoke(source, tmp_path / "smoke")
@@ -524,17 +372,13 @@ def test_smoke_does_not_hide_unexpected_stock_failure(tmp_path, monkeypatch):
     assert report["unexpected_failures"]
 
 
-def test_smoke_rejects_sqlite_cache_created_despite_disabled_policy(
-    tmp_path, monkeypatch
-):
+def test_smoke_rejects_sqlite_cache_created_despite_disabled_policy(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller.smoke import run_smoke
-
     source = tmp_path / "FEDOT"
     (source / "fedot").mkdir(parents=True)
     (source / "fedot/__init__.py").write_text('"""FEDOT fixture."""\n')
     (source / "smoke_protocol_fixture.py").write_text(
-        PROTOCOL_WORKER.replace("leak_sqlite = False", "leak_sqlite = True")
-    )
+        PROTOCOL_WORKER.replace("leak_sqlite = False", "leak_sqlite = True"))
     monkeypatch.setenv("FEDOTLLM_REPO_PYTHON", sys.executable)
     monkeypatch.setattr(fedot_quality, "WORKER_MODULE", "smoke_protocol_fixture")
     report = run_smoke(source, tmp_path / "smoke")
@@ -542,12 +386,8 @@ def test_smoke_rejects_sqlite_cache_created_despite_disabled_policy(
     assert report["sqlite_cache_files"]
 
 
-def test_real_golem_default_output_is_isolated_before_fedot_import(
-    tmp_path, monkeypatch
-):
-    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import (
-        configure_worker_runtime,
-    )
+def test_real_golem_default_output_is_isolated_before_fedot_import(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import configure_worker_runtime
     import golem.core.paths as paths
 
     monkeypatch.setattr(paths, "default_data_dir", paths.default_data_dir)
@@ -560,12 +400,8 @@ def test_real_golem_default_output_is_isolated_before_fedot_import(
     assert Path(runtime["golem_data_dir"]).is_dir()
 
 
-def test_worker_runtime_path_is_unique_when_output_path_is_reused(
-    tmp_path, monkeypatch
-):
-    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import (
-        configure_worker_runtime,
-    )
+def test_worker_runtime_path_is_unique_when_output_path_is_reused(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.evaluation._fedot_quality_worker import configure_worker_runtime
     import golem.core.paths as paths
 
     monkeypatch.setattr(paths, "default_data_dir", paths.default_data_dir)
@@ -582,25 +418,18 @@ def test_worker_runtime_path_is_unique_when_output_path_is_reused(
 
 
 def test_controller_smoke_reserves_only_time_within_its_search_budget():
-    from fedotllm.agents.evolve.evaluation.smoke_data import (
-        SMOKE_IDENTITY,
-        smoke_registry,
-    )
+    from fedotllm.agents.evolve.evaluation.smoke_data import SMOKE_IDENTITY, smoke_registry
 
     registry = smoke_registry()
 
     assert registry.final_fit_reserve_seconds == 0
-    assert (
-        0 <= registry.final_fit_reserve_seconds < registry.fedot_search_budget_seconds
-    )
+    assert 0 <= registry.final_fit_reserve_seconds < registry.fedot_search_budget_seconds
     assert SMOKE_IDENTITY == "controller-smoke-v5-fit-reserve-disabled-sqlite"
 
 
 @pytest.mark.parametrize("problem", ["classification", "regression", "ts_forecasting"])
 def test_registered_smoke_profile_reaches_fit_and_measures_holdout(
-    tmp_path,
-    monkeypatch,
-    problem,
+    tmp_path, monkeypatch, problem,
 ):
     from enum import Enum
     from types import ModuleType, SimpleNamespace
@@ -609,9 +438,7 @@ def test_registered_smoke_profile_reaches_fit_and_measures_holdout(
     from fedotllm.agents.evolve.evaluation.quality_registry import job_spec
     from fedotllm.agents.evolve.evaluation.smoke_data import smoke_registry
 
-    task_types = Enum(
-        "TaskTypesEnum", ["classification", "regression", "ts_forecasting"]
-    )
+    task_types = Enum("TaskTypesEnum", ["classification", "regression", "ts_forecasting"])
 
     class ParamsRepository:
         @staticmethod
@@ -622,10 +449,8 @@ def test_registered_smoke_profile_reaches_fit_and_measures_holdout(
         def __init__(self, **kwargs):
             self.params = kwargs
             self.api_composer = SimpleNamespace(
-                operations_cache=None,
-                preprocessing_cache=None,
-                was_optimised=False,
-                was_tuned=False,
+                operations_cache=None, preprocessing_cache=None,
+                was_optimised=False, was_tuned=False,
             )
             self.history = None
             self.fitted = False
@@ -650,30 +475,19 @@ def test_registered_smoke_profile_reaches_fit_and_measures_holdout(
 
     for module_name, attributes in (
         ("fedot.api.main", {"Fedot": SmokeFedot}),
-        (
-            "fedot.api.api_utils.api_params_repository",
-            {"ApiParamsRepository": ParamsRepository},
-        ),
-        (
-            "fedot.core.repository.tasks",
-            {
-                "TaskTypesEnum": task_types,
-                "TsForecastingParams": lambda **kwargs: kwargs,
-            },
-        ),
+        ("fedot.api.api_utils.api_params_repository", {"ApiParamsRepository": ParamsRepository}),
+        ("fedot.core.repository.tasks", {
+            "TaskTypesEnum": task_types, "TsForecastingParams": lambda **kwargs: kwargs,
+        }),
     ):
         module = ModuleType(module_name)
         module.__dict__.update(attributes)
         monkeypatch.setitem(sys.modules, module_name, module)
-    monkeypatch.setattr(
-        worker, "configure_worker_runtime", lambda out: {"temp_dir": str(tmp_path)}
-    )
+    monkeypatch.setattr(worker, "configure_worker_runtime", lambda out: {"temp_dir": str(tmp_path)})
     registry = smoke_registry()
     dataset = next(row for row in registry.datasets if row.problem == problem)
 
-    payload, _ = worker._evaluate_worker(
-        job_spec(dataset, registry=registry), tmp_path / "result.json"
-    )
+    payload, _ = worker._evaluate_worker(job_spec(dataset, registry=registry), tmp_path / "result.json")
 
     assert payload["status"] == "ok", payload.get("detail")
     assert payload["score"] == 0.75
@@ -694,13 +508,8 @@ def test_smoke_cannot_be_drained_as_a_full_quality_run(tmp_path):
 
     workspace = tmp_path / "check"
     path = quality_queue.enqueue_quality_job(
-        workspace,
-        candidate=PatchCandidate("smoke", "fedot/__init__.py"),
-        patch_text="fixture",
-        hint="smoke",
-        priority="high",
-        registry=smoke_registry(),
-    )
+        workspace, candidate=PatchCandidate("smoke", "fedot/__init__.py"),
+        patch_text="fixture", hint="smoke", priority="high", registry=smoke_registry())
     result = drain_quality_queue(tmp_path, workspace, continue_on_error=True)
     assert result["jobs"][0]["reason"] == "registry_mismatch"
     assert json.loads(path.read_text())["status"] == "blocked"
@@ -716,19 +525,13 @@ def test_worker_rejects_changed_smoke_profile():
     dataset, fold = load_worker_fold(spec)
     assert dataset.task_id == registry.datasets[0].task_id
     assert fold["n_train"] == 128
-    for key, value in {
-        "seed": 43,
-        "timeout_seconds": 3600,
-        "source_dataset": "openml-31",
-    }.items():
+    for key, value in {"seed":43, "timeout_seconds":3600, "source_dataset":"openml-31"}.items():
         with pytest.raises((ValueError, KeyError)):
-            load_worker_fold({**spec, key: value})
+            load_worker_fold({**spec, key:value})
 
 
 @pytest.mark.parametrize("via_symlink", [False, True])
-def test_smoke_rejects_physical_workspace_inside_immutable_source(
-    tmp_path, via_symlink
-):
+def test_smoke_rejects_physical_workspace_inside_immutable_source(tmp_path, via_symlink):
     from fedotllm.agents.evolve.controller.smoke import run_smoke
 
     source = tmp_path / "FEDOT"

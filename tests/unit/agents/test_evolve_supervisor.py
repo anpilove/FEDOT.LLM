@@ -93,11 +93,7 @@ for path in (workspace / "quality_queue").glob("*.json"):
 
     def boundary(command, **kwargs):
         kind = command[3]
-        expected_module = (
-            "fedotllm.agents.evolve.controller"
-            if kind == "drain"
-            else "fedotllm.agents.evolve"
-        )
+        expected_module = "fedotllm.agents.evolve.controller" if kind == "drain" else "fedotllm.agents.evolve"
         assert command[:3] == [sys.executable, "-m", expected_module]
         if kind == "drain":
             kind = "quality-drain"
@@ -140,10 +136,7 @@ def test_disk_full_stops_without_retry_and_latches_across_service_resume(
         assert result["controller_launches"] == 1
         assert result["child_running"] is False
         assert result["active_child"] is None
-    assert (
-        json.loads((workspace / "quality_queue/a.json").read_text())["status"]
-        == "queued"
-    )
+    assert json.loads((workspace / "quality_queue/a.json").read_text())["status"] == "queued"
     assert len(list((workspace / "logs").glob("controller-*.log"))) == 1
 
 
@@ -154,23 +147,19 @@ def test_unsaved_storage_failure_in_final_launch_log_prevents_resume(
     enqueue(workspace)
     (workspace / "sleep_child").touch()
     original = service._write_durable
-
     def failing_storage(path, payload):
         if path.name == "service_status.json" and (
             payload.get("child_running") or payload.get("state") == "storage_error"
         ):
             raise OSError(28, "No space left on device")
         return original(path, payload)
-
     monkeypatch.setattr(service, "_write_durable", failing_storage)
     config = configuration(service, controller_timeout_seconds=30)
     failure = service.run_quality_service(source, workspace, config=config)
     assert failure["state"] == "storage_error"
     # This is the fixed CLI's final record after an unsavable status; the previous
     # durable ledger remains running. Recovery must consult this artifact.
-    (workspace / "logs/service-launch.log").write_text(
-        json.dumps(failure, indent=2) + "\n"
-    )
+    (workspace / "logs/service-launch.log").write_text(json.dumps(failure, indent=2) + '\n')
     monkeypatch.setattr(service, "_write_durable", original)
     resumed = service.run_quality_service(source, workspace, config=config)
     assert resumed["state"] == "storage_error"
@@ -192,10 +181,7 @@ def test_restarts_crashed_controller_and_records_measured_completion(
     assert result["completion"] == "all_measured"
     assert result["controller_restarts"] == 1
     assert len(list((workspace / "logs").glob("controller-*.log"))) == 2
-    events = [
-        json.loads(line)
-        for line in (workspace / "logs/service_events.jsonl").read_text().splitlines()
-    ]
+    events = [json.loads(line) for line in (workspace / "logs/service_events.jsonl").read_text().splitlines()]
     assert [row["event"] for row in events].count("child_started") == 2
     assert [row["event"] for row in events].count("child_finished") == 2
     assert events[-1]["event"] == "service_finished"
@@ -210,9 +196,7 @@ def test_hundred_improvements_finish_with_complete_paired_results(
         enqueue(workspace, proposal=f"improvement-{index:03d}")
     (workspace / "crash_once").touch()
     result = service.run_quality_service(
-        source,
-        workspace,
-        config=configuration(service, duration_seconds=10, target_proposals=100),
+        source, workspace, config=configuration(service, duration_seconds=10, target_proposals=100)
     )
     assert result["completion"] == "all_measured"
     assert result["measured_proposals"] == 100
@@ -331,31 +315,24 @@ def test_mixed_skipped_and_measured_revisions_are_terminal_but_not_fully_measure
     second_path = workspace / "quality_queue" / "a-r2.json"
     first = json.loads(first_path.read_text())
     second = json.loads(second_path.read_text())
-    first.update(
-        proposal_id="a", status="skipped", reason="inapplicable_tasks", task_ids=[]
-    )
+    first.update(proposal_id="a", status="skipped", reason="inapplicable_tasks", task_ids=[])
     second.update(proposal_id="a", status="keep")
     first_path.write_text(json.dumps(first))
     second_path.write_text(json.dumps(second))
-    (workspace / "quality_jobs.jsonl").write_text(
-        "\n".join(
-            json.dumps(
-                {
-                    "event": "quality_task_side_finished",
-                    "candidate": "a-r2",
-                    "task_id": "example",
-                    "side": side,
-                    "result": {
-                        "status": "ok",
-                        "score": 0.9,
-                        "metric_observations": {"metric_valid": True},
-                    },
-                }
-            )
-            for side in ("stock", "patch")
-        )
-        + "\n"
-    )
+    (workspace / "quality_jobs.jsonl").write_text("\n".join(
+        json.dumps({
+            "event": "quality_task_side_finished",
+            "candidate": "a-r2",
+            "task_id": "example",
+            "side": side,
+            "result": {
+                "status": "ok",
+                "score": 0.9,
+                "metric_observations": {"metric_valid": True},
+            },
+        })
+        for side in ("stock", "patch")
+    ) + "\n")
 
     progress = service._progress(workspace)
 
@@ -375,25 +352,18 @@ def test_finite_scores_without_metric_attestation_are_not_measured(
     item["status"] = "keep"
     path.write_text(json.dumps(item))
     events = workspace / "quality_jobs.jsonl"
-    events.write_text(
-        "\n".join(
-            json.dumps(
-                {
-                    "event": "quality_task_side_finished",
-                    "candidate": "a",
-                    "task_id": "example",
-                    "side": side,
-                    "result": {"status": "ok", "score": 0.9},
-                }
-            )
-            for side in ("stock", "patch")
-        )
-        + "\n"
-    )
+    events.write_text("\n".join(
+        json.dumps({
+            "event": "quality_task_side_finished",
+            "candidate": "a",
+            "task_id": "example",
+            "side": side,
+            "result": {"status": "ok", "score": 0.9},
+        })
+        for side in ("stock", "patch")
+    ) + "\n")
 
-    result = service.run_quality_service(
-        source, workspace, config=configuration(service)
-    )
+    result = service.run_quality_service(source, workspace, config=configuration(service))
 
     assert result["state"] == "completed"
     assert result["completion"] == "terminal_with_errors"
@@ -411,18 +381,13 @@ def test_controller_retry_budget_is_finite(service, source, tmp_path, named_chil
     )
     assert result["state"] == "restart_exhausted"
     assert len(list((workspace / "logs").glob("controller-*.log"))) == 2
-    events = [
-        json.loads(line)
-        for line in (workspace / "logs/service_events.jsonl").read_text().splitlines()
-    ]
+    events = [json.loads(line) for line in (workspace / "logs/service_events.jsonl").read_text().splitlines()]
     assert [row["event"] for row in events].count("child_started") == 2
     assert [row["event"] for row in events].count("child_finished") == 2
     assert events[-1]["state"] == "restart_exhausted"
 
 
-def test_records_child_exception_with_the_exact_log_path(
-    service, source, tmp_path, monkeypatch
-):
+def test_records_child_exception_with_the_exact_log_path(service, source, tmp_path, monkeypatch):
     workspace = tmp_path / "campaign"
     enqueue(workspace)
 
@@ -435,10 +400,7 @@ def test_records_child_exception_with_the_exact_log_path(
     )
 
     assert result["state"] == "artifact_error"
-    events = [
-        json.loads(line)
-        for line in (workspace / "logs/service_events.jsonl").read_text().splitlines()
-    ]
+    events = [json.loads(line) for line in (workspace / "logs/service_events.jsonl").read_text().splitlines()]
     interrupted = [row for row in events if row["event"] == "child_interrupted"]
     assert len(interrupted) == 1
     assert interrupted[0]["log"].rsplit("/", 1)[-1].startswith("controller-0001-")

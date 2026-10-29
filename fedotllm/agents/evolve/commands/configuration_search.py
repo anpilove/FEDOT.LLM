@@ -111,12 +111,7 @@ def generic_values(
         ]
     if parameter == "min_samples_split" and current in (None, 2):
         return [(4, "mild split regularization reduces fragile tiny partitions")]
-    if parameter in {"min_data_in_leaf", "min_child_weight"} and current in (
-        None,
-        0,
-        1,
-        1.0,
-    ):
+    if parameter in {"min_data_in_leaf", "min_child_weight"} and current in (None, 0, 1, 1.0):
         return [
             (2, "require minimal support for a learned leaf"),
             (4, "test stronger support for a learned leaf"),
@@ -148,33 +143,18 @@ def generic_values(
         ]
     if parameter == "max_features" and current == "sqrt":
         return [("log2", "test a nearby feature-subsampling regime")]
-    if (
-        parameter == "learning_rate"
-        and isinstance(current, (int, float))
-        and current > 0
-    ):
+    if parameter == "learning_rate" and isinstance(current, (int, float)) and current > 0:
         return [
-            (
-                float(current) / 2.0,
-                "slower updates may improve boosting generalization",
-            ),
-            (
-                float(current) * 2.0,
-                "faster updates test the opposing bias/variance tradeoff",
-            ),
+            (float(current) / 2.0, "slower updates may improve boosting generalization"),
+            (float(current) * 2.0, "faster updates test the opposing bias/variance tradeoff"),
         ]
     if parameter == "num_leaves" and isinstance(current, int) and current > 4:
         return [
             (max(4, current // 2), "reduce tree capacity to test variance control"),
-            (
-                current * 2 + 1,
-                "increase tree capacity to test the opposing bias mechanism",
-            ),
+            (current * 2 + 1, "increase tree capacity to test the opposing bias mechanism"),
         ]
     if parameter in {"colsample_bytree", "subsample"} and current in (None, 1, 1.0):
-        return [
-            (0.8, "mild stochastic subsampling may improve ensemble generalization")
-        ]
+        return [(0.8, "mild stochastic subsampling may improve ensemble generalization")]
     if parameter == "bagging_fraction" and isinstance(current, (int, float)):
         return [
             (0.7, "stronger row subsampling may reduce boosting variance"),
@@ -190,26 +170,15 @@ def generic_values(
     if parameter == "algorithm" and current == "parallel":
         return [("deflation", "test sequential independent-component extraction")]
     if parameter == "svd_solver" and current == "full":
-        return [
-            ("randomized", "test the stable truncated randomized decomposition path")
-        ]
+        return [("randomized", "test the stable truncated randomized decomposition path")]
     if parameter == "extra_trees" and current is False:
-        return [
-            (
-                True,
-                "test randomized split thresholds as a variance-reduction alternative",
-            )
-        ]
+        return [(True, "test randomized split thresholds as a variance-reduction alternative")]
     if parameter == "max_iter" and isinstance(current, int) and 0 < current < 2_000:
         return [(current * 2, "allow the iterative estimator more room to converge")]
     if parameter == "tol" and isinstance(current, (int, float)) and current > 0:
-        return [
-            (float(current) / 10.0, "test a stricter numerical convergence tolerance")
-        ]
+        return [(float(current) / 10.0, "test a stricter numerical convergence tolerance")]
     if parameter == "class_weight" and classification and current is None:
-        return [
-            ("balanced", "use training-label frequencies to correct class imbalance")
-        ]
+        return [("balanced", "use training-label frequencies to correct class imbalance")]
     return []
 
 
@@ -274,10 +243,7 @@ def propose_parameter_variants(
             tasks_by_operation.setdefault(operation, []).append(task_id)
     ordered = sorted(
         surfaces.values(),
-        key=lambda row: (
-            -len(tasks_by_operation.get(row["operation"], ())),
-            row["operation"],
-        ),
+        key=lambda row: (-len(tasks_by_operation.get(row["operation"], ())), row["operation"]),
     )
     variants: list[ParameterVariant] = []
     operations_with_variants = 0
@@ -325,8 +291,9 @@ def propose_parameter_variants(
         if operation_variants:
             operations_with_variants += 1
             variants.extend(operation_variants)
-        if len(variants) >= max(1, max_total) or operations_with_variants >= max(
-            1, max_operations
+        if (
+            len(variants) >= max(1, max_total)
+            or operations_with_variants >= max(1, max_operations)
         ):
             break
     return variants[: max(1, max_total)]
@@ -341,9 +308,7 @@ def propose_parameter_bundles(
 
     grouped: dict[str, dict[str, list[ParameterVariant]]] = {}
     for variant in variants:
-        grouped.setdefault(variant.operation, {}).setdefault(
-            variant.parameter, []
-        ).append(variant)
+        grouped.setdefault(variant.operation, {}).setdefault(variant.parameter, []).append(variant)
 
     pair_order = (
         ("learning_rate", "num_leaves"),
@@ -353,27 +318,13 @@ def propose_parameter_bundles(
         ("colsample_bytree", "subsample"),
     )
 
-    def conservative(
-        parameter: str, options: list[ParameterVariant]
-    ) -> ParameterVariant:
+    def conservative(parameter: str, options: list[ParameterVariant]) -> ParameterVariant:
         if parameter in {"learning_rate", "num_leaves"}:
-            lower = [
-                row
-                for row in options
-                if isinstance(row.value, (int, float))
-                and isinstance(row.current_value, (int, float))
-                and row.value < row.current_value
-            ]
+            lower = [row for row in options if isinstance(row.value, (int, float)) and isinstance(row.current_value, (int, float)) and row.value < row.current_value]
             if lower:
                 return lower[0]
         if parameter == "min_child_samples":
-            higher = [
-                row
-                for row in options
-                if isinstance(row.value, (int, float))
-                and isinstance(row.current_value, (int, float))
-                and row.value > row.current_value
-            ]
+            higher = [row for row in options if isinstance(row.value, (int, float)) and isinstance(row.current_value, (int, float)) and row.value > row.current_value]
             if higher:
                 return higher[0]
         return options[0]
@@ -449,21 +400,14 @@ def _refined_numeric_value(
         or not isinstance(selected, (int, float))
     ):
         return None
-    if not all(
-        math.isfinite(float(value)) and float(value) > 0
-        for value in (current, selected)
-    ):
+    if not all(math.isfinite(float(value)) and float(value) > 0 for value in (current, selected)):
         return None
     value = float(current) + (float(selected) - float(current)) * fraction
     if isinstance(current, int) and isinstance(selected, int):
         refined: int | float = int(round(value))
     else:
         refined = round(value, 12)
-    if (
-        refined <= 0
-        or not _different(refined, current)
-        or not _different(refined, selected)
-    ):
+    if refined <= 0 or not _different(refined, current) or not _different(refined, selected):
         return None
     return refined
 
@@ -475,9 +419,7 @@ def refine_parameter_choice(
 
     if _REFINEMENT_MARKER in variant.rationale:
         return []
-    parts = (
-        list(variant.variants) if isinstance(variant, ParameterBundle) else [variant]
-    )
+    parts = list(variant.variants) if isinstance(variant, ParameterBundle) else [variant]
     refined: list[ParameterVariant | ParameterBundle] = []
     for position, part in enumerate(parts):
         for fraction, direction in (
@@ -511,9 +453,7 @@ def refine_parameter_choice(
     return refined
 
 
-def _variant_from_payload(
-    payload: dict[str, Any],
-) -> ParameterVariant | ParameterBundle | None:
+def _variant_from_payload(payload: dict[str, Any]) -> ParameterVariant | ParameterBundle | None:
     try:
         operation = str(payload["operation"])
         nested = payload.get("variants")
@@ -524,9 +464,7 @@ def _variant_from_payload(
                     parameter=str(row["parameter"]),
                     value=row.get("value"),
                     current_value=row.get("current_value"),
-                    rationale=str(
-                        row.get("rationale") or "historical configuration choice"
-                    ),
+                    rationale=str(row.get("rationale") or "historical configuration choice"),
                 )
                 for row in nested
                 if isinstance(row, dict)
@@ -536,18 +474,14 @@ def _variant_from_payload(
             return ParameterBundle(
                 operation=operation,
                 variants=parts,
-                rationale=str(
-                    payload.get("rationale") or "historical parameter bundle"
-                ),
+                rationale=str(payload.get("rationale") or "historical parameter bundle"),
             )
         return ParameterVariant(
             operation=operation,
             parameter=str(payload["parameter"]),
             value=payload.get("value"),
             current_value=payload.get("current_value"),
-            rationale=str(
-                payload.get("rationale") or "historical configuration choice"
-            ),
+            rationale=str(payload.get("rationale") or "historical configuration choice"),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -571,9 +505,7 @@ def _positive_near_miss(row: dict[str, Any]) -> float | None:
     return numeric
 
 
-def refinements_from_trials(
-    trials: list[dict[str, Any]],
-) -> list[ParameterVariant | ParameterBundle]:
+def refinements_from_trials(trials: list[dict[str, Any]]) -> list[ParameterVariant | ParameterBundle]:
     """Rank historical DEV near-misses and turn them into fresh local choices."""
 
     ranked: list[tuple[float, ParameterVariant | ParameterBundle]] = []
@@ -607,7 +539,7 @@ def _operation_block(text: str, operation: str) -> tuple[str, dict] | None:
 def _format_operation(operation: str, params: dict) -> str:
     encoded = json.dumps(params, ensure_ascii=False, indent=2, sort_keys=True)
     encoded = encoded.replace("\n", "\n  ")
-    return f"  {json.dumps(operation)}: {encoded}"
+    return f'  {json.dumps(operation)}: {encoded}'
 
 
 def candidate_for_variant(
@@ -620,28 +552,19 @@ def candidate_for_variant(
         payload = json.loads(text)
     except (OSError, json.JSONDecodeError):
         return None
-    parts = (
-        list(variant.variants) if isinstance(variant, ParameterBundle) else [variant]
-    )
+    parts = list(variant.variants) if isinstance(variant, ParameterBundle) else [variant]
     located = _operation_block(text, variant.operation)
     if located is None:
         params = {item.parameter: item.value for item in parts}
-        first_operation = (
-            next(iter(payload), None) if isinstance(payload, dict) else None
-        )
-        first = (
-            _operation_block(text, str(first_operation)) if first_operation else None
-        )
+        first_operation = next(iter(payload), None) if isinstance(payload, dict) else None
+        first = _operation_block(text, str(first_operation)) if first_operation else None
         if first is None:
             old_code = text
-            new_code = (
-                json.dumps(
-                    {variant.operation: params},
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n"
-            )
+            new_code = json.dumps(
+                {variant.operation: params},
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
         else:
             old_code, _first_params = first
             new_code = _format_operation(variant.operation, params) + ",\n" + old_code
@@ -769,7 +692,8 @@ def search_configuration_variants(
     last = Decision(False, "no_configuration_keep", None)
     evaluated_trials = 0
     queued_signatures = {
-        json.dumps(asdict(variant), sort_keys=True, default=str) for variant in variants
+        json.dumps(asdict(variant), sort_keys=True, default=str)
+        for variant in variants
     }
     cursor = 0
     index = 0
@@ -874,9 +798,7 @@ def search_configuration_variants(
                 ):
                     fresh: list[ParameterVariant | ParameterBundle] = []
                     for refined in refine_parameter_choice(variant):
-                        signature = json.dumps(
-                            asdict(refined), sort_keys=True, default=str
-                        )
+                        signature = json.dumps(asdict(refined), sort_keys=True, default=str)
                         if signature in queued_signatures:
                             continue
                         queued_signatures.add(signature)

@@ -8,11 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fedotllm.agents.evolve.storage.journal import (
-    JournalCorruptionError,
-    read_jsonl,
-    write_json_atomic,
-)
+from fedotllm.agents.evolve.storage.journal import JournalCorruptionError, read_jsonl, write_json_atomic
 
 
 def save_quality_event(journal: Path, event: dict) -> dict:
@@ -27,16 +23,10 @@ def save_quality_event(journal: Path, event: dict) -> dict:
     return payload
 
 
-def read_quality_events(
-    journal: Path,
-    *,
-    candidate_id: str | None = None,
-    ignore_incomplete_tail: bool = False,
-) -> list[dict]:
+def read_quality_events(journal: Path, *, candidate_id: str | None = None,
+                        ignore_incomplete_tail: bool = False) -> list[dict]:
     """Merge persisted events and legacy journal rows without hiding corruption."""
-    events = read_jsonl(
-        journal, strict=True, ignore_incomplete_tail=ignore_incomplete_tail
-    )
+    events = read_jsonl(journal, strict=True, ignore_incomplete_tail=ignore_incomplete_tail)
     seen = {event["event_id"] for event in events if event.get("event_id")}
     directory = journal.parent / "quality_attempts"
     if candidate_id is not None:
@@ -45,13 +35,9 @@ def read_quality_events(
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise JournalCorruptionError(
-                f"invalid quality event at {path}: {exc.msg}"
-            ) from exc
+            raise JournalCorruptionError(f"invalid quality event at {path}: {exc.msg}") from exc
         if not isinstance(payload, dict) or not payload.get("event_id"):
-            raise JournalCorruptionError(
-                f"invalid quality event at {path}: expected event object"
-            )
+            raise JournalCorruptionError(f"invalid quality event at {path}: expected event object")
         if payload["event_id"] not in seen:
             events.append(payload)
             seen.add(payload["event_id"])

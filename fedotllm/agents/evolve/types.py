@@ -233,25 +233,16 @@ class Decision:
     experiment_id: str = ""
     infrastructure_error: bool = False
     metric_goal_keep: bool = False
-    quality_failure: (
-        Literal[
-            "candidate_error",
-            "evaluation_error",
-            "fedot_budget_timeout",
-            "unverified_metric",
-        ]
-        | None
-    ) = None
-    quality_outcome: (
-        Literal[
-            "broad_positive",
-            "local_positive",
-            "regression",
-            "insufficient_effect",
-            "not_evaluated",
-        ]
-        | None
-    ) = None
+    quality_failure: Literal[
+        "candidate_error", "evaluation_error", "fedot_budget_timeout", "unverified_metric"
+    ] | None = None
+    quality_outcome: Literal[
+        "broad_positive",
+        "local_positive",
+        "regression",
+        "insufficient_effect",
+        "not_evaluated",
+    ] | None = None
     improved_task_count: int = 0
     regressed_task_count: int = 0
     unresolved_task_ids: tuple[str, ...] = ()

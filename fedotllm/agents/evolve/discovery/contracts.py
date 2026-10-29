@@ -217,11 +217,7 @@ def discover_contract_violations(
         )
         row = {
             "contract_id": contract.contract_id,
-            "status": "violated"
-            if violated
-            else "passed"
-            if result.status == "ok"
-            else "invalid",
+            "status": "violated" if violated else "passed" if result.status == "ok" else "invalid",
             "observation": _observation(result),
             "runtime_status": result.status,
             "candidate_files": list(contract.candidate_files),
@@ -229,9 +225,7 @@ def discover_contract_violations(
         rows.append(row)
         if not violated:
             continue
-        existing = tuple(
-            path for path in contract.candidate_files if (checkout / path).is_file()
-        )
+        existing = tuple(path for path in contract.candidate_files if (checkout / path).is_file())
         if not existing:
             continue
         leads.append(
@@ -273,11 +267,7 @@ def verification_from_contract_lead(lead: MatchSite) -> VerificationResult | Non
         claim=lead.why,
         expected="the public contract assertion passes after the source correction",
         observed=next(
-            (
-                item
-                for item in lead.evidence
-                if item.startswith("observed stock result:")
-            ),
+            (item for item in lead.evidence if item.startswith("observed stock result:")),
             "",
         ),
         reproduction_code=code,

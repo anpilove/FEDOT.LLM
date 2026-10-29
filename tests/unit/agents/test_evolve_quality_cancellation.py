@@ -226,14 +226,7 @@ raise SystemExit(2)
     def run_fixture(command, **kwargs):
         output = command[command.index("--out") + 1]
         return real_run_worker(
-            [
-                sys.executable,
-                str(fixture),
-                output,
-                str(tmp_path),
-                command[command.index("--spec-json") + 1],
-            ],
-            **kwargs,
+            [sys.executable, str(fixture), output, str(tmp_path), command[command.index("--spec-json") + 1]], **kwargs
         )
 
     monkeypatch.setattr(quality, "run_worker", run_fixture)
@@ -245,16 +238,9 @@ raise SystemExit(2)
     assert "ConnectionError" in row["stock_result"].traceback
     assert row["stock_result"].metric_observations["failed_stage"] == "predict"
     assert row["stock_result"].metric_observations["failure_kind"] == "evaluation_error"
-    assert (
-        row["stock_result"].metric_observations["stage_timings"]["predict"]["status"]
-        == "failed"
-    )
+    assert row["stock_result"].metric_observations["stage_timings"]["predict"]["status"] == "failed"
     assert row["stock_result"].metric_observations["worker_return_code"] == 2
-    assert (
-        row["stock_result"]
-        .metric_observations["stage_status_path"]
-        .endswith(".stages.json")
-    )
+    assert row["stock_result"].metric_observations["stage_status_path"].endswith(".stages.json")
     assert row["patched_result"].status == "crash"
     assert len((tmp_path / "attempts").read_text().splitlines()) == 4
 
@@ -298,9 +284,7 @@ time.sleep(30)
     worker_log = Path(result.metric_observations["worker_log_path"])
     assert worker_log.exists()
     assert "STAGE fit started" in worker_log.read_text()
-    heartbeat = (
-        Path(result.metric_observations["worker_result_path"]).parent / "heartbeat"
-    )
+    heartbeat = Path(result.metric_observations["worker_result_path"]).parent / "heartbeat"
     previous = heartbeat.stat().st_size
     time.sleep(0.1)
     assert heartbeat.stat().st_size == previous
@@ -319,31 +303,20 @@ def test_quality_side_uses_separate_limits_and_persists_timeout_source(
     monkeypatch.setattr(quality, "_fedot_commit", lambda _checkout: "fixture-commit")
     monkeypatch.setattr(quality, "_source_sha256", lambda _checkout: "fixture-source")
     monkeypatch.setattr(quality, "fedot_python", lambda _checkout: sys.executable)
-    monkeypatch.setattr(
-        quality, "interpreter_identity", lambda *_args, **_kwargs: "fixture-runtime"
-    )
-    monkeypatch.setattr(
-        quality, "clean_subprocess_env", lambda *_args, **_kwargs: {"PATH": ""}
-    )
+    monkeypatch.setattr(quality, "interpreter_identity", lambda *_args, **_kwargs: "fixture-runtime")
+    monkeypatch.setattr(quality, "clean_subprocess_env", lambda *_args, **_kwargs: {"PATH": ""})
     seen = {}
 
     def timed_out_worker(_cmd, **kwargs):
         seen.update(kwargs)
         return SimpleNamespace(
-            returncode=None,
-            stdout="fit started",
-            stderr="",
-            timed_out=True,
-            timeout_kind=timeout_kind,
-            cancelled=False,
+        returncode=None, stdout="fit started", stderr="", timed_out=True,
+            timeout_kind=timeout_kind, cancelled=False,
         )
 
     monkeypatch.setattr(quality, "run_worker", timed_out_worker)
     result = quality.run_quality_side(
-        dataset,
-        checkout=source,
-        side="patch",
-        registry=registry,
+        dataset, checkout=source, side="patch", registry=registry,
     )
     assert 0 < seen["timeout"] <= 17
     assert seen["watchdog_timeout"] == 43
@@ -359,24 +332,14 @@ def test_quality_side_uses_separate_limits_and_persists_timeout_source(
 
 def test_timeout_snapshot_copies_active_fit_and_last_optimizer_evidence(tmp_path):
     status_path = tmp_path / "quality-out-fit.stages.json"
-    status_path.write_text(
-        json.dumps(
-            {
-                "event": "heartbeat",
-                "updated_at": "2026-10-06T00:00:00+00:00",
-                "proposal_id": "revision-4",
-                "attempt_id": "revision-4:traffic:stock:1",
-                "task_id": "traffic",
-                "side": "stock",
-                "attempt": 1,
-                "active_stage": "fit",
-                "stage_started_at": "2026-10-05T23:00:00+00:00",
-                "stage_elapsed_seconds": 3600,
-                "last_optimizer_event_at": "2026-10-05T23:10:00+00:00",
-                "last_fedot_log_line": "EvoGraphOptimizer - Generation num: 1 size: 4",
-            }
-        )
-    )
+    status_path.write_text(json.dumps({
+        "event": "heartbeat", "updated_at": "2026-10-06T00:00:00+00:00",
+        "proposal_id": "revision-4", "attempt_id": "revision-4:traffic:stock:1",
+        "task_id": "traffic", "side": "stock", "attempt": 1,
+        "active_stage": "fit", "stage_started_at": "2026-10-05T23:00:00+00:00",
+        "stage_elapsed_seconds": 3600, "last_optimizer_event_at": "2026-10-05T23:10:00+00:00",
+        "last_fedot_log_line": "EvoGraphOptimizer - Generation num: 1 size: 4",
+    }))
 
     snapshot = quality._stage_status_observations(status_path)
 

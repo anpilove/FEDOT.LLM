@@ -44,31 +44,20 @@ class ExecutorLifecycleTests(unittest.TestCase):
         return json.loads(self.job_path.read_text())
 
     def test_completed_proposal_cleans_its_checkout_on_supported_python(self):
-        with patch.object(
-            executor,
-            "measure_fedot_quality",
-            return_value=Decision(
-                False, "no quality improvement", 0.0, stage="quality"
-            ),
-        ):
+        with patch.object(executor, "measure_fedot_quality", return_value=Decision(
+            False, "no quality improvement", 0.0, stage="quality"
+        )):
             result = executor.drain_quality_queue(self.source, self.workspace)
 
         self.assertEqual(result["jobs"][0]["status"], "drop")
         self.assertEqual(self.saved_job()["status"], "drop")
         self.assertFalse(list((self.workspace / "experiments/quality-drain").glob("*")))
-        self.assertEqual(
-            (self.source / self.saved_job()["file_path"]).read_text(), "value = 1\n"
-        )
+        self.assertEqual((self.source / self.saved_job()["file_path"]).read_text(), "value = 1\n")
 
     def test_storage_error_survives_cleanup_error_without_add_note(self):
         original = LegacyStorageError(28, "measurement journal full")
-        with (
-            patch.object(executor, "measure_fedot_quality", side_effect=original),
-            patch.object(
-                executor,
-                "discard_experiment_checkout",
-                side_effect=OSError("checkout cleanup failed"),
-            ),
+        with patch.object(executor, "measure_fedot_quality", side_effect=original), patch.object(
+            executor, "discard_experiment_checkout", side_effect=OSError("checkout cleanup failed")
         ):
             with self.assertRaises(LegacyStorageError) as caught:
                 executor.drain_quality_queue(self.source, self.workspace)
@@ -86,9 +75,8 @@ class ExecutorLifecycleTests(unittest.TestCase):
                 raise OSError(28, "queue recovery disk full")
             return write_status(path, status, extra)
 
-        with (
-            patch.object(executor, "measure_fedot_quality", side_effect=original),
-            patch.object(executor, "write_job_status", side_effect=fail_recovery),
+        with patch.object(executor, "measure_fedot_quality", side_effect=original), patch.object(
+            executor, "write_job_status", side_effect=fail_recovery
         ):
             with self.assertRaises(LegacyStorageError) as caught:
                 executor.drain_quality_queue(self.source, self.workspace)

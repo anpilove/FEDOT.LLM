@@ -20,26 +20,16 @@ def compare_with_prior_probe(source, experiment, code, *, prior_probe, compare_f
     actual patched-only runtime error. Metric and test gates remain mandatory.
     """
     result = compare_fn(source, experiment, code)
-    if (
-        result.get("status") not in {"missing", "invalid", "no_change"}
-        or not prior_probe
-    ):
+    if result.get("status") not in {"missing", "invalid", "no_change"} or not prior_probe:
         return result
     origin, prior_code = prior_probe
-    if not prior_code or behavior_probe_fingerprint(
-        prior_code
-    ) == behavior_probe_fingerprint(code):
+    if not prior_code or behavior_probe_fingerprint(prior_code) == behavior_probe_fingerprint(code):
         return result
     retried = compare_fn(source, experiment, prior_code)
     if retried.get("status") == "changed":
-        return {
-            **retried,
-            "code": prior_code,
-            "reused_probe_from_candidate": origin,
-            "submitted_probe_result": result,
-        }
+        return {**retried, "code": prior_code, "reused_probe_from_candidate": origin,
+                "submitted_probe_result": result}
     return {**result, "prior_probe_attempt": retried, "prior_probe_candidate": origin}
-
 
 def compare_behavior_probe(
     source: Path,
@@ -82,11 +72,9 @@ def compare_behavior_probe(
     stock_row = row(stock)
     patched_row = row(patched)
     if stock.status == "runtime_error" and "AssertionError" in (stock.stderr or ""):
-        status = (
-            "changed"
-            if (patched.status == "ok" and patched_row["observation"] is not None)
-            else "invalid"
-        )
+        status = "changed" if (
+            patched.status == "ok" and patched_row["observation"] is not None
+        ) else "invalid"
     elif stock.status != "ok":
         status = "invalid"
     elif patched.status != "ok":

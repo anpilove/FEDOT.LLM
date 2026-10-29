@@ -10,47 +10,28 @@ from fedot.core.repository.tasks import (
     Task,
     TaskTypesEnum,
 )  # classification, regression, ts_forecasting.
-
-
-def train_model(
-    train_features: np.ndarray | pd.DataFrame,
-    train_target: np.ndarray | pd.DataFrame | pd.Series,
-):
-    if isinstance(train_features, pd.DataFrame) and isinstance(
-        train_target, (pd.DataFrame, pd.Series)
-    ):
-        input_data = InputData.from_dataframe(
-            train_features, train_target, task=Task(TaskTypesEnum.classification)
-        )
-    elif isinstance(train_features, np.ndarray) and isinstance(
-        train_target, np.ndarray
-    ):
-        input_data = InputData.from_numpy(
-            train_features, train_target, task=Task(TaskTypesEnum.classification)
-        )
+def train_model(train_features: np.ndarray | pd.DataFrame, train_target: np.ndarray | pd.DataFrame | pd.Series):
+    if isinstance(train_features, pd.DataFrame) and isinstance(train_target, (pd.DataFrame, pd.Series)):
+        input_data = InputData.from_dataframe(train_features, train_target, task=Task(TaskTypesEnum.classification))
+    elif isinstance(train_features, np.ndarray) and isinstance(train_target, np.ndarray):
+        input_data = InputData.from_numpy(train_features, train_target, task=Task(TaskTypesEnum.classification))
     else:
-        raise ValueError(
-            "Unsupported data types for train_features and train_target. "
-            "Expected pandas DataFrame and (DataFrame or Series), or numpy ndarray and numpy ndarray."
-            f"Got: {type(train_features)} and {type(train_target)}"
-        )
-
-    model = Fedot(
-        problem=TaskTypesEnum.classification.value,
-        timeout=10,
-        seed=42,
-        cv_folds=3,
-        preset="best_quality",
-        metric="accuracy",
-        n_jobs=1,
-        with_tuning=True,
-        show_progress=True,
-    )
+        raise ValueError("Unsupported data types for train_features and train_target. "
+                         "Expected pandas DataFrame and (DataFrame or Series), or numpy ndarray and numpy ndarray."
+                         f"Got: {type(train_features)} and {type(train_target)}")
+        
+    model = Fedot(problem=TaskTypesEnum.classification.value,
+            timeout=10,
+            seed=42,
+            cv_folds=3,
+            preset='best_quality',
+            metric='accuracy',
+            n_jobs=1,
+            with_tuning=True,
+            show_progress=True)
 
     try:
-        model.fit(
-            features=input_data
-        )  # this is the training step, after this step variable 'model' will be a trained model
+        model.fit(features=input_data) # this is the training step, after this step variable 'model' will be a trained model
     except Exception as e:
         raise RuntimeError(
             f"Model training failed. Please check your data preprocessing carefully. "
@@ -63,46 +44,25 @@ def train_model(
     pipeline.save(path=PIPELINE_PATH, create_subdir=False, is_datetime_in_path=False)
 
     return model
-
-
-def evaluate_model(
-    model: Fedot,
-    test_features: np.ndarray | pd.DataFrame | pd.Series,
-    test_target: np.ndarray | pd.DataFrame | pd.Series,
-):
-    if isinstance(test_features, pd.DataFrame) and isinstance(
-        test_target, (pd.DataFrame, pd.Series)
-    ):
-        input_data = InputData.from_dataframe(
-            test_features, test_target, task=Task(TaskTypesEnum.classification)
-        )
+def evaluate_model(model: Fedot, test_features: np.ndarray | pd.DataFrame | pd.Series, test_target: np.ndarray | pd.DataFrame | pd.Series):
+    if isinstance(test_features, pd.DataFrame) and isinstance(test_target, (pd.DataFrame, pd.Series)):
+        input_data = InputData.from_dataframe(test_features, test_target, task=Task(TaskTypesEnum.classification))
     elif isinstance(test_features, np.ndarray) and isinstance(test_target, np.ndarray):
-        input_data = InputData.from_numpy(
-            test_features, test_target, task=Task(TaskTypesEnum.classification)
-        )
+        input_data = InputData.from_numpy(test_features, test_target, task=Task(TaskTypesEnum.classification))
     else:
-        raise ValueError(
-            "Unsupported data types for test_features and test_target. "
-            "Expected pandas DataFrame and (DataFrame or Series), or numpy ndarray and numpy ndarray."
-            f"Got: {type(test_features)} and {type(test_target)}"
-        )
+        raise ValueError("Unsupported data types for test_features and test_target. "
+                         "Expected pandas DataFrame and (DataFrame or Series), or numpy ndarray and numpy ndarray."
+                         f"Got: {type(test_features)} and {type(test_target)}")
     y_pred = model.predict_proba(features=input_data)
     print("Model metrics: ", model.get_metrics())
     return model.get_metrics()
-
-
-def automl_predict(
-    model: Fedot, features: np.ndarray | pd.DataFrame | pd.Series
-) -> np.ndarray:
+def automl_predict(model: Fedot, features: np.ndarray | pd.DataFrame | pd.Series) -> np.ndarray:
     if isinstance(features, (pd.DataFrame, pd.Series)):
         features = features.to_numpy()
-    input_data = InputData.from_numpy(
-        features, None, task=Task(TaskTypesEnum.classification)
-    )
+    input_data = InputData.from_numpy(features, None, task=Task(TaskTypesEnum.classification))
     predictions = model.predict_proba(features=input_data)
     print(f"Predictions shape: {predictions.shape}")
     return predictions
-
 
 ### UNMODIFIABLE IMPORT END ###
 # USER CODE BEGIN IMPORTS #
@@ -115,12 +75,8 @@ random.seed(SEED)
 np.random.seed(SEED)
 
 ### UNMODIFIABLE CODE BEGIN ###
-DATASET_PATH = Path(
-    "/Users/aleksejlapin/Work/STABLE-FedotLLM/examples/titanic/competition"
-)  # path for saving and loading dataset(s)
-WORKSPACE_PATH = Path(
-    "/Users/aleksejlapin/Work/STABLE-FedotLLM/examples/titanic/output"
-)
+DATASET_PATH = Path("/Users/aleksejlapin/Work/STABLE-FedotLLM/examples/titanic/competition")  # path for saving and loading dataset(s)
+WORKSPACE_PATH = Path("/Users/aleksejlapin/Work/STABLE-FedotLLM/examples/titanic/output")
 PIPELINE_PATH = WORKSPACE_PATH / "pipeline"  # path for saving and loading pipelines
 SUBMISSION_PATH = WORKSPACE_PATH / "submission.csv"  # path for saving submission file
 EVAL_SET_SIZE = 0.2  # 20% of the data for evaluation
@@ -129,9 +85,7 @@ EVAL_SET_SIZE = 0.2  # 20% of the data for evaluation
 # --- TODO: Update these paths for your specific competition ---
 TRAIN_FILE = DATASET_PATH / "train.csv"  # TODO: Replace with your actual filename
 TEST_FILE = DATASET_PATH / "test.csv"  # TODO: Replace with your actual filename
-SAMPLE_SUBMISSION_FILE = (
-    DATASET_PATH / "gender_submission.csv"
-)  # TODO: Replace with your actual filename or None
+SAMPLE_SUBMISSION_FILE = DATASET_PATH / "gender_submission.csv"  # TODO: Replace with your actual filename or None
 
 
 # USER CODE BEGIN LOAD_DATA #
@@ -151,7 +105,7 @@ def transform_data(dataset: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
     Used on both Train and Test data. Test data may initially not contain target columns.
     """
 
-    target_columns = ["Survived"]  # TODO: Replace with ACTUAL target columns
+    target_columns = ['Survived'] # TODO: Replace with ACTUAL target columns
 
     # Separating features and target if present
     data = dataset.copy(deep=True)
@@ -177,10 +131,8 @@ def transform_data(dataset: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
 
     # TODO: Drop all columns from features that are not important for prdictions. All other dataset transformations are STRICTLY FORBIDDEN.
     # TODO: Before any operations, make sure to check whether columns you operate on are present in data. Do not raise exceptions.
-    columns_to_drop = ["PassengerId", "Name", "Ticket", "Cabin"]
-    existing_columns_to_drop = [
-        col for col in columns_to_drop if col in features.columns
-    ]
+    columns_to_drop = ['PassengerId', 'Name', 'Ticket', 'Cabin']
+    existing_columns_to_drop = [col for col in columns_to_drop if col in features.columns]
     features = features.drop(columns=existing_columns_to_drop)
 
     return features.values, target
@@ -200,7 +152,7 @@ def create_model():
     # Note: EVAL_SET_SIZE is a constant defined above, corresponding to 20% of the data for evaluation
     # Note: You may need to use stratified sampling if the target is categorical
     train_data, eval_test_data = train_test_split(
-        train, test_size=EVAL_SET_SIZE, random_state=SEED, stratify=train["Survived"]
+        train, test_size=EVAL_SET_SIZE, random_state=SEED, stratify=train['Survived']
     )  # corresponding to 80%, 20% of ‘dataset‘
 
     train_features, train_target = transform_data(train_data)
@@ -219,13 +171,8 @@ def create_model():
     # If output submission should have an ID column, add it to the prediction.
     # If ID column has numeric type, convert it to integer
     predictions: np.ndarray = automl_predict(model, test_features)  # returns 2D array
-    test_passenger_ids = pd.read_csv(TEST_FILE)["PassengerId"]
-    output = pd.DataFrame(
-        {
-            "PassengerId": test_passenger_ids,
-            "Survived": predictions.flatten().astype(int),
-        }
-    )
+    test_passenger_ids = pd.read_csv(TEST_FILE)['PassengerId']
+    output = pd.DataFrame({'PassengerId': test_passenger_ids, 'Survived': predictions.flatten().astype(int)})
 
     # USER CODE END CREATE MODEL #
     # If target submission format is not numeric, convert predictions to expected format

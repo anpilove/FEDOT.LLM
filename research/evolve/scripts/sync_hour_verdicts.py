@@ -161,9 +161,7 @@ def derive_quality_outcome(datasets: list[dict], task_ids: list[str]) -> dict:
             "keep": None,
             "wins": 0,
             "losses": 0,
-            "unresolved_task_ids": [
-                task_id for task_id, row in zip(ids, rows) if row is None
-            ],
+            "unresolved_task_ids": [task_id for task_id, row in zip(ids, rows) if row is None],
         }
     unresolved = []
     wins = 0
@@ -208,13 +206,7 @@ def derive_quality_outcome(datasets: list[dict], task_ids: list[str]) -> dict:
 
 def summarize(journal: list[dict], queue_dir: Path) -> dict:
     by_candidate: dict[str, dict] = defaultdict(
-        lambda: {
-            "events": [],
-            "keep": None,
-            "status": "unknown",
-            "jobs": [],
-            "side_events": [],
-        }
+        lambda: {"events": [], "keep": None, "status": "unknown", "jobs": [], "side_events": []}
     )
     stock_tasks: set[str] = set()
     unattributed_journal_rows: list[dict] = []
@@ -240,9 +232,7 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
         if event.startswith("quality_task_side_"):
             by_candidate[cid]["side_events"].append(row)
             by_candidate[cid]["events"].append(row)
-            by_candidate[cid]["registry_identity"] = row.get(
-                "registry_identity"
-            ) or by_candidate[cid].get("registry_identity")
+            by_candidate[cid]["registry_identity"] = row.get("registry_identity") or by_candidate[cid].get("registry_identity")
             continue
         if event == "quality_candidate_started":
             by_candidate[cid]["events"].append(row)
@@ -265,12 +255,8 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
             continue
         if event == "quality_disposition":
             by_candidate[cid]["events"].append(row)
-            by_candidate[cid]["status"] = (
-                row.get("status") or by_candidate[cid]["status"]
-            )
-            by_candidate[cid]["reason"] = row.get("reason") or by_candidate[cid].get(
-                "reason"
-            )
+            by_candidate[cid]["status"] = row.get("status") or by_candidate[cid]["status"]
+            by_candidate[cid]["reason"] = row.get("reason") or by_candidate[cid].get("reason")
             by_candidate[cid]["quality_outcome"] = row.get("quality_outcome")
             by_candidate[cid]["quality_message"] = row.get("quality_message") or ""
             by_candidate[cid]["keep"] = row.get("status") == "keep"
@@ -291,9 +277,7 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
         if decision.get("regression_deltas"):
             by_candidate[cid]["regression_deltas"] = decision.get("regression_deltas")
         if decision.get("infrastructure_error"):
-            by_candidate[cid]["infrastructure_error"] = decision.get(
-                "infrastructure_error"
-            )
+            by_candidate[cid]["infrastructure_error"] = decision.get("infrastructure_error")
         if decision.get("infrastructure_error"):
             by_candidate[cid]["status"] = "infrastructure_error"
         elif decision.get("quality_failure"):
@@ -348,9 +332,7 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
                 if not all(key):
                     continue
                 state = {
-                    "status": "running"
-                    if event.get("event", "").endswith("started")
-                    else "unknown",
+                    "status": "running" if event.get("event", "").endswith("started") else "unknown",
                     "finished": event.get("event", "").endswith(("finished", "reused")),
                     "attempt": int(event.get("attempt") or 1),
                     "worker_log_path": None,
@@ -361,11 +343,7 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
                 latest[key] = state
                 if state["finished"]:
                     attempts[key].append(state)
-            task_ids = list(
-                dict.fromkeys(
-                    [*(slot.get("task_ids") or []), *(task for task, _side in latest)]
-                )
-            )
+            task_ids = list(dict.fromkeys([*(slot.get("task_ids") or []), *(task for task, _side in latest)]))
             datasets = []
             active_tasks = set()
             completed_pairs = 0
@@ -399,11 +377,7 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
                 before, after = stock.get("score"), patched.get("score")
                 delta = None
                 if isinstance(before, (int, float)) and isinstance(after, (int, float)):
-                    delta = (
-                        (after - before)
-                        if spec.get("higher_is_better")
-                        else (before - after)
-                    )
+                    delta = (after - before) if spec.get("higher_is_better") else (before - after)
                     if spec.get("delta_mode") == "relative":
                         delta /= max(abs(float(before)), 1e-12)
                 datasets.append(
@@ -433,18 +407,14 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
         elif slot.get("jobs"):
             slot["datasets"] = _dataset_rows(slot["jobs"])
         if slot.get("datasets"):
-            derived = derive_quality_outcome(
-                slot["datasets"], slot.get("task_ids") or []
-            )
+            derived = derive_quality_outcome(slot["datasets"], slot.get("task_ids") or [])
             slot["derived_quality_outcome"] = derived["outcome"]
             slot["derived_keep"] = derived["keep"]
             slot["derived_improved_task_count"] = derived["wins"]
             slot["derived_regressed_task_count"] = derived["losses"]
             slot["derived_unresolved_task_ids"] = derived.get("unresolved_task_ids", [])
 
-    queued = (
-        sorted(p.stem for p in queue_dir.glob("*.json")) if queue_dir.is_dir() else []
-    )
+    queued = sorted(p.stem for p in queue_dir.glob("*.json")) if queue_dir.is_dir() else []
     keep_yes = [cid for cid, meta in by_candidate.items() if meta.get("keep") is True]
     keep_no = [
         cid
@@ -508,8 +478,7 @@ def summarize(journal: list[dict], queue_dir: Path) -> dict:
         "queue_only": {
             cid: queue_meta[cid]
             for cid in queued
-            if cid not in by_candidate
-            and queue_meta.get(cid, {}).get("status") not in {None, "queued"}
+            if cid not in by_candidate and queue_meta.get(cid, {}).get("status") not in {None, "queued"}
         },
     }
 
@@ -526,9 +495,7 @@ def attach_run_manifest(summary: dict, manifest: dict) -> dict:
         summary["snapshot_stale"] = age_s >= 55 * 60
     else:
         summary["snapshot_stale"] = True
-    summary["latest_artifact_observation"] = (
-        manifest.get("latest_artifact_observation") or {}
-    )
+    summary["latest_artifact_observation"] = manifest.get("latest_artifact_observation") or {}
     summary["current_stage"] = manifest.get("current_stage") or ""
     return summary
 
@@ -572,11 +539,7 @@ def render_md(summary: dict) -> str:
     if observation:
         observed_at = observation.get("observed_at_utc") or "unknown"
         stage = observation.get("stage") or summary.get("current_stage") or "unknown"
-        worker_tasks = (
-            observation.get("observed_worker_tasks")
-            or observation.get("active_dataset_workers")
-            or []
-        )
+        worker_tasks = observation.get("observed_worker_tasks") or observation.get("active_dataset_workers") or []
         latest_worker_log = observation.get("latest_worker_log_update_utc") or "unknown"
         lines.extend(
             [
@@ -594,14 +557,10 @@ def render_md(summary: dict) -> str:
         lines.append("## Confirmed improvements (keep=true)")
         for cid in summary["keep_true"]:
             meta = summary["candidates"][cid]
-            lines.append(
-                f"- `{cid}` — {meta.get('reason', '')} δ={meta.get('target_delta')}"
-            )
+            lines.append(f"- `{cid}` — {meta.get('reason', '')} δ={meta.get('target_delta')}")
         lines.append("")
     lines.append("## All scored candidates")
-    lines.append(
-        "| candidate | patch scope | progress | outcome | keep | queue status | reason |"
-    )
+    lines.append("| candidate | patch scope | progress | outcome | keep | queue status | reason |")
     lines.append("|---|---|---:|---|---|---|---|")
     for cid, meta in summary["candidates"].items():
         planned = int(meta.get("planned_task_count") or len(meta.get("task_ids") or []))
@@ -626,9 +585,7 @@ def render_md(summary: dict) -> str:
             continue
         lines.append(f"### `{cid}`")
         if meta.get("proposal_id") and meta.get("proposal_id") != cid:
-            lines.append(
-                f"- Proposal: `{meta['proposal_id']}`; revision: `{meta.get('patch_revision') or 'unknown'}`"
-            )
+            lines.append(f"- Proposal: `{meta['proposal_id']}`; revision: `{meta.get('patch_revision') or 'unknown'}`")
         if meta.get("issue_url"):
             lines.append(f"- Issue: {meta['issue_url']}")
         if meta.get("registry_identity"):
@@ -640,9 +597,7 @@ def render_md(summary: dict) -> str:
         if scope.get("problem_families"):
             lines.append(f"- Problem families: {', '.join(scope['problem_families'])}")
         if task_ids:
-            lines.append(
-                f"- Task IDs: {', '.join(str(task_id) for task_id in task_ids)}"
-            )
+            lines.append(f"- Task IDs: {', '.join(str(task_id) for task_id in task_ids)}")
         if meta.get("derived_quality_outcome"):
             lines.append(
                 f"- Recalculated outcome: {meta['derived_quality_outcome']} "
@@ -713,9 +668,7 @@ def _json_safe(value):
     return value
 
 
-def _verdict_numbers(
-    journal: list[dict], queue_meta: dict[str, dict]
-) -> dict[str, int]:
+def _verdict_numbers(journal: list[dict], queue_meta: dict[str, dict]) -> dict[str, int]:
     numbers: dict[str, int] = {}
     verdict_idx = 0
     for row in journal:
@@ -740,9 +693,7 @@ def write_verdict_files(
     written: list[Path] = []
     generated_at = summary.get("generated_at")
     for cid, meta in summary["candidates"].items():
-        if meta.get("queue_status") in {None, "queued", "running"} and not meta.get(
-            "datasets"
-        ):
+        if meta.get("queue_status") in {None, "queued", "running"} and not meta.get("datasets"):
             continue
         payload = _json_safe(
             {
@@ -762,20 +713,15 @@ def write_verdict_files(
                 "derived_quality_outcome": meta.get("derived_quality_outcome"),
                 "derived_keep": meta.get("derived_keep"),
                 "derived_improved_task_count": meta.get("derived_improved_task_count"),
-                "derived_regressed_task_count": meta.get(
-                    "derived_regressed_task_count"
-                ),
-                "derived_unresolved_task_ids": meta.get("derived_unresolved_task_ids")
-                or [],
+                "derived_regressed_task_count": meta.get("derived_regressed_task_count"),
+                "derived_unresolved_task_ids": meta.get("derived_unresolved_task_ids") or [],
                 "datasets": meta.get("datasets") or [],
                 "verdict_number": numbers.get(cid),
                 "generated_at": generated_at,
             }
         )
         path = out_dir / f"verdict_{cid}.json"
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         written.append(path)
     return written
 
@@ -820,32 +766,25 @@ def write_campaign_rollup(summary: dict, path: Path) -> None:
         "queue_count": summary.get("queue_count"),
         "scored_count": len(scored),
         "pending_count": summary.get("pending_count"),
-        "unattributed_journal_row_count": len(
-            summary.get("unattributed_journal_rows") or []
-        ),
+        "unattributed_journal_row_count": len(summary.get("unattributed_journal_rows") or []),
         "keep_true_count": len(summary.get("keep_true") or []),
         "by_queue_status": dict(sorted(by_status.items())),
         "infra_blockers": sorted(
             {
                 row["reason"]
                 for row in scored
-                if row.get("queue_status") == "infrastructure_error"
-                and row.get("reason")
+                if row.get("queue_status") == "infrastructure_error" and row.get("reason")
             }
         ),
         "scored": sorted(scored, key=lambda row: row["candidate_id"]),
     }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def write_detail_jsonl(summary: dict, path: Path) -> None:
     lines: list[str] = []
     for cid, meta in summary["candidates"].items():
-        if meta.get("queue_status") in {None, "queued", "running"} and not meta.get(
-            "datasets"
-        ):
+        if meta.get("queue_status") in {None, "queued", "running"} and not meta.get("datasets"):
             continue
         lines.append(
             json.dumps(
@@ -861,10 +800,10 @@ def write_detail_jsonl(summary: dict, path: Path) -> None:
                     "hypothesis": meta.get("hypothesis") or {},
                     "quality_scope": meta.get("quality_scope") or {},
                     "task_ids": meta.get("task_ids") or [],
-                    "quality_message": meta.get("quality_message") or "",
-                    "derived_quality_outcome": meta.get("derived_quality_outcome"),
-                    "derived_keep": meta.get("derived_keep"),
-                    "datasets": meta.get("datasets") or [],
+                "quality_message": meta.get("quality_message") or "",
+                "derived_quality_outcome": meta.get("derived_quality_outcome"),
+                "derived_keep": meta.get("derived_keep"),
+                "datasets": meta.get("datasets") or [],
                 },
                 ensure_ascii=False,
             )
@@ -949,14 +888,10 @@ def main() -> int:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     journal_local = (
-        run_workspace / "quality_jobs.jsonl"
-        if run_workspace
-        else LOCAL_OUT / "quality_jobs.jsonl"
+        run_workspace / "quality_jobs.jsonl" if run_workspace else LOCAL_OUT / "quality_jobs.jsonl"
     )
     queue_remote = (
-        run_workspace / "quality_queue"
-        if run_workspace
-        else LOCAL_OUT / "quality_queue_remote"
+        run_workspace / "quality_queue" if run_workspace else LOCAL_OUT / "quality_queue_remote"
     )
 
     if args.local_only or run_workspace is not None:
@@ -982,9 +917,7 @@ def main() -> int:
     summary = summarize(journal, queue_dir)
     if run_workspace is not None:
         try:
-            manifest = json.loads(
-                (run_workspace / "run_manifest.json").read_text(encoding="utf-8")
-            )
+            manifest = json.loads((run_workspace / "run_manifest.json").read_text(encoding="utf-8"))
             attach_run_manifest(summary, manifest)
         except (OSError, json.JSONDecodeError, ValueError):
             summary["server_snapshot_utc"] = None
@@ -994,9 +927,7 @@ def main() -> int:
     write_md = args.write_md or output_dir / "hour_verdicts_summary.md"
     write_detail = args.write_detail_jsonl or output_dir / "hour_verdicts_detail.jsonl"
     write_rollup = args.write_rollup or output_dir / "campaign_rollup.json"
-    write_json.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    write_json.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     write_md.write_text(render_md(summary), encoding="utf-8")
     write_detail_jsonl(summary, write_detail)
     verdict_paths = write_verdict_files(summary, journal, queue_meta, output_dir)
@@ -1010,18 +941,13 @@ def main() -> int:
     print(f"keep_true={len(summary['keep_true'])} queue={summary['queue_count']}")
     if args.mlflow:
         try:
-            from research.evolve.scripts.mlflow_quality_sync import (
-                sync_quality_to_mlflow,
-            )
+            from research.evolve.scripts.mlflow_quality_sync import sync_quality_to_mlflow
 
             uri = args.mlflow_uri or f"sqlite:///{(output_dir / 'mlflow.db').resolve()}"
             counts = sync_quality_to_mlflow(journal, summary, tracking_uri=uri)
             print(f"synced MLflow: {counts} ({uri})")
         except Exception as exc:
-            print(
-                f"MLflow sync unavailable; local reports were written: {type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
+            print(f"MLflow sync unavailable; local reports were written: {type(exc).__name__}: {exc}", file=sys.stderr)
     try:
         from research.evolve.scripts.github_quality_sync import sync_issue_comments
 
@@ -1029,10 +955,7 @@ def main() -> int:
         if issue_result.get("reason") != "no_issue_urls":
             print(f"GitHub issue sync: {issue_result}")
     except Exception as exc:
-        print(
-            f"GitHub issue sync unavailable; local reports were written: {type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
+        print(f"GitHub issue sync unavailable; local reports were written: {type(exc).__name__}: {exc}", file=sys.stderr)
     return 0
 
 

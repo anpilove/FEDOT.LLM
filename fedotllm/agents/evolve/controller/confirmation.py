@@ -76,9 +76,7 @@ def quick_quality_screen(
     reserved for the closed FINAL batch; this stage does not open SHADOW.
     """
 
-    local_lift = (
-        tuple(task_id for task_id in lift_ids if task_id in exam_ids) or exam_ids
-    )
+    local_lift = tuple(task_id for task_id in lift_ids if task_id in exam_ids) or exam_ids
     local_protect = (
         tuple(task_id for task_id in protect_ids if task_id in exam_ids) or exam_ids
     )
@@ -150,9 +148,7 @@ def confirm_dev(
     infrastructure = 0
     for seed in seeds:
         stock = measure_stock_fn(exam_ids, checkout=source, split="dev", seed=seed)
-        patched = measure_patched_fn(
-            exam_ids, checkout=experiment, split="dev", seed=seed
-        )
+        patched = measure_patched_fn(exam_ids, checkout=experiment, split="dev", seed=seed)
         invalid = any(
             result.status in {"timeout", "invalid"}
             for result in (*stock.values(), *patched.values())
@@ -179,11 +175,7 @@ def confirm_dev(
             }
         )
     seed_confirmed = improved >= 2 and regressed == 0 and infrastructure == 0
-    shadow_row: dict = {
-        "evaluated": False,
-        "keep": False,
-        "reason": "dev_seed_gate_failed",
-    }
+    shadow_row: dict = {"evaluated": False, "keep": False, "reason": "dev_seed_gate_failed"}
     if seed_confirmed and seeds:
         shadow_seed = seeds[0]
         shadow_stock = measure_stock_fn(

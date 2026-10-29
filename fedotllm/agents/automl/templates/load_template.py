@@ -4,10 +4,7 @@ from typing import Union, Set, Optional
 
 Path.templates_root = Path(__file__).parent
 
-
-def render_sub_templates(
-    text: str, loaded_templates: Optional[Set[Path]] = None
-) -> str:
+def render_sub_templates(text: str, loaded_templates: Optional[Set[Path]] = None) -> str:
     """
     Processes the input text by replacing template placeholders with their corresponding content.
     It also aggregates import statements from all sub-templates and inserts them appropriately.
@@ -35,9 +32,7 @@ def render_sub_templates(
         sub_template_content = _remove_imports(sub_template_content, imports).strip()
 
         # Replace the placeholder with the template content, preserving indentation
-        text = _replace_placeholder_with_content(
-            text, sub_template, sub_template_content
-        )
+        text = _replace_placeholder_with_content(text, sub_template, sub_template_content)
 
     # Aggregate and insert imports
     if sub_imports:
@@ -45,7 +40,6 @@ def render_sub_templates(
         text = _insert_imports(text, imports_str)
 
     return text.strip()
-
 
 def _extract_imports(content: str) -> Set[str]:
     """
@@ -58,11 +52,11 @@ def _extract_imports(content: str) -> Set[str]:
         Set[str]: A set of import statements.
     """
     import_pattern = re.compile(
-        r"^(import\s+\S+|from\s+\S+\s+import\s+\S+)", re.MULTILINE
+        r"^(import\s+\S+|from\s+\S+\s+import\s+\S+)",
+        re.MULTILINE
     )
     imports = set(match.group(1) for match in import_pattern.finditer(content))
     return imports
-
 
 def _remove_imports(content: str, imports: Set[str]) -> str:
     """
@@ -79,7 +73,6 @@ def _remove_imports(content: str, imports: Set[str]) -> str:
         content = content.replace(imp, "")
     return content
 
-
 def _replace_placeholder_with_content(text: str, placeholder: str, content: str) -> str:
     """
     Replaces the template placeholder in the text with the actual content,
@@ -93,21 +86,19 @@ def _replace_placeholder_with_content(text: str, placeholder: str, content: str)
     Returns:
         str: The text with the placeholder replaced by the content.
     """
-    pattern = re.compile(
-        rf"(?P<indent>^\s*)<%%\s*{re.escape(placeholder)}\s*%%>", re.MULTILINE
-    )
+    pattern = re.compile(rf"(?P<indent>^\s*)<%%\s*{re.escape(placeholder)}\s*%%>", re.MULTILINE)
     match = pattern.search(text)
     if match:
         indent = match.group("indent")
         indented_content = "\n".join(
-            f"{indent}{line}" if line.strip() else line for line in content.splitlines()
+            f"{indent}{line}" if line.strip() else line
+            for line in content.splitlines()
         )
         text = pattern.sub(indented_content, text, count=1)
     else:
         # Fallback if pattern does not match
         text = text.replace(f"<%%{placeholder}%%>", content)
     return text
-
 
 def _insert_imports(text: str, imports_str: str) -> str:
     """
@@ -120,20 +111,17 @@ def _insert_imports(text: str, imports_str: str) -> str:
     Returns:
         str: The text with imports inserted.
     """
-    comment_pattern = re.compile(r"^(\s*#.*\n)*")
+    comment_pattern = re.compile(r'^(\s*#.*\n)*')
     match = comment_pattern.match(text)
     if match:
         comments = match.group(0)
-        rest_of_text = text[len(comments) :]
+        rest_of_text = text[len(comments):]
         text = f"{comments}{imports_str}\n{rest_of_text}"
     else:
         text = f"{imports_str}\n{text}"
     return text
 
-
-def load_template(
-    template_path: Union[str, Path], loaded_templates: Optional[Set[Path]] = None
-) -> str:
+def load_template(template_path: Union[str, Path], loaded_templates: Optional[Set[Path]] = None) -> str:
     """
     Loads and processes a template file by resolving its sub-templates,
     aggregating import statements, and preserving indentation.
@@ -171,7 +159,6 @@ def load_template(
 
     return processed_content.strip()
 
-
 def render_template(template: str, **kwargs) -> str:
     """
     Replaces placeholders in the template with corresponding keyword arguments.
@@ -207,7 +194,6 @@ def render_template(template: str, **kwargs) -> str:
 
     return rendered
 
-
 def insert_template(code: str, template: str) -> str:
     """
     Inserts a sub-template into the main code by replacing the placeholder.
@@ -233,14 +219,14 @@ def insert_template(code: str, template: str) -> str:
     # Normalize the template name
     template = template.lower().strip()
     sub_imports: Set[str] = set()
-
+    
     # Define regex pattern to match the placeholder with optional whitespace and multiline content
     # Capturing groups:
     # 1. Leading whitespace before the first ###
     # 2. The entire placeholder including the content to replace
     pattern = re.compile(
         rf"(?P<indent>^[ \t]*)###\s*{re.escape(template)}\s*###.*?###\s*{re.escape(template)}\s*###",
-        re.IGNORECASE | re.DOTALL | re.MULTILINE,
+        re.IGNORECASE | re.DOTALL | re.MULTILINE
     )
 
     def replacement(match: re.Match) -> str:
@@ -258,38 +244,34 @@ def insert_template(code: str, template: str) -> str:
         """
         try:
             leading_whitespace = match.group("indent") or ""
-
+            
             # Load the template content using `load_template`, which internally calls `render_templates`
             loaded_content = load_template(template, sub_imports)
-
+            
             # Extract and remove import statements from the loaded content
             extracted_imports = _extract_imports(loaded_content)
             sub_imports.update(extracted_imports)
             loaded_content = _remove_imports(loaded_content, extracted_imports).strip()
-
+            
             # Indent each line of the loaded content to match the placeholder's indentation
             indented_content = "\n".join(
                 f"{leading_whitespace}{line}" if line.strip() else line
                 for line in loaded_content.splitlines()
             )
-
+            
             return indented_content
         except Exception as e:
-            raise ValueError(
-                f"Failed to load and render template '{template}': {e}"
-            ) from e
+            raise ValueError(f"Failed to load and render template '{template}': {e}") from e
 
     # Perform the substitution using the replacement function
     new_code, count = pattern.subn(replacement, code)
 
     if count == 0:
-        raise ValueError(
-            f"Template placeholder '### {template} ###' not found in the code."
-        )
+        raise ValueError(f"Template placeholder '### {template} ###' not found in the code.")
 
     # After insertion, ensure that any nested templates within the code are rendered
     rendered_code = render_sub_templates(new_code, sub_imports)
-
+    
     if sub_imports:
         imports_str = "\n".join(sorted(sub_imports))
         rendered_code = _insert_imports(rendered_code, imports_str)

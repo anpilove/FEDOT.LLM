@@ -62,7 +62,9 @@ def test_actual_cost_is_shared_and_one_started_query_may_overshoot():
     scout = FakeInference((0.04,))
     fixer = FakeInference((0.07,))
 
-    with EvolveRunBudget((scout, fixer), max_queries=10, max_cost_usd=0.10) as budget:
+    with EvolveRunBudget(
+        (scout, fixer), max_queries=10, max_cost_usd=0.10
+    ) as budget:
         scout._complete("first")
         fixer._complete("overshoot")
         assert budget.actual_cost_usd == pytest.approx(0.11)
@@ -237,10 +239,9 @@ def test_invalid_limits_are_rejected(kwargs):
 def test_campaign_reserves_correctness_and_repair_calls():
     from fedotllm.agents.evolve.__main__ import _campaign_reserves
 
-    assert _campaign_reserves(40, 12, has_verifier=True, has_fixer=True) == {
-        "verifier": 3,
-        "fixer": 12,
-    }
-    assert _campaign_reserves(4, 12, has_verifier=True, has_fixer=True) == {
-        "verifier": 3
-    }
+    assert _campaign_reserves(
+        40, 12, has_verifier=True, has_fixer=True
+    ) == {"verifier": 3, "fixer": 12}
+    assert _campaign_reserves(
+        4, 12, has_verifier=True, has_fixer=True
+    ) == {"verifier": 3}

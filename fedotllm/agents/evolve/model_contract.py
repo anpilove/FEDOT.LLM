@@ -66,7 +66,9 @@ def build_model_contract(
         model_name = _text(getattr(config, "model_name", ""))
         provider = _text(getattr(config, "provider", ""))
         configured_fallbacks = _fallbacks(getattr(config, "fallback_models", ""))
-        effective_fallbacks = list(dict.fromkeys(env_fallbacks or configured_fallbacks))
+        effective_fallbacks = list(
+            dict.fromkeys(env_fallbacks or configured_fallbacks)
+        )
         row = {
             "status": "checked",
             "provider": provider,
@@ -113,3 +115,5 @@ def build_model_contract(
         "ignored_stages": ignored_stages,
         "stages": stages,
     }
+
+

@@ -36,34 +36,28 @@ def _sample_line_snapshots(
     """
     with lock:
         states = [
-            (
-                thread_id,
-                state["thread_name"],
-                [dict(frame) for frame in state["frames"]],
-            )
+            (thread_id, state["thread_name"], [dict(frame) for frame in state["frames"]])
             for thread_id, state in thread_states.items()
             if state["frames"]
         ]
 
     snapshots = []
     for thread_id, thread_name, frames in states:
-        snapshots.append(
-            {
-                "event": "fedot_python_line_sample",
-                "timestamp_utc": timestamp_utc,
-                "monotonic_ns": monotonic_ns,
-                "pid": pid,
-                "ppid": os.getppid(),
-                "run_id": os.environ.get("EVOLVE_TRACE_ATTEMPT_ID"),
-                "thread_id": thread_id,
-                "thread_name": thread_name,
-                **(context or {}),
-                "fedot_frames": [
-                    {key: value for key, value in frame.items() if key != "frame_id"}
-                    for frame in frames
-                ],
-            }
-        )
+        snapshots.append({
+            "event": "fedot_python_line_sample",
+            "timestamp_utc": timestamp_utc,
+            "monotonic_ns": monotonic_ns,
+            "pid": pid,
+            "ppid": os.getppid(),
+            "run_id": os.environ.get("EVOLVE_TRACE_ATTEMPT_ID"),
+            "thread_id": thread_id,
+            "thread_name": thread_name,
+            **(context or {}),
+            "fedot_frames": [
+                {key: value for key, value in frame.items() if key != "frame_id"}
+                for frame in frames
+            ],
+        })
     return snapshots
 
 
@@ -127,21 +121,16 @@ def python_line_samples(
                 if not is_fedot_frame(frame):
                     return None
                 with lock:
-                    state = thread_states.setdefault(
-                        thread_id,
-                        {
-                            "thread_name": threading.current_thread().name,
-                            "frames": [],
-                        },
-                    )
-                    state["frames"].append(
-                        {
-                            "frame_id": id(frame),
-                            "filename": os.path.realpath(frame.f_code.co_filename),
-                            "function": frame.f_code.co_name,
-                            "lineno": frame.f_lineno,
-                        }
-                    )
+                    state = thread_states.setdefault(thread_id, {
+                        "thread_name": threading.current_thread().name,
+                        "frames": [],
+                    })
+                    state["frames"].append({
+                        "frame_id": id(frame),
+                        "filename": os.path.realpath(frame.f_code.co_filename),
+                        "function": frame.f_code.co_name,
+                        "lineno": frame.f_lineno,
+                    })
                 return trace
 
             with lock:
@@ -150,10 +139,7 @@ def python_line_samples(
                     return None
                 frames = state["frames"]
                 frame_id = id(frame)
-                index = next(
-                    (i for i, row in enumerate(frames) if row["frame_id"] == frame_id),
-                    None,
-                )
+                index = next((i for i, row in enumerate(frames) if row["frame_id"] == frame_id), None)
                 if index is None:
                     return trace if is_fedot_frame(frame) else None
                 if event == "return":
@@ -188,9 +174,7 @@ def python_line_samples(
                 except Exception as exc:
                     status["write_error"] = f"{type(exc).__name__}: {exc}"
 
-        sampler = threading.Thread(
-            target=sample, name=f"fedot-line-sampler-{pid}", daemon=True
-        )
+        sampler = threading.Thread(target=sample, name=f"fedot-line-sampler-{pid}", daemon=True)
         try:
             sys.settrace(trace)
             threading.settrace(trace)
@@ -217,9 +201,7 @@ def python_line_samples(
         yield status
 
 
-def python_line_samples_from_environment(
-    *, output_dir=None, interval_seconds=None, context=None
-):
+def python_line_samples_from_environment(*, output_dir=None, interval_seconds=None, context=None):
     """Create the opt-in sampler from the worker's diagnostic environment."""
     if os.environ.get("EVOLVE_TRACE_PYTHON_LINES") != "1":
         return python_line_samples(None, None)
@@ -228,9 +210,7 @@ def python_line_samples_from_environment(
         output_dir = os.environ.get("EVOLVE_TRACE_DIRECTORY")
     if interval_seconds is None:
         try:
-            interval_seconds = float(
-                os.environ.get("EVOLVE_TRACE_INTERVAL_SECONDS", "1")
-            )
+            interval_seconds = float(os.environ.get("EVOLVE_TRACE_INTERVAL_SECONDS", "1"))
         except ValueError:
             interval_seconds = 1.0
     return python_line_samples(

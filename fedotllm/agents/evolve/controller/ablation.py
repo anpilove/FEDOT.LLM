@@ -24,7 +24,6 @@ from fedotllm.agents.evolve.types import (
     VerificationResult,
 )
 
-
 def ablate_candidate(
     source: Path,
     workspace: Path,
@@ -87,9 +86,7 @@ def ablate_candidate(
                 if trial.behavior_probe and (
                     verification is None or verification.status == "quality_hypothesis"
                 ):
-                    probe = compare_behavior_probe_fn(
-                        source, tree, trial.behavior_probe
-                    )
+                    probe = compare_behavior_probe_fn(source, tree, trial.behavior_probe)
                     gate["behavior_probe"] = probe
                     behavior_ok = not behavior_probe_blocks_fn(probe)
                 tests_ok = False

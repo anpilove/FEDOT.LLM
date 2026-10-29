@@ -29,9 +29,7 @@ def enforce_global_dev_protect(
     safety_ids = tuple(dict.fromkeys((*lift_ids, *protect_ids)))
     safety_stock = dict(local_stock)
     safety_patched = dict(local_patched)
-    missing_stock = tuple(
-        task_id for task_id in safety_ids if task_id not in safety_stock
-    )
+    missing_stock = tuple(task_id for task_id in safety_ids if task_id not in safety_stock)
     missing_patched = tuple(
         task_id for task_id in safety_ids if task_id not in safety_patched
     )
@@ -78,7 +76,8 @@ def enforce_global_dev_protect(
         decision.experiment_id = experiment.name
         if not decision.keep and decision.reason.startswith("regression"):
             decision.reason = (
-                "regression global protect: " + decision.reason[len("regression ") :]
+                "regression global protect: "
+                + decision.reason[len("regression ") :]
             )
 
     append_journal(

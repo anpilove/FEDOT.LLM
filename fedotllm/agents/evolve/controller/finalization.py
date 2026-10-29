@@ -21,7 +21,6 @@ from fedotllm.agents.evolve.types import Decision, PatchCandidate, ScoreResult
 ScoreRunner = Callable[..., dict[str, ScoreResult]]
 VerdictRunner = Callable[..., Decision]
 
-
 def record_final_skipped(journal: Path, *, reason: str) -> None:
     append_journal(journal, {"event": "final", "skipped": True, "reason": reason})
 
@@ -48,17 +47,11 @@ def record_final(
     if not enabled or os.environ.get("EVOLVE_AGENT_SKIP_FINAL") == "1":
         record_final_skipped(journal, reason="disabled")
         return None
-    from fedotllm.agents.evolve.controller.transfer import (
-        evaluate_transfer,
-        validate_transfer,
-    )
-
+    from fedotllm.agents.evolve.controller.transfer import evaluate_transfer, validate_transfer
     error = validate_transfer(transfer_plan)
     if error:
         record_final_skipped(journal, reason=error)
-        return Decision(
-            keep=False, reason=error, target_delta=None, stage="final", final_keep=False
-        )
+        return Decision(keep=False, reason=error, target_delta=None, stage="final", final_keep=False)
     if lift_ids is None or protect_ids is None:
         default_lift, default_protect = final_exam()
         lift_ids = lift_ids if lift_ids is not None else default_lift
@@ -82,23 +75,13 @@ def record_final(
         if not apply_patch(final_tree, candidate):
             record_final_skipped(journal, reason="reapply_failed")
             return None
-        stock = measure_stock_fn(
-            exam_ids, checkout=source, split="final", seed=first_seed
-        )
-        patched = measure_patched_fn(
-            exam_ids, checkout=final_tree, split="final", seed=first_seed
-        )
-        decision = verdict_fn(
-            stock, patched, lift_ids=lift_ids, protect_ids=protect_ids
-        )
+        stock = measure_stock_fn(exam_ids, checkout=source, split="final", seed=first_seed)
+        patched = measure_patched_fn(exam_ids, checkout=final_tree, split="final", seed=first_seed)
+        decision = verdict_fn(stock, patched, lift_ids=lift_ids, protect_ids=protect_ids)
         transfer_report = None
         if decision.keep:
             transferred, transfer_report = evaluate_transfer(
-                source,
-                final_tree,
-                transfer_plan,
-                params=operation_params,
-                split="final",
+                source, final_tree, transfer_plan, params=operation_params, split="final",
                 budget=measurement_budget,
             )
             decision.keep = transferred
@@ -113,9 +96,7 @@ def record_final(
     # on DEV plus SHADOW; repeating FINAL leaks more information from the hidden
     # split and multiplies the most expensive full-suite evaluation.
     decision.keep = bool(decision.keep and not infrastructure)
-    decision.reason = (
-        "final_confirmed" if decision.keep else "final_confirmation_failed"
-    )
+    decision.reason = "final_confirmed" if decision.keep else "final_confirmation_failed"
     decision.stage = "final"
     decision.final_keep = decision.keep
     row = {

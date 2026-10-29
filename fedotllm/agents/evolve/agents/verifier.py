@@ -189,22 +189,13 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
     if initial is None:
         return ""
     tree, _ = initial
-    owners = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.lineno <= line <= n.end_lineno
-    ]
+    owners = [n for n in ast.walk(tree) if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+              and n.lineno <= line <= n.end_lineno]
     if not owners:
         return ""
     target = min(owners, key=lambda n: n.end_lineno - n.lineno)
-    requested_methods = {
-        n.attr
-        for n in ast.walk(target)
-        if isinstance(n, ast.Attribute)
-        and isinstance(n.value, ast.Name)
-        and n.value.id == "self"
-    }
+    requested_methods = {n.attr for n in ast.walk(target) if isinstance(n, ast.Attribute)
+                         and isinstance(n.value, ast.Name) and n.value.id == "self"}
 
     def resolve(path, name, depth):
         if depth > 3 or len(seen) >= 8 or (str(path), name) in seen:
@@ -213,25 +204,14 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
         if loaded is None:
             return
         module, lines = loaded
-        node = next(
-            (n for n in module.body if isinstance(n, ast.ClassDef) and n.name == name),
-            None,
-        )
+        node = next((n for n in module.body if isinstance(n, ast.ClassDef) and n.name == name), None)
         if node is None:
             for imp in module.body:
-                if (
-                    not isinstance(imp, ast.ImportFrom)
-                    or imp.level
-                    or not (imp.module or "").startswith("fedot.")
-                ):
+                if not isinstance(imp, ast.ImportFrom) or imp.level or not (imp.module or "").startswith("fedot."):
                     continue
                 for alias in imp.names:
                     if (alias.asname or alias.name) == name:
-                        resolve(
-                            root / (imp.module.replace(".", "/") + ".py"),
-                            alias.name,
-                            depth + 1,
-                        )
+                        resolve(root / (imp.module.replace(".", "/") + ".py"), alias.name, depth + 1)
             return
         seen.add((str(path), name))
         identity = f"{path.relative_to(root)}:{node.lineno} ({name}, resolved import/base reference)"
@@ -240,40 +220,25 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
         else:
             chosen = [node.lineno - 1]
             for member in node.body:
-                if (
-                    isinstance(member, (ast.AnnAssign, ast.Assign))
-                    or isinstance(member, ast.Expr)
-                    and isinstance(member.value, ast.Constant)
+                if (isinstance(member, (ast.AnnAssign, ast.Assign))
+                    or isinstance(member, ast.Expr) and isinstance(member.value, ast.Constant)
                     or isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and member.name in requested_methods | {"__init__"}
-                ):
+                    and member.name in requested_methods | {"__init__"}):
                     chosen.extend(range(member.lineno - 1, member.end_lineno))
         rendered = "\n".join(f"{i + 1}|{lines[i]}" for i in sorted(set(chosen)))
-        chunks.append(
-            identity
-            + "\n"
-            + rendered[:4_000]
-            + (
-                "\n[truncated; missing portions are not evidence]"
-                if len(rendered) > 4_000
-                else ""
-            )
-        )
+        chunks.append(identity + "\n" + rendered[:4_000] +
+                      ("\n[truncated; missing portions are not evidence]" if len(rendered) > 4_000 else ""))
         for base in node.bases:
             if isinstance(base, ast.Name):
                 resolve(path, base.id, depth + 1)
 
     references = []
     if isinstance(target, (ast.FunctionDef, ast.AsyncFunctionDef)) and target.returns:
-        references.extend(
-            n.id for n in ast.walk(target.returns) if isinstance(n, ast.Name)
-        )
+        references.extend(n.id for n in ast.walk(target.returns) if isinstance(n, ast.Name))
     for owner in owners:
         if isinstance(owner, ast.ClassDef):
             references.extend(b.id for b in owner.bases if isinstance(b, ast.Name))
-    references.extend(
-        sorted({n.id for n in ast.walk(target) if isinstance(n, ast.Name)})
-    )
+    references.extend(sorted({n.id for n in ast.walk(target) if isinstance(n, ast.Name)}))
     for name in dict.fromkeys(references):
         resolve(root / file_path, name, 0)
     return "\n\n".join(chunks)[:14_000]
@@ -294,7 +259,9 @@ def _audit_contract_support(
     unsupported precondition cannot be promoted into a correctness finding.
     """
 
-    symbol, source, docs = _target_contract_context(checkout, lead.file_path, lead.line)
+    symbol, source, docs = _target_contract_context(
+        checkout, lead.file_path, lead.line
+    )
     if not source:
         return ContractSupportAudit(
             verdict="inconclusive",
@@ -338,7 +305,7 @@ Reproduction code:
 
 Controller-observed stock execution (an earlier setup failure does not prove the
 claimed invariant was violated; never trust comments saying an API is valid):
-{stock_probe.output[-6_000:] if stock_probe is not None else "<not supplied; contract-only audit, not proof of reproduction>"}
+{stock_probe.output[-6_000:] if stock_probe is not None else '<not supplied; contract-only audit, not proof of reproduction>'}
 
 Exact target symbol:
 {source[:8_000]}
@@ -347,7 +314,7 @@ Repository documentation/docstrings:
 {docs[:8_000]}
 
 Resolved return/argument types and inherited runtime interfaces:
-{linked or "<no resolvable local type/base references>"}
+{linked or '<no resolvable local type/base references>'}
 
 Supplemental documentation search (check identity before using as evidence):
 {related_docs[:4_000]}
@@ -394,14 +361,9 @@ def verification_from_observed_crash(lead: MatchSite) -> VerificationResult | No
         ),
         "",
     )
-    if (
-        not crash
-        or not frame_chain
-        or not any(
-            item.startswith("workload operation")
-            or item.startswith("runtime data flow")
-            for item in lead.evidence
-        )
+    if not crash or not frame_chain or not any(
+        item.startswith("workload operation") or item.startswith("runtime data flow")
+        for item in lead.evidence
     ):
         return None
     return VerificationResult(
@@ -421,9 +383,7 @@ def verification_from_observed_crash(lead: MatchSite) -> VerificationResult | No
         current_approach=lead.mechanism or lead.why,
         proposed_approach=lead.proposed_change,
         generality=lead.expected_metric_effect,
-        risks=(
-            "the proposed site may be a downstream symptom rather than the root cause",
-        ),
+        risks=("the proposed site may be a downstream symptom rather than the root cause",),
     )
 
 
@@ -526,9 +486,7 @@ def _probe_is_meaningful(code: str) -> tuple[bool, str]:
     lowered = (code or "").lower()
     if "import fedot" not in lowered and "from fedot" not in lowered:
         return False, "probe must import FEDOT"
-    if any(
-        token in lowered for token in ("monkeypatch", "unittest.mock", "mock.patch")
-    ):
+    if any(token in lowered for token in ("monkeypatch", "unittest.mock", "mock.patch")):
         return False, "probe cannot mock runtime behavior"
     if re.search(r"\braise\s+AssertionError\b", code or ""):
         return False, "probe cannot raise AssertionError directly"
@@ -652,15 +610,11 @@ def verify_lead(
     correctness_only: bool = False,
 ) -> VerificationResult:
     if inference is None:
-        return VerificationResult(
-            "infrastructure_error", detail="verifier inference unavailable"
-        )
+        return VerificationResult("infrastructure_error", detail="verifier inference unavailable")
     base_context = context_from_lead(lead, checkout, max_chars=8_000)
     source_context = build_fedot_context(checkout, lead.file_path)
     if source_context is not None:
-        base_context += "\n\nFEDOT architecture context:\n" + source_context.render(
-            max_chars=3_500
-        )
+        base_context += "\n\nFEDOT architecture context:\n" + source_context.render(max_chars=3_500)
     tool_history: list[str] = []
     seen_tool_actions: set[tuple[str, str, str, int]] = set()
     seen_read_lines: dict[str, list[int]] = {}
@@ -670,14 +624,10 @@ def verify_lead(
     disproved_bug_claims: list[str] = []
     last_detail = "verification step budget exhausted"
     step = 0
-    step_budget = (
-        min(
-            MAX_VERIFY_STEPS,
-            max(1, int(max_model_calls)),
-        )
-        if max_model_calls is not None
-        else MAX_VERIFY_STEPS
-    )
+    step_budget = min(
+        MAX_VERIFY_STEPS,
+        max(1, int(max_model_calls)),
+    ) if max_model_calls is not None else MAX_VERIFY_STEPS
     probe_corrections = 0
     failed_quality_challenges = 0
     verdict_corrections = 0
@@ -686,9 +636,15 @@ def verify_lead(
         quality_challenge_turn = (
             provisional_quality is not None and quality_challenge_actions == 0
         )
-        final_verdict_turn = not quality_challenge_turn and (
-            step == step_budget
-            or (provisional_quality is not None and quality_challenge_actions > 0)
+        final_verdict_turn = (
+            not quality_challenge_turn
+            and (
+                step == step_budget
+                or (
+                    provisional_quality is not None
+                    and quality_challenge_actions > 0
+                )
+            )
         )
         prefix = (
             f"{_SYSTEM}\n\nStep {step}/{step_budget}.\n"
@@ -771,9 +727,7 @@ def verify_lead(
         }
         key = (
             action.value,
-            (
-                parsed.file_path or parsed.query or parsed.symbol or parsed.test_node
-            ).strip(),
+            (parsed.file_path or parsed.query or parsed.symbol or parsed.test_node).strip(),
             (parsed.run_code or "").strip(),
             int(parsed.line or 1),
         )
@@ -836,9 +790,9 @@ def verify_lead(
             )
             investigative_actions += 1
             if action in (VerificationAction.SYMBOL, VerificationAction.DOCS):
-                valid_quality_challenge = bool(
-                    output.strip()
-                ) and not output.lstrip().startswith("<")
+                valid_quality_challenge = (
+                    bool(output.strip()) and not output.lstrip().startswith("<")
+                )
         elif action is VerificationAction.READ:
             output = open_runtime(checkout, parsed.file_path, line=parsed.line)
             investigative_actions += 1
@@ -882,9 +836,7 @@ def verify_lead(
             if failed_quality_challenges >= MAX_QUALITY_CHALLENGE_FAILURES:
                 result = VerificationResult(
                     "inconclusive",
-                    claim=provisional_quality.claim
-                    if provisional_quality
-                    else lead.why,
+                    claim=provisional_quality.claim if provisional_quality else lead.why,
                     observed=output[:4_000],
                     detail=(
                         "post-hypothesis adversarial evidence failed twice; "
@@ -1003,9 +955,7 @@ def verify_lead(
             if valid and correctness_only:
                 try:
                     target_lead, resolved_target = resolve_verification_target(
-                        checkout,
-                        lead,
-                        file_path=parsed.file_path,
+                        checkout, lead, file_path=parsed.file_path,
                         line=parsed.line if "line" in parsed.model_fields_set else None,
                         symbol=parsed.symbol,
                     )
@@ -1015,14 +965,9 @@ def verify_lead(
                 output = f"Probe rejected: {detail}"
             else:
                 symbol = resolved_target.get("symbol", "")
-                trace_target = (
-                    {"file_path": target_lead.file_path, "symbol": symbol}
-                    if symbol
-                    else None
-                )
+                trace_target = {"file_path": target_lead.file_path, "symbol": symbol} if symbol else None
                 stock = run_fedot_snippet(
-                    checkout,
-                    parsed.reproduction_code,
+                    checkout, parsed.reproduction_code,
                     **({"trace_target": trace_target} if trace_target else {}),
                 )
                 asserted_failure = (
@@ -1077,9 +1022,7 @@ def verify_lead(
                             return result
                         if support_audit.verdict != "supported":
                             result = VerificationResult(
-                                "rejected"
-                                if support_audit.verdict == "unsupported"
-                                else "inconclusive",
+                                "rejected" if support_audit.verdict == "unsupported" else "inconclusive",
                                 claim=parsed.claim or lead.why,
                                 expected=parsed.expected,
                                 observed=parsed.observed or stock.output,
@@ -1087,11 +1030,9 @@ def verify_lead(
                                 stock_probe=stock,
                                 evidence=tuple(support_audit.evidence),
                                 detail=(
-                                    (
-                                        "unsupported public-contract precondition: "
-                                        if support_audit.verdict == "unsupported"
-                                        else "contract support inconclusive: "
-                                    )
+                                    ("unsupported public-contract precondition: "
+                                     if support_audit.verdict == "unsupported"
+                                     else "contract support inconclusive: ")
                                     + support_audit.reason
                                 )[:1_000],
                             )
@@ -1140,10 +1081,7 @@ def verify_lead(
                     "correct the probe, classify a grounded quality_hypothesis, or reject.\n"
                     f"Probe status={stock.status}; output:\n{probe_feedback}"
                 )
-                if (
-                    stock.status == "runtime_error"
-                    and "AssertionError" not in stock.stderr
-                ):
+                if stock.status == "runtime_error" and "AssertionError" not in stock.stderr:
                     output += (
                         "\n\nIf a valid public operation call itself unexpectedly raised, "
                         "do not abandon that correctness finding. Put all input/setup "
@@ -1191,10 +1129,7 @@ def replay_reproduction(checkout: Path, verification: VerificationResult) -> dic
         "generality": verification.generality,
         "risks": list(verification.risks),
     }
-    if (
-        is_controller_observed_crash(verification)
-        and not verification.reproduction_code
-    ):
+    if is_controller_observed_crash(verification) and not verification.reproduction_code:
         return {
             "status": "verified_bug",
             "source": CONTROLLER_OBSERVED_CRASH,
@@ -1267,9 +1202,7 @@ def _write_verification(
         "expected": result.expected,
         "observed": result.observed,
         "reproduction_code": result.reproduction_code,
-        "stock_probe": None
-        if result.stock_probe is None
-        else result.stock_probe.__dict__,
+        "stock_probe": None if result.stock_probe is None else result.stock_probe.__dict__,
         "evidence": list(result.evidence),
         "detail": result.detail,
         "current_approach": result.current_approach,
@@ -1279,8 +1212,6 @@ def _write_verification(
         "risks": list(result.risks),
         "resolved_target": result.resolved_target,
     }
-    write_artifact(
-        folder, "verification.json", json.dumps(payload, ensure_ascii=False, indent=2)
-    )
+    write_artifact(folder, "verification.json", json.dumps(payload, ensure_ascii=False, indent=2))
     if result.reproduction_code:
         write_artifact(folder, "reproduction.py", result.reproduction_code)

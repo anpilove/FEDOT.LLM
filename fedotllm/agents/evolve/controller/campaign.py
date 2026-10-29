@@ -37,9 +37,7 @@ from fedotllm.agents.evolve.discovery.contracts import (
     verification_from_contract_lead,
 )
 from fedotllm.agents.evolve.evaluation.eval import run_stock
-from fedotllm.agents.evolve.evaluation.independent_data import (
-    PROTOCOL as INDEPENDENT_DATA_PROTOCOL,
-)
+from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL as INDEPENDENT_DATA_PROTOCOL
 from fedotllm.agents.evolve.storage.findings import append_final_outcome, begin_run
 from fedotllm.agents.evolve.agents.fixer import fix_lead
 from fedotllm.agents.evolve.agents.failures import AgentModelFailure
@@ -401,16 +399,8 @@ def run_once(
         kwargs.setdefault("evaluation_protocol_hash", evaluation_protocol_hash)
         kwargs.setdefault("resumed_branch", bool(resume_lead))
         _record_attempt(
-            journal,
-            workspace,
-            lead,
-            candidate,
-            stock_scores,
-            patched,
-            decision,
-            loc(lead),
-            revision,
-            **kwargs,
+            journal, workspace, lead, candidate, stock_scores, patched, decision,
+            loc(lead), revision, **kwargs,
         )
         patch_hash = kwargs.get("patch_hash")
         if patch_hash and not decision.reason.startswith("duplicate_"):
@@ -504,20 +494,13 @@ def run_once(
         if config.metric_only:
             stock = {
                 task: run_stock(
-                    task,
-                    checkout=source,
-                    seed=config.dev_seed,
-                    collect_coverage=True,
+                    task, checkout=source, seed=config.dev_seed, collect_coverage=True,
                     task_override={"evaluation_protocol": INDEPENDENT_DATA_PROTOCOL},
-                )
-                for task in exam_ids
+                ) for task in exam_ids
             }
         else:
             stock = measure_stock(
-                exam_ids,
-                checkout=source,
-                seed=config.dev_seed,
-                collect_coverage=True,
+                exam_ids, checkout=source, seed=config.dev_seed, collect_coverage=True,
             )
         # The suite intentionally instruments only its first task to keep the
         # normal baseline cheap. If a later task is the one that crashes, rerun
@@ -669,7 +652,6 @@ def run_once(
             trace["resumed_branch"] = True
         else:
             try:
-
                 def persist_scout_picks(selected: list[MatchSite]) -> None:
                     save_checkpoint(
                         workspace,
@@ -920,9 +902,7 @@ def run_once(
                     decision.reason = "dev_confirmation_failed"
                     confirmation_failures[candidate.candidate_id] = confirmation
                     promising_patch = save_patch_artifact(
-                        "promising",
-                        candidate,
-                        _candidate_diff(experiment, source, candidate),
+                        "promising", candidate, _candidate_diff(experiment, source, candidate)
                     )
                     promising_patch.with_suffix(".json").write_text(
                         json.dumps(
@@ -966,12 +946,8 @@ def run_once(
             if policy.evaluate_final and not policy.fedot_quality_jobs:
                 from fedotllm.agents.evolve.controller.transfer import evaluate_transfer
                 from fedotllm.agents.evolve.execution.patch import apply_patch
-
                 transfer_tree = create_experiment_checkout(
-                    source,
-                    workspace,
-                    run_id=run_id,
-                    candidate_id=f"transfer-{candidate.candidate_id}",
+                    source, workspace, run_id=run_id, candidate_id=f"transfer-{candidate.candidate_id}",
                 )
                 try:
                     if not apply_patch(transfer_tree, candidate):
@@ -982,32 +958,20 @@ def run_once(
                     checks = [("dev", 42, "screen"), ("shadow", 42, "full")]
                     for transfer_split, transfer_seed, transfer_scope in checks:
                         transferred, transfer_report = evaluate_transfer(
-                            source,
-                            transfer_tree,
-                            metric_plan.get("transfer"),
-                            params=metric_plan.get("operation_params"),
-                            split=transfer_split,
-                            seed=transfer_seed,
-                            scope=transfer_scope,
+                            source, transfer_tree, metric_plan.get("transfer"),
+                            params=metric_plan.get("operation_params"), split=transfer_split,
+                            seed=transfer_seed, scope=transfer_scope,
                             budget=measurement_budget,
                         )
-                        append_journal(
-                            journal,
-                            {
-                                "event": "benchmark_transfer",
-                                "candidate": candidate.candidate_id,
-                                **transfer_report,
-                            },
-                        )
+                        append_journal(journal, {"event": "benchmark_transfer", "candidate": candidate.candidate_id,
+                                                 **transfer_report})
                         if not transferred:
                             decision.keep = False
                             decision.final_keep = False
                             decision.reason = transfer_report["reason"]
                             return finish(decision)
                 finally:
-                    discard_experiment_checkout(
-                        transfer_tree, workspace=workspace, source=source
-                    )
+                    discard_experiment_checkout(transfer_tree, workspace=workspace, source=source)
             diff = _render_candidate_patch(source, workspace, run_id, candidate)
             (workspace / "final_candidate.patch").write_text(diff, encoding="utf-8")
             if policy.fedot_quality_jobs:
@@ -1038,9 +1002,7 @@ def run_once(
                     {
                         "event": "quality_queue",
                         "candidate": candidate.candidate_id,
-                        "candidate_revision_id": queued_job.get(
-                            "candidate_revision_id"
-                        ),
+                        "candidate_revision_id": queued_job.get("candidate_revision_id"),
                         "proposal_id": queued_job.get("proposal_id"),
                         "patch_sha256": queued_job.get("patch_sha256"),
                         "path": str(job_path),
@@ -1052,20 +1014,20 @@ def run_once(
                 )
             else:
                 final_decision = _record_final(
-                    source,
-                    workspace,
-                    journal,
-                    candidate,
-                    decision,
-                    run_id=run_id,
-                    seeds=config.confirmation_seeds,
-                    lift_ids=lift_ids,
-                    protect_ids=exam_protect,
-                    enabled=policy.evaluate_final,
-                    transfer_plan=metric_plan.get("transfer"),
-                    operation_params=metric_plan.get("operation_params"),
-                    measurement_budget=measurement_budget,
-                )
+                source,
+                workspace,
+                journal,
+                candidate,
+                decision,
+                run_id=run_id,
+                seeds=config.confirmation_seeds,
+                lift_ids=lift_ids,
+                protect_ids=exam_protect,
+                enabled=policy.evaluate_final,
+                transfer_plan=metric_plan.get("transfer"),
+                operation_params=metric_plan.get("operation_params"),
+                measurement_budget=measurement_budget,
+            )
             if final_decision is not None:
                 append_final_outcome(
                     findings_path,
@@ -1138,9 +1100,7 @@ def run_once(
         feedback_history.append(text)
         return _revision_feedback_context(feedback_history)
 
-    def grant_safety_extension(
-        gate: str, candidate: PatchCandidate, reason: str
-    ) -> None:
+    def grant_safety_extension(gate: str, candidate: PatchCandidate, reason: str) -> None:
         nonlocal safety_extension_granted
         if revision >= revision_limit and not safety_extension_granted:
             safety_extension_granted = True
@@ -1224,9 +1184,7 @@ def run_once(
                     )
                 except AgentModelFailure as exc:
                     verification = VerificationResult(
-                        "infrastructure_error"
-                        if exc.infrastructure
-                        else "inconclusive",
+                        "infrastructure_error" if exc.infrastructure else "inconclusive",
                         claim=hypothesis.claim,
                         detail=f"llm_{exc.category}: {exc.detail}"[:500],
                     )
@@ -1246,30 +1204,20 @@ def run_once(
             lead = apply_verified_target(source, lead, verification)
         except (OSError, KeyError, TypeError, ValueError, SyntaxError) as exc:
             verification = replace(
-                verification,
-                status="inconclusive",
+                verification, status="inconclusive",
                 detail=f"verified target identity could not be preserved: {exc}",
             )
         if lead != original_lead:
             hypothesis = replace(hypothesis, lead=asdict(lead))
-            append_journal(
-                journal,
-                {
-                    "event": "verified_target_refined",
-                    "hypothesis_id": hypothesis.id,
-                    "original_lead": asdict(original_lead),
-                    "lead": asdict(lead),
-                    "resolved_target": verification.resolved_target,
-                },
-            )
-            append_journal(
-                workspace / "hypotheses.jsonl",
-                {
-                    "event": "hypothesis_target_refined",
-                    **as_row(hypothesis),
-                    "original_lead": asdict(original_lead),
-                },
-            )
+            append_journal(journal, {
+                "event": "verified_target_refined", "hypothesis_id": hypothesis.id,
+                "original_lead": asdict(original_lead), "lead": asdict(lead),
+                "resolved_target": verification.resolved_target,
+            })
+            append_journal(workspace / "hypotheses.jsonl", {
+                "event": "hypothesis_target_refined", **as_row(hypothesis),
+                "original_lead": asdict(original_lead),
+            })
         append_journal(
             journal,
             {
@@ -1366,24 +1314,14 @@ def run_once(
         metric_plan = {}
         if config.metric_only or policy.evaluate_final:
             from fedotllm.agents.evolve.controller.metric_study import preregister
-            from fedotllm.agents.evolve.evaluation.affected_eval import (
-                extract_operation_overlays,
-            )
-
+            from fedotllm.agents.evolve.evaluation.affected_eval import extract_operation_overlays
             metric_plan = preregister(
-                lead,
-                stock,
-                lift_ids,
-                workspace / "metric-plans" / f"lead-{i}.json",
-                operation_params=extract_operation_overlays(
-                    verification.reproduction_code
-                ),
+                lead, stock, lift_ids, workspace / "metric-plans" / f"lead-{i}.json",
+                operation_params=extract_operation_overlays(verification.reproduction_code),
                 source=source,
                 screen_sources=config.transfer_screen_sources,
             )
-            append_journal(
-                journal, {"event": "metric_target_frozen_before_patch", **metric_plan}
-            )
+            append_journal(journal, {"event": "metric_target_frozen_before_patch", **metric_plan})
         retry_saved_candidate: PatchCandidate | None = None
         for revision in range(1, revision_limit + 2):
             if revision > revision_limit and not safety_extension_granted:
@@ -1424,8 +1362,7 @@ def run_once(
                         max_edits=max_edits,
                         feedback=feedback,
                         verification=verification_context(verification),
-                        validate_behavior_probe=verification.status
-                        == "quality_hypothesis",
+                        validate_behavior_probe=verification.status == "quality_hypothesis",
                         hypothesis_id=hypothesis.id,
                         saved_candidate=(
                             resume_candidate
@@ -1439,9 +1376,7 @@ def run_once(
                         keep=False,
                         reason=f"llm_{exc.category}: {exc.detail}"[:500],
                         target_delta=None,
-                        stage="infrastructure"
-                        if exc.infrastructure
-                        else "model_response",
+                        stage="infrastructure" if exc.infrastructure else "model_response",
                         experiment_id=experiment_id,
                         infrastructure_error=exc.infrastructure,
                     )
@@ -1476,9 +1411,7 @@ def run_once(
                     return finish(
                         Decision(
                             keep=False,
-                            reason=f"llm_infrastructure: {type(exc).__name__}: {exc}"[
-                                :500
-                            ],
+                            reason=f"llm_infrastructure: {type(exc).__name__}: {exc}"[:500],
                             target_delta=None,
                             stage="infrastructure",
                             experiment_id=experiment_id,
@@ -1561,8 +1494,7 @@ def run_once(
                             evaluation_protocol_hash=evaluation_protocol_hash,
                         )
                         if (
-                            matched_patch_hash in historical_patch_hashes
-                            or duplicate_probe
+                            matched_patch_hash in historical_patch_hashes or duplicate_probe
                         )
                         and matched_patch_hash not in local_seen_patches
                         else ""
@@ -1742,9 +1674,7 @@ def run_once(
                 broken = next(
                     (
                         error
-                        for rel in dict.fromkeys(
-                            edit.file_path for edit in candidate.edits
-                        )
+                        for rel in dict.fromkeys(edit.file_path for edit in candidate.edits)
                         if (error := import_error(experiment, rel))
                     ),
                     None,
@@ -1786,10 +1716,7 @@ def run_once(
                 quick_scope = None
                 maintenance_screen = False
                 quick_result: dict = {}
-                if (
-                    verification.status == "quality_hypothesis"
-                    and not config.metric_only
-                ):
+                if verification.status == "quality_hypothesis" and not config.metric_only:
                     quick_scope = _candidate_confirmation_scope(
                         source,
                         candidate,
@@ -1819,8 +1746,7 @@ def run_once(
                         shadow_screen = quick_result.get("shadow") or {}
                         maintenance_screen = bool(
                             verification.status == "quality_hypothesis"
-                            and quick_result.get("reason")
-                            == "no_affected_metric_signal"
+                            and quick_result.get("reason") == "no_affected_metric_signal"
                             and shadow_screen.get("evaluated")
                             and not (quick_result.get("dev") or {}).get(
                                 "infrastructure_error"
@@ -1836,10 +1762,7 @@ def run_once(
                     if not quick_passed and not maintenance_screen:
                         quick_decision = Decision(
                             False,
-                            str(
-                                quick_result.get("reason")
-                                or "no_affected_metric_signal"
-                            ),
+                            str(quick_result.get("reason") or "no_affected_metric_signal"),
                             quick_result.get("target_delta"),
                             experiment_id=experiment_id,
                         )
@@ -2016,9 +1939,7 @@ def run_once(
                         {
                             "event": "quality_queue",
                             "candidate": candidate.candidate_id,
-                            "candidate_revision_id": queued_job.get(
-                                "candidate_revision_id"
-                            ),
+                            "candidate_revision_id": queued_job.get("candidate_revision_id"),
                             "proposal_id": queued_job.get("proposal_id"),
                             "patch_sha256": queued_job.get("patch_sha256"),
                             "path": str(job_path),
@@ -2046,22 +1967,12 @@ def run_once(
                     break
 
                 if config.metric_only:
-                    from fedotllm.agents.evolve.controller.metric_study import (
-                        evaluate_candidate,
-                    )
-
+                    from fedotllm.agents.evolve.controller.metric_study import evaluate_candidate
                     candidate_dir = workspace / "candidates" / candidate.candidate_id
                     last = evaluate_candidate(
-                        source,
-                        experiment,
-                        candidate,
-                        verification,
-                        metric_plan,
-                        lead=lead,
-                        tasks=exam_ids,
-                        study=Path(config.metric_study_path),
-                        workspace=candidate_dir,
-                        measurement_budget=measurement_budget,
+                        source, experiment, candidate, verification, metric_plan,
+                        lead=lead, tasks=exam_ids, study=Path(config.metric_study_path),
+                        workspace=candidate_dir, measurement_budget=measurement_budget,
                     )
                     last.experiment_id = experiment_id
                     record_attempt(
@@ -2076,28 +1987,17 @@ def run_once(
                         patch_hash=patch_hash,
                         reproduction=reproduction,
                     )
-                    if (
-                        last.final_keep is not None
-                        or "FINAL_already_sealed" in last.reason
-                    ):
+                    if last.final_keep is not None or "FINAL_already_sealed" in last.reason:
                         return finish(last)
                     # Only DEV feedback may lead to a revision. Held-out decisions
                     # end this hypothesis; their numeric evidence never reaches Fixer.
-                    if last.reason.startswith(
-                        "metric_DEV_rejected"
-                    ) and advance_revision(last.reason):
-                        feedback = (
-                            last.reason
-                            + "\nKeep the preregistered target and causal mechanism."
-                        )
+                    if last.reason.startswith("metric_DEV_rejected") and advance_revision(last.reason):
+                        feedback = last.reason + "\nKeep the preregistered target and causal mechanism."
                         continue
                     break
 
                 affected_metric: dict = {}
-                if (
-                    verification.status == "verified_bug"
-                    and verification.reproduction_code
-                ):
+                if verification.status == "verified_bug" and verification.reproduction_code:
                     affected_metric = evaluate_affected_metric(
                         source,
                         experiment,
@@ -2168,9 +2068,7 @@ def run_once(
                                 "\nconfirmation="
                                 + json.dumps(
                                     {
-                                        key: affected_metric["dev_confirmation"].get(
-                                            key
-                                        )
+                                        key: affected_metric["dev_confirmation"].get(key)
                                         for key in (
                                             "improved_seeds",
                                             "regressed_task_seed_pairs",
@@ -2282,9 +2180,7 @@ def run_once(
                         split="dev",
                         seed=config.dev_seed,
                     )
-                last = verdict(
-                    stock, patched, lift_ids=lift_ids, protect_ids=protect_ids
-                )
+                last = verdict(stock, patched, lift_ids=lift_ids, protect_ids=protect_ids)
                 last.experiment_id = experiment_id
                 if (
                     verification.status == "quality_hypothesis"
@@ -2320,9 +2216,10 @@ def run_once(
                     record_stock = global_stock
                     patched = global_patched
                     if not global_decision.keep:
-                        if verification.status == "quality_hypothesis" and str(
-                            global_decision.reason
-                        ).startswith("target_delta"):
+                        if (
+                            verification.status == "quality_hypothesis"
+                            and str(global_decision.reason).startswith("target_delta")
+                        ):
                             last.keep = True
                             last.reason = "affected_metric_moved_pending_final"
                         else:
@@ -2404,9 +2301,7 @@ def run_once(
                     )
                     if signal_confirmed:
                         small_metric_confirmed = True
-                        save_patch_artifact(
-                            "promising", candidate, candidate_patch_text
-                        )
+                        save_patch_artifact("promising", candidate, candidate_patch_text)
                 if correctness_confirmed:
                     # A reproduced correctness defect is useful even when it does
                     # not move this frozen metric. It is a separate successful
@@ -2427,9 +2322,7 @@ def run_once(
                         last.reason = "correctness_keep"
                         last.stage = "correctness"
                     last.correctness_keep = True
-                    correctness_path = save_patch_artifact(
-                        "correctness_fixes", candidate, candidate_patch_text
-                    )
+                    correctness_path = save_patch_artifact("correctness_fixes", candidate, candidate_patch_text)
                     append_journal(
                         journal,
                         {
@@ -2452,9 +2345,7 @@ def run_once(
                     last.reason = "confirmed_small_metric_keep"
                     last.stage = "metric_signal"
                     last.metric_signal_keep = True
-                    metric_path = save_patch_artifact(
-                        "metric_signal_fixes", candidate, candidate_patch_text
-                    )
+                    metric_path = save_patch_artifact("metric_signal_fixes", candidate, candidate_patch_text)
                     append_journal(
                         journal,
                         {
@@ -2474,9 +2365,7 @@ def run_once(
                     last.reason = "maintenance_keep"
                     last.stage = "maintenance"
                     last.maintenance_keep = True
-                    maintenance_path = save_patch_artifact(
-                        "maintenance_fixes", candidate, candidate_patch_text
-                    )
+                    maintenance_path = save_patch_artifact("maintenance_fixes", candidate, candidate_patch_text)
                     append_journal(
                         journal,
                         {
@@ -2594,9 +2483,7 @@ def run_once(
                         candidate.candidate_id,
                         None,
                     )
-                    if confirmation_failure is not None and advance_revision(
-                        last.reason
-                    ):
+                    if confirmation_failure is not None and advance_revision(last.reason):
                         shadow = confirmation_failure.get("shadow") or {}
                         confirmation_feedback = (
                             "outcome=dev_confirmation_failed; the patch improved initial "
@@ -2607,8 +2494,7 @@ def run_once(
                             f"{confirmation_failure.get('regressed_task_seed_pairs')}; "
                             f"infrastructure_failures={confirmation_failure.get('infrastructure_failures')}; "
                             f"shadow_task_result={json.dumps(shadow, ensure_ascii=False, default=str)}\n\n"
-                            "Previous evaluated patch:\n"
-                            + _candidate_patch_text(candidate)
+                            "Previous evaluated patch:\n" + _candidate_patch_text(candidate)
                         )
                         feedback = push_feedback(confirmation_feedback)
                         continue
@@ -2627,9 +2513,7 @@ def run_once(
             finally:
                 # One owner for the experiment tree: every gate above may
                 # continue, break or return without cleaning up.
-                discard_experiment_checkout(
-                    experiment, workspace=workspace, source=source
-                )
+                discard_experiment_checkout(experiment, workspace=workspace, source=source)
     if last.reason != "queued_for_fedot_quality":
         _record_final_skipped(journal, reason=last.reason)
     return finish(last)

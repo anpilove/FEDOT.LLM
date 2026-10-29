@@ -66,9 +66,7 @@ class StockFlightRegistry(Generic[T]):
                 self._start_callbacks[owner_future] = []
             started_at = self._started_at.get(owner_future)
             if on_owner_started is not None and started_at is None:
-                self._start_callbacks.setdefault(owner_future, []).append(
-                    on_owner_started
-                )
+                self._start_callbacks.setdefault(owner_future, []).append(on_owner_started)
             subscriber = self._subscriber_view(owner_future)
 
         if on_owner_started is not None and started_at is not None:
@@ -84,7 +82,6 @@ class StockFlightRegistry(Generic[T]):
                 return subscriber
         if is_owner:
             try:
-
                 @wraps(compute)
                 def start_notifying_compute(*args, **kwargs):
                     self._mark_started(key, owner_future, monotonic())
@@ -92,16 +89,12 @@ class StockFlightRegistry(Generic[T]):
 
                 work_future = submit(start_notifying_compute)
                 if not isinstance(work_future, Future):
-                    raise TypeError(
-                        "stock compute submitter must return concurrent.futures.Future"
-                    )
+                    raise TypeError("stock compute submitter must return concurrent.futures.Future")
             except BaseException as exc:
                 self._finish_exception(key, owner_future, exc)
             else:
                 work_future.add_done_callback(
-                    lambda completed: self._finish_from_work(
-                        key, owner_future, completed
-                    )
+                    lambda completed: self._finish_from_work(key, owner_future, completed)
                 )
         return subscriber
 

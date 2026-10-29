@@ -38,9 +38,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.root.is_absolute() or args.root == Path("/"):
         parser.error("root must be an explicit absolute project directory")
-    if len(args.controller_sha256) != 64 or any(
-        c not in "0123456789abcdef" for c in args.controller_sha256
-    ):
+    if len(args.controller_sha256) != 64 or any(c not in "0123456789abcdef" for c in args.controller_sha256):
         parser.error("invalid controller SHA256")
     root = args.root
     evolve = root / "evolve"
@@ -61,18 +59,10 @@ def main(argv=None):
     with tarfile.open(args.archive) as archive:
         for member in archive.getmembers():
             path = Path(member.name)
-            if (
-                not member.isfile()
-                or path.is_absolute()
-                or ".." in path.parts
-                or member.name in files
-                or member.name != path.as_posix()
-            ):
+            if (not member.isfile() or path.is_absolute() or ".." in path.parts
+                    or member.name in files or member.name != path.as_posix()):
                 parser.error(f"unsafe archive member: {member.name}")
-            if not (
-                member.name.startswith("fedotllm/")
-                or member.name in {"README.md", "release.json"}
-            ):
+            if not (member.name.startswith("fedotllm/") or member.name in {"README.md", "release.json"}):
                 parser.error(f"unexpected archive member: {member.name}")
             files[member.name] = archive.extractfile(member).read()
     manifest = json.loads(files["release.json"])
@@ -80,47 +70,25 @@ def main(argv=None):
     if set(expected_files) != set(files) - {"release.json"}:
         parser.error("release file manifest mismatch")
     for name, data in files.items():
-        if (
-            name != "release.json"
-            and hashlib.sha256(data).hexdigest() != expected_files[name]
-        ):
+        if name != "release.json" and hashlib.sha256(data).hexdigest() != expected_files[name]:
             parser.error(f"release file hash mismatch: {name}")
     digest = hashlib.sha256()
     for name in sorted(files):
-        if name.startswith("fedotllm/") and Path(name).suffix in {
-            ".py",
-            ".json",
-            ".yaml",
-            ".yml",
-        }:
+        if name.startswith("fedotllm/") and Path(name).suffix in {".py", ".json", ".yaml", ".yml"}:
             digest.update(name.removeprefix("fedotllm/").encode())
             digest.update(files[name])
-    if (
-        digest.hexdigest() != args.controller_sha256
-        or manifest["controller_sha256"] != args.controller_sha256
-    ):
+    if digest.hexdigest() != args.controller_sha256 or manifest["controller_sha256"] != args.controller_sha256:
         parser.error("controller hash mismatch")
     if args.archive_inputs:
         for source in (args.archive, Path(__file__)):
-            if (
-                source.parent.resolve() != Path.home().resolve()
-                or not source.name.startswith("_evolve-controller-")
-            ):
-                parser.error(
-                    "archive-inputs accepts only the named installer staging files in the user's home"
-                )
-    audit = {
-        "name": "FEDOT.LLM Evolve Controller",
-        "time": datetime.now(timezone.utc).isoformat(),
-        "mode": args.mode,
-        "arguments": vars(args) | {"root": str(root), "archive": str(args.archive)},
-        "installer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "controller_sha256": args.controller_sha256,
-        "archive_sha256": args.archive_sha256,
-        "affected_paths": [str(current), str(release), str(runs)],
-        "result": "checked",
-        "benchmark_started": False,
-    }
+            if source.parent.resolve() != Path.home().resolve() or not source.name.startswith("_evolve-controller-"):
+                parser.error("archive-inputs accepts only the named installer staging files in the user's home")
+    audit = {"name": "FEDOT.LLM Evolve Controller", "time": datetime.now(timezone.utc).isoformat(),
+             "mode": args.mode, "arguments": vars(args) | {"root": str(root), "archive": str(args.archive)},
+             "installer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+             "controller_sha256": args.controller_sha256, "archive_sha256": args.archive_sha256,
+             "affected_paths": [str(current), str(release), str(runs)],
+             "result": "checked", "benchmark_started": False}
     if args.mode == "install":
         release.mkdir(parents=True, exist_ok=False)
         audit_path = release / "installation.json"
@@ -143,15 +111,10 @@ def main(argv=None):
             if args.archive_inputs:
                 args.archive.replace(release / "controller.tar.gz")
                 Path(__file__).replace(release / "installer.py")
-                audit["archived_inputs"] = [
-                    str(release / "controller.tar.gz"),
-                    str(release / "installer.py"),
-                ]
+                audit["archived_inputs"] = [str(release / "controller.tar.gz"), str(release / "installer.py")]
             _write(audit_path, audit)
         except BaseException as exc:
-            audit.update(
-                result="installation_failed", error=f"{type(exc).__name__}: {exc}"
-            )
+            audit.update(result="installation_failed", error=f"{type(exc).__name__}: {exc}")
             try:
                 _write(audit_path, audit)
             except OSError as persist_error:

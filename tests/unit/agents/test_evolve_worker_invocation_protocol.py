@@ -71,19 +71,14 @@ def test_failed_worker_echoes_physical_invocation_in_payload_and_stage(tmp_path)
     assert stage.get("worker_invocation_id") == invocation
 
 
-def test_worker_rejects_unknown_tuning_policy_before_runtime_configuration(
-    tmp_path, monkeypatch
-):
+def test_worker_rejects_unknown_tuning_policy_before_runtime_configuration(tmp_path, monkeypatch):
     def unexpected_configuration(out):
         raise AssertionError("invalid protocol reached runtime configuration")
 
     monkeypatch.setattr(worker, "configure_worker_runtime", unexpected_configuration)
     payload, _ = worker._evaluate_worker(
-        {
-            "source_dataset": "dataset",
-            "seed": 42,
-            "tuning_evaluation_policy": "unknown",
-        },
+        {"source_dataset": "dataset", "seed": 42,
+         "tuning_evaluation_policy": "unknown"},
         tmp_path / "result.json",
     )
 
@@ -94,9 +89,7 @@ def test_worker_rejects_unknown_tuning_policy_before_runtime_configuration(
 
 @pytest.mark.parametrize("fail_fit", [False, True])
 def test_worker_owns_tuning_guard_for_fit_and_preserves_its_diagnostics(
-    tmp_path,
-    monkeypatch,
-    fail_fit,
+    tmp_path, monkeypatch, fail_fit,
 ):
     from fedotllm.agents.evolve.evaluation import tuning_isolation
 
@@ -111,11 +104,8 @@ def test_worker_owns_tuning_guard_for_fit_and_preserves_its_diagnostics(
             state.update(active=False, cleaned=True)
 
         def diagnostics(self):
-            return {
-                "policy": "isolated-objective-process-v1",
-                "cleanup_verified": state["cleaned"],
-                "evaluations": 2,
-            }
+            return {"policy": "isolated-objective-process-v1",
+                    "cleanup_verified": state["cleaned"], "evaluations": 2}
 
     class Model:
         def __init__(self, **kwargs):
@@ -137,38 +127,19 @@ def test_worker_owns_tuning_guard_for_fit_and_preserves_its_diagnostics(
     module = ModuleType("fedot.api.main")
     module.Fedot = Model
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    monkeypatch.setattr(
-        tuning_isolation, "install_tuning_isolation", lambda *args: Guard()
-    )
-    monkeypatch.setattr(
-        worker, "configure_worker_runtime", lambda out: {"temp_dir": str(tmp_path)}
-    )
+    monkeypatch.setattr(tuning_isolation, "install_tuning_isolation", lambda *args: Guard())
+    monkeypatch.setattr(worker, "configure_worker_runtime", lambda out: {"temp_dir": str(tmp_path)})
     monkeypatch.setattr(worker, "cache_policy_parameters", lambda *args: ({}, ()))
     dataset = SimpleNamespace(task_id="fixture", problem="regression", metric="rmse")
-    fold = {
-        "X_train": [1],
-        "y_train": [1],
-        "X_test": [2],
-        "y_test": [2],
-        "n_train": 1,
-        "n_test": 1,
-        "loader": "fixture",
-    }
+    fold = {"X_train": [1], "y_train": [1], "X_test": [2], "y_test": [2],
+            "n_train": 1, "n_test": 1, "loader": "fixture"}
     monkeypatch.setattr(worker, "load_worker_fold", lambda spec: (dataset, fold))
-    spec = {
-        "source_dataset": "fixture",
-        "timeout_seconds": 3600,
-        "fedot_search_budget_seconds": 2700,
-        "timeout_minutes": 45,
-        "fedot_timeout_policy": "return_best",
-        "final_fit_reserve_seconds": 300,
-        "max_pipeline_evaluation_policy": "per-cv-candidate-v1",
-        "seed": 42,
-        "n_jobs": 4,
-        "preset": "best_quality",
-        "with_tuning": True,
-        "tuning_evaluation_policy": "isolated-objective-process-v1",
-    }
+    spec = {"source_dataset": "fixture", "timeout_seconds": 3600,
+            "fedot_search_budget_seconds": 2700, "timeout_minutes": 45,
+            "fedot_timeout_policy": "return_best", "final_fit_reserve_seconds": 300,
+            "max_pipeline_evaluation_policy": "per-cv-candidate-v1",
+            "seed": 42, "n_jobs": 4, "preset": "best_quality", "with_tuning": True,
+            "tuning_evaluation_policy": "isolated-objective-process-v1"}
 
     payload, _ = worker._evaluate_worker(spec, tmp_path / "result.json")
 

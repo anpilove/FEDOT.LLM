@@ -5,10 +5,7 @@ import json
 from pathlib import Path
 
 
-SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / "research/evolve/scripts/sync_hour_verdicts.py"
-)
+SCRIPT = Path(__file__).resolve().parents[2] / "research/evolve/scripts/sync_hour_verdicts.py"
 SPEC = importlib.util.spec_from_file_location("sync_hour_verdicts", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 sync_hour_verdicts = importlib.util.module_from_spec(SPEC)
@@ -34,40 +31,26 @@ def _write_proposal(path: Path, candidate: str, status: str, reason: str, keep: 
 def test_quality_rollup_does_not_count_infrastructure_failures_as_drops(tmp_path):
     queue = tmp_path / "quality_queue"
     queue.mkdir()
-    _write_proposal(
-        queue / "infra.json", "infra", "infrastructure_error", "worker_crash", False
-    )
+    _write_proposal(queue / "infra.json", "infra", "infrastructure_error", "worker_crash", False)
     _write_proposal(queue / "drop.json", "drop", "drop", "no_quality_gain", False)
     _write_proposal(queue / "keep.json", "keep", "keep", "quality_improved", True)
     journal = [
         {
             "event": "fedot_quality",
             "candidate": "infra",
-            "decision": {
-                "keep": False,
-                "infrastructure_error": True,
-                "reason": "worker_crash",
-            },
+            "decision": {"keep": False, "infrastructure_error": True, "reason": "worker_crash"},
             "jobs": [],
         },
         {
             "event": "fedot_quality",
             "candidate": "drop",
-            "decision": {
-                "keep": False,
-                "infrastructure_error": False,
-                "reason": "no_quality_gain",
-            },
+            "decision": {"keep": False, "infrastructure_error": False, "reason": "no_quality_gain"},
             "jobs": [],
         },
         {
             "event": "fedot_quality",
             "candidate": "keep",
-            "decision": {
-                "keep": True,
-                "infrastructure_error": False,
-                "reason": "quality_improved",
-            },
+            "decision": {"keep": True, "infrastructure_error": False, "reason": "quality_improved"},
             "jobs": [],
         },
     ]
@@ -83,9 +66,7 @@ def test_quality_rollup_does_not_count_infrastructure_failures_as_drops(tmp_path
     assert "**Infrastructure errors (not quality drops):** 1" in report
 
 
-def test_quality_rollup_keeps_candidate_and_evaluation_errors_out_of_drop_count(
-    tmp_path,
-):
+def test_quality_rollup_keeps_candidate_and_evaluation_errors_out_of_drop_count(tmp_path):
     queue = tmp_path / "quality_queue"
     queue.mkdir()
     for candidate, failure in (
@@ -150,19 +131,11 @@ def test_orphan_journal_rows_are_not_assigned_by_matching_reason(tmp_path):
     orphan = {
         "event": "fedot_quality",
         "candidate": None,
-        "decision": {
-            "keep": False,
-            "infrastructure_error": True,
-            "reason": "composing_did_not_start:task-1",
-        },
+        "decision": {"keep": False, "infrastructure_error": True, "reason": "composing_did_not_start:task-1"},
         "task_ids": ["task-1"],
         "jobs": [
             {
-                "spec": {
-                    "source_dataset": "task-1",
-                    "metric": "roc_auc",
-                    "higher_is_better": True,
-                },
+                "spec": {"source_dataset": "task-1", "metric": "roc_auc", "higher_is_better": True},
                 "stock_status": "ok",
                 "patched_status": "invalid",
                 "stock_score": 0.8,
@@ -175,23 +148,13 @@ def test_orphan_journal_rows_are_not_assigned_by_matching_reason(tmp_path):
 
     assert summary["candidates"]["candidate"]["jobs"] == []
     assert len(summary["unattributed_journal_rows"]) == 1
-    assert (
-        summary["unattributed_journal_rows"][0]["jobs"][0]["spec"]["source_dataset"]
-        == "task-1"
-    )
+    assert summary["unattributed_journal_rows"][0]["jobs"][0]["spec"]["source_dataset"] == "task-1"
     assert "not assigned to any candidate" in sync_hour_verdicts.render_md(summary)
-    assert (
-        sync_hour_verdicts._verdict_numbers(
-            [orphan], sync_hour_verdicts._queue_meta(queue)
-        )
-        == {}
-    )
+    assert sync_hour_verdicts._verdict_numbers([orphan], sync_hour_verdicts._queue_meta(queue)) == {}
 
     details = tmp_path / "details.jsonl"
     sync_hour_verdicts.write_detail_jsonl(summary, details)
-    detail_rows = [
-        json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()
-    ]
+    detail_rows = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
     detail_row = detail_rows[-1]
     assert detail_row["candidate_id"] is None
     assert detail_row["unattributed"] is True
@@ -199,10 +162,7 @@ def test_orphan_journal_rows_are_not_assigned_by_matching_reason(tmp_path):
 
     rollup = tmp_path / "rollup.json"
     sync_hour_verdicts.write_campaign_rollup(summary, rollup)
-    assert (
-        json.loads(rollup.read_text(encoding="utf-8"))["unattributed_journal_row_count"]
-        == 1
-    )
+    assert json.loads(rollup.read_text(encoding="utf-8"))["unattributed_journal_row_count"] == 1
 
 
 def test_live_report_builds_per_dataset_progress_from_side_events(tmp_path):
@@ -242,11 +202,7 @@ def test_live_report_builds_per_dataset_progress_from_side_events(tmp_path):
             "side": "stock",
             "attempt": 1,
             "spec": spec,
-            "result": {
-                "status": "ok",
-                "score": 10.0,
-                "worker_log_path": "/tmp/stock.log",
-            },
+            "result": {"status": "ok", "score": 10.0, "worker_log_path": "/tmp/stock.log"},
             "ts": "2026-09-28T01:02:00+00:00",
         },
         {
@@ -256,11 +212,7 @@ def test_live_report_builds_per_dataset_progress_from_side_events(tmp_path):
             "side": "patch",
             "attempt": 1,
             "spec": spec,
-            "result": {
-                "status": "ok",
-                "score": 9.7,
-                "worker_log_path": "/tmp/patch.log",
-            },
+            "result": {"status": "ok", "score": 9.7, "worker_log_path": "/tmp/patch.log"},
             "ts": "2026-09-28T01:05:00+00:00",
         },
         {
@@ -337,10 +289,7 @@ def test_history_index_joins_only_exact_candidate_and_task_ids(tmp_path):
     import hashlib
     import importlib.util
 
-    script = (
-        Path(__file__).resolve().parents[2]
-        / "research/evolve/scripts/index_quality_history.py"
-    )
+    script = Path(__file__).resolve().parents[2] / "research/evolve/scripts/index_quality_history.py"
     assert script.is_file(), "history index importer should be available"
     spec = importlib.util.spec_from_file_location("index_quality_history", script)
     assert spec is not None and spec.loader is not None
@@ -362,27 +311,13 @@ def test_history_index_joins_only_exact_candidate_and_task_ids(tmp_path):
     proposal_path = queue / "candidate-1.json"
     proposal_path.write_text(json.dumps(proposal), encoding="utf-8")
     rows = [
-        {
-            "event": "fedot_quality_task_finished",
-            "candidate": "candidate-1",
-            "task_id": "task-1",
-        },
+        {"event": "fedot_quality_task_finished", "candidate": "candidate-1", "task_id": "task-1"},
         {"event": "fedot_quality_task_finished", "task_id": "task-1"},
-        {
-            "event": "fedot_quality_task_finished",
-            "candidate": "candidate-1",
-            "task_id": "task-unknown",
-        },
-        {
-            "event": "fedot_quality_task_finished",
-            "candidate": "other-candidate",
-            "task_id": "task-1",
-        },
+        {"event": "fedot_quality_task_finished", "candidate": "candidate-1", "task_id": "task-unknown"},
+        {"event": "fedot_quality_task_finished", "candidate": "other-candidate", "task_id": "task-1"},
     ]
     journal_path = run / "quality_jobs.jsonl"
-    journal_path.write_text(
-        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
-    )
+    journal_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     source_hashes = {
         path: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in (proposal_path, journal_path)
@@ -390,18 +325,11 @@ def test_history_index_joins_only_exact_candidate_and_task_ids(tmp_path):
 
     output = tmp_path / "history.jsonl"
     summary = importer.build_quality_history_index([run], output)
-    imported = [
-        json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()
-    ]
+    imported = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
     proposal = next(row for row in imported if row["record_type"] == "proposal")
     unresolved = [row for row in imported if row["record_type"] == "unresolved_event"]
 
-    assert summary == {
-        "proposals": 1,
-        "linked_events": 1,
-        "unresolved_events": 3,
-        "malformed_records": 0,
-    }
+    assert summary == {"proposals": 1, "linked_events": 1, "unresolved_events": 3, "malformed_records": 0}
     assert proposal["run_id"] == "run-exact"
     assert [row["task_ids"] for row in proposal["journal_events"]] == [["task-1"]]
     assert {row["reason"] for row in unresolved} == {
@@ -411,7 +339,8 @@ def test_history_index_joins_only_exact_candidate_and_task_ids(tmp_path):
     }
     assert all("journal_events" not in row for row in unresolved)
     assert source_hashes == {
-        path: hashlib.sha256(path.read_bytes()).hexdigest() for path in source_hashes
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in source_hashes
     }
 
 
@@ -419,10 +348,7 @@ def test_history_index_cli_discovers_runs_under_campaign_root(tmp_path, monkeypa
     import importlib.util
     import sys
 
-    script = (
-        Path(__file__).resolve().parents[2]
-        / "research/evolve/scripts/index_quality_history.py"
-    )
+    script = Path(__file__).resolve().parents[2] / "research/evolve/scripts/index_quality_history.py"
     spec = importlib.util.spec_from_file_location("index_quality_history_cli", script)
     assert spec is not None and spec.loader is not None
     importer = importlib.util.module_from_spec(spec)
@@ -438,19 +364,11 @@ def test_history_index_cli_discovers_runs_under_campaign_root(tmp_path, monkeypa
     monkeypatch.setattr(
         sys,
         "argv",
-        [
-            "index_quality_history.py",
-            "--campaign-root",
-            str(tmp_path / "campaigns"),
-            "--output",
-            str(output),
-        ],
+        ["index_quality_history.py", "--campaign-root", str(tmp_path / "campaigns"), "--output", str(output)],
     )
 
     assert importer.main() == 0
-    rows = [
-        json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()
-    ]
+    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 1
     assert rows[0]["run_id"] == "run-a"
 
@@ -492,23 +410,17 @@ def test_report_recalculates_frozen_outcome_without_mixing_metric_families():
         }
         for index in range(8)
     ]
-    broad = sync_hour_verdicts.derive_quality_outcome(
-        rows, [row["task_id"] for row in rows]
-    )
+    broad = sync_hour_verdicts.derive_quality_outcome(rows, [row["task_id"] for row in rows])
     assert broad["outcome"] == "broad_positive"
     assert broad["wins"] == 5
 
     rows[6]["patched_score"] = 1.001
     rows[6]["delta"] = -0.001
-    regression = sync_hour_verdicts.derive_quality_outcome(
-        rows, [row["task_id"] for row in rows]
-    )
+    regression = sync_hour_verdicts.derive_quality_outcome(rows, [row["task_id"] for row in rows])
     assert regression["outcome"] == "regression"
     assert regression["losses"] == 1
 
     rows[6]["patched_status"] = "timeout"
-    incomplete = sync_hour_verdicts.derive_quality_outcome(
-        rows, [row["task_id"] for row in rows]
-    )
+    incomplete = sync_hour_verdicts.derive_quality_outcome(rows, [row["task_id"] for row in rows])
     assert incomplete["outcome"] == "not_evaluated"
     assert incomplete["unresolved_task_ids"] == ["task-6"]

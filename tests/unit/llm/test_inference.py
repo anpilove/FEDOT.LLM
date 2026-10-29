@@ -9,68 +9,49 @@ from pydantic import BaseModel, Field, ValidationError
 from tenacity import wait_none
 
 from fedotllm.configs.schema import LLMConfig
-from fedotllm.llm import (
-    AIInference,
-    EmptyLLMResponse,
-    LLMRequestTimeout,
-    _provider_retry_wait,
-)
+from fedotllm.llm import AIInference, EmptyLLMResponse, LLMRequestTimeout, _provider_retry_wait
 
 
 def _inflight_error():
     return litellm.APIError(
         status_code=402,
-        message="APIError: OpenrouterException - "
-        + json.dumps(
-            {
-                "error": {
-                    "metadata": {
-                        "reason": "in_flight_budget_exhausted",
-                        "headers": {"Retry-After": "120"},
-                    }
-                }
-            }
-        ),
-        llm_provider="openrouter",
-        model="test-model",
+        message='APIError: OpenrouterException - ' + json.dumps({
+            'error': {'metadata': {'reason': 'in_flight_budget_exhausted',
+                                  'headers': {'Retry-After': '120'}}}
+        }),
+        llm_provider='openrouter', model='test-model',
     )
 
 
 def test_query_honors_inflight_retry_delay(llm_config, monkeypatch):
     inference = AIInference(llm_config)
-    inference._complete = MagicMock(side_effect=[_inflight_error(), "ok"])
+    inference._complete = MagicMock(side_effect=[_inflight_error(), 'ok'])
     pauses = []
-    monkeypatch.setattr(inference.query.retry, "sleep", pauses.append)
-    monkeypatch.setattr(inference.query.retry, "wait", _provider_retry_wait)
-    assert inference.query("same request") == "ok"
+    monkeypatch.setattr(inference.query.retry, 'sleep', pauses.append)
+    monkeypatch.setattr(inference.query.retry, 'wait', _provider_retry_wait)
+    assert inference.query('same request') == 'ok'
     assert pauses == [120.0]
     assert inference._complete.call_count == 2
-    assert (
-        inference._complete.call_args_list[0] == inference._complete.call_args_list[1]
-    )
+    assert inference._complete.call_args_list[0] == inference._complete.call_args_list[1]
 
 
 def test_structured_call_does_not_multiply_transport_retries(llm_config, monkeypatch):
     inference = AIInference(llm_config)
     inference._complete = MagicMock(side_effect=_inflight_error())
     pauses = []
-    monkeypatch.setattr(inference.query.retry, "sleep", pauses.append)
-    monkeypatch.setattr(inference.query.retry, "wait", _provider_retry_wait)
-    monkeypatch.setattr(inference.create.retry, "sleep", lambda _: None)
+    monkeypatch.setattr(inference.query.retry, 'sleep', pauses.append)
+    monkeypatch.setattr(inference.query.retry, 'wait', _provider_retry_wait)
+    monkeypatch.setattr(inference.create.retry, 'sleep', lambda _: None)
     with pytest.raises(litellm.APIError):
-        inference.create("request", response_model=UserModel)
+        inference.create('request', response_model=UserModel)
     assert inference._complete.call_count == 2
     assert pauses == [120.0]
 
 
-@pytest.mark.parametrize(
-    "delay,expected", [("27", 27), ("nan", 4), ("-1", 4), ("invalid", 4)]
-)
+@pytest.mark.parametrize('delay,expected', [('27', 27), ('nan', 4), ('-1', 4), ('invalid', 4)])
 def test_provider_retry_http_headers(delay, expected):
-    exc = SimpleNamespace(response=SimpleNamespace(headers={"retry-after": delay}))
-    state = SimpleNamespace(
-        outcome=SimpleNamespace(exception=lambda: exc), attempt_number=1
-    )
+    exc = SimpleNamespace(response=SimpleNamespace(headers={'retry-after': delay}))
+    state = SimpleNamespace(outcome=SimpleNamespace(exception=lambda: exc), attempt_number=1)
     assert _provider_retry_wait(state) == expected
 
 

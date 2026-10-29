@@ -12,7 +12,6 @@ from fedotllm.agents.evolve.types import MatchSite, ScoreResult
 
 ScoreRunner = Callable[..., dict[str, ScoreResult]]
 
-
 def start_revision(
     workspace: Path,
     parent: Hypothesis,

@@ -260,9 +260,7 @@ def load_resume_branch(
         path = candidate_dir / name
         if path.is_file():
             try:
-                diagnostics.append(
-                    f"{name}:\n{path.read_text(encoding='utf-8')[-4_000:]}"
-                )
+                diagnostics.append(f"{name}:\n{path.read_text(encoding='utf-8')[-4_000:]}")
             except OSError:
                 pass
     return {
@@ -364,9 +362,9 @@ def tried_sites(workspace: Path) -> set[tuple[str, int]]:
         for row in read_jsonl(workspace / name):
             if row.get("event") not in {"attempt", "decision"}:
                 continue
-            if str(row.get("reason") or "").startswith(
-                ("verification_inconclusive", "verification_infrastructure_error")
-            ):
+            if str(row.get("reason") or "").startswith((
+                "verification_inconclusive", "verification_infrastructure_error"
+            )):
                 continue
             lead = row.get("lead")
             if not isinstance(lead, dict):
@@ -464,8 +462,7 @@ def _recent_completed_findings(
         # the hypothesis. Keep their audit records, but do not cool down the
         # site or feed them back as completed investigations to Scout.
         if (row.get("reproduction") or {}).get("status") in {
-            "inconclusive",
-            "infrastructure_error",
+            "inconclusive", "infrastructure_error"
         }:
             continue
         if source_hash and row.get("source_hash") != source_hash:
@@ -663,16 +660,12 @@ def _cheap_screen_not_quality_verdict(row: dict) -> bool:
         cheap_screen_not_quality_verdict,
     )
 
-    probe = (
-        row.get("behavior_probe") if isinstance(row.get("behavior_probe"), dict) else {}
-    )
+    probe = row.get("behavior_probe") if isinstance(row.get("behavior_probe"), dict) else {}
     dev = row.get("dev") if isinstance(row.get("dev"), dict) else {}
     return cheap_screen_not_quality_verdict(
         probe_status=str(probe.get("status") or ""),
         reason=str(dev.get("reason") or row.get("reason") or ""),
-        target_delta=dev.get("target_delta")
-        if "target_delta" in dev
-        else row.get("target_delta"),
+        target_delta=dev.get("target_delta") if "target_delta" in dev else row.get("target_delta"),
         stage=str(dev.get("stage") or row.get("stage") or ""),
     )
 

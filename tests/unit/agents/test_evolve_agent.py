@@ -5,11 +5,7 @@ from pathlib import Path
 import pytest
 
 from fedotllm.agents.evolve.evaluation.compare import compare_pack
-from fedotllm.agents.evolve.discovery.context import (
-    context_from_lead,
-    inspect_trace,
-    show_source,
-)
+from fedotllm.agents.evolve.discovery.context import context_from_lead, inspect_trace, show_source
 from fedotllm.agents.evolve.discovery.discover import parse_pytest_output
 from fedotllm.agents.evolve.execution.guard import guard_path
 from fedotllm.agents.evolve.execution.patch import apply_patch
@@ -93,9 +89,7 @@ def test_quality_suite_covers_real_cases():
     )
     assert coverage_task_limit() == DEFAULT_COVERAGE_TASKS == 12
     covered_operations = {
-        node
-        for task_id in suite[: coverage_task_limit()]
-        for node in load_task(task_id).nodes
+        node for task_id in suite[:coverage_task_limit()] for node in load_task(task_id).nodes
     }
     assert {
         "simple_imputation",
@@ -140,9 +134,9 @@ def test_inspect_trace_keeps_checkout_frames_only(tmp_path: Path):
     src.parent.mkdir(parents=True)
     src.write_text("def transform():\n    raise IndexError('x')\n", encoding="utf-8")
     traceback = (
-        "Traceback (most recent call last):\n"
+        'Traceback (most recent call last):\n'
         f'  File "/not/gym/scorer.py", line 149, in score_task\n'
-        f"    pipeline.fit(train)\n"
+        f'    pipeline.fit(train)\n'
         f'  File "{src}", line 2, in transform\n'
         f'    raise IndexError("x")\n'
         "IndexError: x\n"
@@ -157,10 +151,7 @@ def test_show_source_is_enclosing_function_not_file_window(tmp_path: Path):
     src = tmp_path / "fedot" / "core" / "data.py"
     src.parent.mkdir(parents=True)
     other = "\n".join(f"def other_{i}():\n    return {i}\n" for i in range(25))
-    src.write_text(
-        other + "\ndef get_not_encoded_data():\n    raise IndexError('x')\n",
-        encoding="utf-8",
-    )
+    src.write_text(other + "\ndef get_not_encoded_data():\n    raise IndexError('x')\n", encoding="utf-8")
     lines = src.read_text(encoding="utf-8").splitlines()
     crash = next(i + 1 for i, line in enumerate(lines) if "IndexError" in line)
     text = show_source(src, checkout=tmp_path, around=crash)
@@ -255,12 +246,7 @@ def test_context_from_lead_includes_field_usage(tmp_path: Path):
         encoding="utf-8",
     )
     ctx = context_from_lead(
-        MatchSite(
-            channel="trace",
-            file_path="fedot/core/data.py",
-            line=2,
-            why="IndexError in get_not_encoded_data",
-        ),
+        MatchSite(channel="trace", file_path="fedot/core/data.py", line=2, why="IndexError in get_not_encoded_data"),
         tmp_path,
     )
     assert "get_not_encoded_data" in ctx
@@ -272,10 +258,7 @@ def test_context_from_lead(tmp_path: Path):
     src = tmp_path / "fedot" / "core" / "data.py"
     src.parent.mkdir(parents=True)
     src.write_text("def f():\n    return 1\n", encoding="utf-8")
-    ctx = context_from_lead(
-        MatchSite(channel="lint", file_path="fedot/core/data.py", line=2, why="F821 x"),
-        tmp_path,
-    )
+    ctx = context_from_lead(MatchSite(channel="lint", file_path="fedot/core/data.py", line=2, why="F821 x"), tmp_path)
     assert "fedot/core/data.py" in ctx
     assert "Channel:" not in ctx
     assert "pca->catboost" not in ctx
@@ -370,11 +353,7 @@ def test_scoreboard_summarize_getting_better(tmp_path: Path):
 
 
 def test_scoreboard_final_is_the_claim(tmp_path: Path):
-    from fedotllm.agents.evolve.storage.scoreboard import (
-        append_attempt,
-        append_final,
-        summarize,
-    )
+    from fedotllm.agents.evolve.storage.scoreboard import append_attempt, append_final, summarize
     from fedotllm.agents.evolve.types import Decision as Dec
 
     stock = {"pca->catboost": _score("pca->catboost", "crash", 0.5)}
@@ -442,12 +421,7 @@ def test_propose_cannot_fix():
             return PatchProposal(file_path="fedot/core/a.py", status="cannot_fix")
 
     errors: list[str] = []
-    assert (
-        propose_patch(
-            inference=Inf(), context="# fedot/core/a.py\npass\n", errors=errors
-        )
-        is None
-    )
+    assert propose_patch(inference=Inf(), context="# fedot/core/a.py\npass\n", errors=errors) is None
     assert errors == ["cannot_fix"]
 
 
@@ -478,9 +452,7 @@ def test_leads_from_scores_uses_trace_not_task_id(tmp_path: Path):
 
     src = tmp_path / "fedot" / "core" / "data.py"
     src.parent.mkdir(parents=True)
-    src.write_text(
-        "def get_not_encoded_data():\n    raise IndexError('oob')\n", encoding="utf-8"
-    )
+    src.write_text("def get_not_encoded_data():\n    raise IndexError('oob')\n", encoding="utf-8")
     traceback = (
         "Traceback (most recent call last):\n"
         f'  File "{src}", line 2, in get_not_encoded_data\n'
@@ -638,7 +610,7 @@ def test_existing_failed_node_must_keep_the_same_failure_signature():
             "============================= FAILURES =============================\n"
             "______________________________ test_idx ______________________________\n"
             "../../.venv/lib/python3.11/site-packages/pandas/core/frame.py:12: in get\n"
-            '  File "/tmp/stock/fedot/a.py", line 12\n'
+            "  File \"/tmp/stock/fedot/a.py\", line 12\n"
             "E   AssertionError: expected metadata index\n"
             f"FAILED {node} - AssertionError: expected metadata index\n"
         ),
@@ -651,7 +623,7 @@ def test_existing_failed_node_must_keep_the_same_failure_signature():
             "============================= FAILURES =============================\n"
             "______________________________ test_idx ______________________________\n"
             "/Users/example/project/.venv/lib/python3.11/site-packages/pandas/core/frame.py:99: in get\n"
-            '  File "/tmp/work/experiments/run/candidate/fedot/a.py", line 99\n'
+            "  File \"/tmp/work/experiments/run/candidate/fedot/a.py\", line 99\n"
             "E   AssertionError: expected metadata index\n"
             f"FAILED {node} - AssertionError: expected metadata index\n"
         ),
@@ -716,11 +688,7 @@ def test_existing_failed_node_must_keep_the_same_failure_signature():
 
 
 def test_repo_map_ranks_symbol_and_field(tmp_path: Path):
-    from fedotllm.agents.evolve.discovery.repo_map import (
-        repo_map,
-        search_callers,
-        search_field_usage,
-    )
+    from fedotllm.agents.evolve.discovery.repo_map import repo_map, search_callers, search_field_usage
 
     data = tmp_path / "fedot" / "core" / "data.py"
     pca = tmp_path / "fedot" / "core" / "operations" / "pca.py"
@@ -733,7 +701,8 @@ def test_repo_map_ranks_symbol_and_field(tmp_path: Path):
         encoding="utf-8",
     )
     pca.write_text(
-        "def transform(data):\n    return data.get_not_encoded_data()\n",
+        "def transform(data):\n"
+        "    return data.get_not_encoded_data()\n",
         encoding="utf-8",
     )
     mapped = repo_map(tmp_path, ["get_not_encoded_data"])
@@ -793,12 +762,8 @@ def test_repo_map_spreads_across_core_packages(tmp_path: Path):
     )
     models.parent.mkdir(parents=True)
     dataops.parent.mkdir(parents=True)
-    models.write_text(
-        "class A:\n    def f(self):\n        return 1\n", encoding="utf-8"
-    )
-    dataops.write_text(
-        "class Z:\n    def h(self):\n        return 1\n", encoding="utf-8"
-    )
+    models.write_text("class A:\n    def f(self):\n        return 1\n", encoding="utf-8")
+    dataops.write_text("class Z:\n    def h(self):\n        return 1\n", encoding="utf-8")
     mapped = repo_map(tmp_path, (), limit=2)
     blob = " ".join(item.file_path for item in mapped)
     assert "/models/" in blob
@@ -830,16 +795,7 @@ def test_repo_map_skips_abstract_stubs(tmp_path: Path):
         / "operation_implementations"
         / "implementation_interfaces.py"
     )
-    knn = (
-        tmp_path
-        / "fedot"
-        / "core"
-        / "operations"
-        / "evaluation"
-        / "operation_implementations"
-        / "models"
-        / "knn.py"
-    )
+    knn = tmp_path / "fedot" / "core" / "operations" / "evaluation" / "operation_implementations" / "models" / "knn.py"
     iface.parent.mkdir(parents=True)
     knn.parent.mkdir(parents=True)
     iface.write_text(
@@ -850,17 +806,10 @@ def test_repo_map_skips_abstract_stubs(tmp_path: Path):
         "        raise NotImplementedError\n",
         encoding="utf-8",
     )
-    knn.write_text(
-        "class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
     mapped = repo_map(tmp_path, (), limit=8)
-    assert any(
-        item.name == "fit" and item.file_path.endswith("knn.py") for item in mapped
-    )
-    assert not any(
-        item.name == "fit" and item.file_path.endswith("implementation_interfaces.py")
-        for item in mapped
-    )
+    assert any(item.name == "fit" and item.file_path.endswith("knn.py") for item in mapped)
+    assert not any(item.name == "fit" and item.file_path.endswith("implementation_interfaces.py") for item in mapped)
 
 
 def test_discover_walks_whole_core_not_one_field(tmp_path: Path):
@@ -930,12 +879,9 @@ def test_scan_skips_only_non_training_folders(tmp_path: Path):
         tmp_path / "fedot" / "core" / "pipelines" / "node.py": (
             "class PipelineNode:\n    def fit(self, data):\n        return data\n"
         ),
-        tmp_path
-        / "fedot"
-        / "core"
-        / "optimisers"
-        / "objective"
-        / "metrics_objective.py": ("def metric_value(x):\n    return x\n"),
+        tmp_path / "fedot" / "core" / "optimisers" / "objective" / "metrics_objective.py": (
+            "def metric_value(x):\n    return x\n"
+        ),
         tmp_path / "fedot" / "core" / "composer" / "composer.py": (
             "class Composer:\n    def compose(self, data):\n        return data\n"
         ),
@@ -944,24 +890,14 @@ def test_scan_skips_only_non_training_folders(tmp_path: Path):
         ),
     }
     skip = {
-        tmp_path
-        / "fedot"
-        / "remote"
-        / "remote_evaluator.py": "def run():\n    return 0\n",
-        tmp_path
-        / "fedot"
-        / "explainability"
-        / "explainers.py": "def explain(m):\n    return m\n",
-        tmp_path
-        / "fedot"
-        / "core"
-        / "visualisation"
-        / "pipeline_specific_visuals.py": ("def plot_pipeline(g):\n    return g\n"),
+        tmp_path / "fedot" / "remote" / "remote_evaluator.py": "def run():\n    return 0\n",
+        tmp_path / "fedot" / "explainability" / "explainers.py": "def explain(m):\n    return m\n",
+        tmp_path / "fedot" / "core" / "visualisation" / "pipeline_specific_visuals.py": (
+            "def plot_pipeline(g):\n    return g\n"
+        ),
     }
     knn.parent.mkdir(parents=True)
-    knn.write_text(
-        "class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
     for path, text in {**keep, **skip}.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -1046,13 +982,9 @@ def test_run_once_scout_then_reproduce(tmp_path: Path, monkeypatch: pytest.Monke
         order.append("stock")
         return stock
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_fedot_tests", fake_tests
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_fedot_tests", fake_tests)
     monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.scout", fake_scout)
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_stock", fake_stock
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_stock", fake_stock)
     run_once(
         checkout=checkout,
         workspace=tmp_path,
@@ -1063,9 +995,7 @@ def test_run_once_scout_then_reproduce(tmp_path: Path, monkeypatch: pytest.Monke
     assert set(order) == {"scout", "stock"}
     import json
 
-    scout_row = json.loads(
-        (tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()[0]
-    )
+    scout_row = json.loads((tmp_path / "journal.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert scout_row["logging_version"] == 2
     assert "pool_rows_static" in scout_row
     assert "llm_pick_raw" in scout_row
@@ -1121,9 +1051,7 @@ def test_run_once_refreshes_coverage_for_a_later_crashing_task(
         assert leads[0].file_path.endswith("sklearn_transformations.py")
         return []
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_stock", fake_stock
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_stock", fake_stock)
     monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.scout", fake_scout)
 
     run_once(
@@ -1139,9 +1067,7 @@ def test_run_once_refreshes_coverage_for_a_later_crashing_task(
     assert calls == [("pca->catboost",), ("pca->catboost",)]
 
 
-def test_run_once_drops_on_new_fedot_test_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_run_once_drops_on_new_fedot_test_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.controller.campaign import run_once
     from fedotllm.agents.evolve.types import PatchCandidate
 
@@ -1161,14 +1087,10 @@ def test_run_once_drops_on_new_fedot_test_failure(
             "FAILED test/unit/new.py::test_x",
         )
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_fedot_tests", fake_tests
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_fedot_tests", fake_tests)
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.scout",
-        lambda *_a, **_k: [
-            MatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006")
-        ],
+        lambda *_a, **_k: [MatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006")],
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.fix_lead",
@@ -1184,12 +1106,8 @@ def test_run_once_drops_on_new_fedot_test_failure(
         patched_called["n"] += 1
         raise AssertionError("hidden exam must not run if FEDOT tests regressed")
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_patched", boom
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.snapshot_diff", lambda *_a, **_k: ""
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_patched", boom)
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.snapshot_diff", lambda *_a, **_k: "")
     decision = run_once(
         checkout=checkout,
         workspace=tmp_path,
@@ -1202,9 +1120,7 @@ def test_run_once_drops_on_new_fedot_test_failure(
     assert patched_called["n"] == 0
 
 
-def test_run_once_drops_unimportable_before_holdout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_run_once_drops_unimportable_before_holdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.controller.campaign import run_once
     from fedotllm.agents.evolve.types import PatchCandidate
 
@@ -1212,15 +1128,11 @@ def test_run_once_drops_unimportable_before_holdout(
     _accept_behavior_probe(monkeypatch)
     (checkout / "fedot").mkdir(parents=True)
     (checkout / "fedot" / "__init__.py").write_text("", encoding="utf-8")
-    (checkout / "fedot" / "a.py").write_text(
-        "broken = definitely_not_defined\n", encoding="utf-8"
-    )
+    (checkout / "fedot" / "a.py").write_text("broken = definitely_not_defined\n", encoding="utf-8")
 
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.scout",
-        lambda *_a, **_k: [
-            MatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="x")
-        ],
+        lambda *_a, **_k: [MatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="x")],
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.fix_lead",
@@ -1240,13 +1152,8 @@ def test_run_once_drops_unimportable_before_holdout(
         patched_called["n"] += 1
         raise AssertionError("holdout must not run if patch does not import")
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_patched", boom
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.snapshot_diff",
-        lambda *_a, **_k: "diff",
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_patched", boom)
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.snapshot_diff", lambda *_a, **_k: "diff")
     decision = run_once(
         checkout=checkout,
         workspace=tmp_path,
@@ -1259,9 +1166,7 @@ def test_run_once_drops_unimportable_before_holdout(
     assert patched_called["n"] == 0
 
 
-def test_run_once_tries_second_lead_and_writes_comparison(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_run_once_tries_second_lead_and_writes_comparison(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.controller.campaign import run_once
     from fedotllm.agents.evolve.storage.scoreboard import summarize
     from fedotllm.agents.evolve.types import PatchCandidate
@@ -1271,21 +1176,14 @@ def test_run_once_tries_second_lead_and_writes_comparison(
     _accept_behavior_probe(monkeypatch)
     leads = [
         MatchSite(channel="lint", file_path="fedot/a.py", line=1, why="B006"),
-        MatchSite(
-            channel="fedot_test", file_path="fedot/b.py", line=2, why="test/unit/x.py"
-        ),
+        MatchSite(channel="fedot_test", file_path="fedot/b.py", line=2, why="test/unit/x.py"),
     ]
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.hidden_exam",
         lambda: (("catboost", "lgbm", "rf"), ("catboost", "lgbm", "rf")),
     )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.scout", lambda *a, **k: leads
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.snapshot_diff",
-        lambda *a, **k: "--- a\n+++ b",
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.scout", lambda *a, **k: leads)
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.snapshot_diff", lambda *a, **k: "--- a\n+++ b")
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.measure_fedot_tests",
         lambda *a, **k: TestResult("passed", 0),
@@ -1296,19 +1194,13 @@ def test_run_once_tries_second_lead_and_writes_comparison(
         "lgbm": _score("lgbm", "ok", 0.80),
         "rf": _score("rf", "ok", 0.78),
     }
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.measure_stock",
-        lambda *a, **k: stock,
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.measure_stock", lambda *a, **k: stock)
 
     cands = [
         PatchCandidate("c1", "fedot/a.py", "old", "new"),
         PatchCandidate("c2", "fedot/b.py", "old2", "new2"),
     ]
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.fix_lead",
-        lambda *a, **k: cands.pop(0),
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.fix_lead", lambda *a, **k: cands.pop(0))
 
     patched_runs = [
         {
@@ -1361,16 +1253,8 @@ def test_replay_reads_cmd_log_and_diff(tmp_path: Path):
             "keep": False,
             "reason": "no_lift",
             "diff": "--- a\n+++ b",
-            "stock": {
-                "t": {"cmd": "python -m worker", "log_tail": "boom", "status": "crash"}
-            },
-            "patched": {
-                "t": {
-                    "cmd": "python -m worker",
-                    "log_tail": "still boom",
-                    "status": "crash",
-                }
-            },
+            "stock": {"t": {"cmd": "python -m worker", "log_tail": "boom", "status": "crash"}},
+            "patched": {"t": {"cmd": "python -m worker", "log_tail": "still boom", "status": "crash"}},
         },
     )
     row = load_replay(tmp_path, candidate="abc")
@@ -1407,9 +1291,7 @@ def test_discover_skips_pipeline_and_helpers_for_max_leads(tmp_path: Path):
     helper = tmp_path / "fedot" / "core" / "data" / "array_utilities.py"
     for path in (knn, scale, node, helper):
         path.parent.mkdir(parents=True, exist_ok=True)
-    knn.write_text(
-        "class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
     scale.write_text(
         "class Scale:\n    def transform(self, data):\n        return data\n",
         encoding="utf-8",
@@ -1418,9 +1300,7 @@ def test_discover_skips_pipeline_and_helpers_for_max_leads(tmp_path: Path):
         "class PipelineNode:\n    def fit(self, data):\n        return data\n",
         encoding="utf-8",
     )
-    helper.write_text(
-        "def find_common_elements(arrays):\n    return arrays\n", encoding="utf-8"
-    )
+    helper.write_text("def find_common_elements(arrays):\n    return arrays\n", encoding="utf-8")
     leads = discover_leads(tmp_path, limit=2)
     paths = [lead.file_path for lead in leads]
     assert len(leads) == 2
@@ -1445,11 +1325,7 @@ def test_skip_tried_sites_from_scoreboard(tmp_path: Path):
             "event": "attempt",
             "keep": False,
             "candidate_id": "applied1",
-            "lead": {
-                "channel": "repo_map",
-                "file_path": "fedot/core/pipelines/node.py",
-                "line": 185,
-            },
+            "lead": {"channel": "repo_map", "file_path": "fedot/core/pipelines/node.py", "line": 185},
         },
     )
     leads = [
@@ -1481,11 +1357,7 @@ def test_skip_tried_skips_no_patch(tmp_path: Path):
             "keep": False,
             "reason": "no_patch",
             "candidate_id": None,
-            "lead": {
-                "channel": "repo_map",
-                "file_path": "fedot/core/operations/encoders.py",
-                "line": 31,
-            },
+            "lead": {"channel": "repo_map", "file_path": "fedot/core/operations/encoders.py", "line": 31},
         },
     )
     leads = [
@@ -1762,12 +1634,7 @@ def test_context_includes_callee_in_other_file(tmp_path: Path):
     a.write_text("def fit(data):\n    return helper(data)\n", encoding="utf-8")
     b.write_text("def helper(data):\n    return data.features\n", encoding="utf-8")
     ctx = context_from_lead(
-        MatchSite(
-            channel="repo_map",
-            file_path="fedot/core/operations/a.py",
-            line=1,
-            why="function fit",
-        ),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/a.py", line=1, why="function fit"),
         tmp_path,
     )
     assert "Called from this function" in ctx
@@ -1890,11 +1757,7 @@ def test_discover_keeps_private_helper_on_fit_path(tmp_path: Path):
         "        return data\n",
         encoding="utf-8",
     )
-    lead = next(
-        item
-        for item in discover_leads(tmp_path, limit=10)
-        if item.why.endswith("transform")
-    )
+    lead = next(item for item in discover_leads(tmp_path, limit=10) if item.why.endswith("transform"))
     ctx = context_from_lead(lead, tmp_path)
     assert "def transform" in ctx
     assert "def _prepare_features" in ctx
@@ -1941,11 +1804,7 @@ def test_propose_rejects_noop_and_strips_gutter():
             return self.proposal
 
     noop = propose_patch(
-        inference=_Inf(
-            PatchProposal(
-                file_path="fedot/core/x.py", old_code="return x", new_code="return x"
-            )
-        ),
+        inference=_Inf(PatchProposal(file_path="fedot/core/x.py", old_code="return x", new_code="return x")),
         context="# fedot/core/x.py\n    return x",
     )
     assert noop is None
@@ -1991,9 +1850,7 @@ def test_unique_keeps_llm_pick_for_pool_rows():
     assert "imputation affects" in reversed_merge[0].why
 
 
-def test_calibrate_stock_summarizes_ok_scores(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_calibrate_stock_summarizes_ok_scores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.commands.calibrate import calibrate_stock
 
     scores = {1: 0.80, 2: 0.82, 3: 0.81}
@@ -2001,9 +1858,7 @@ def test_calibrate_stock_summarizes_ok_scores(
     def fake_stock(task_id, *, checkout, seed, timeout_s=None):
         return ScoreResult(task_id=task_id, status="ok", score=scores[seed])
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.calibrate.run_stock", fake_stock
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.calibrate.run_stock", fake_stock)
     payload = calibrate_stock(
         checkout=tmp_path,
         task_ids=("catboost",),
@@ -2022,18 +1877,13 @@ def test_discover_trace_keeps_static_pool_and_raw_llm_pick(tmp_path: Path):
 
     knn = tmp_path / "fedot" / "core" / "operations" / "knn.py"
     knn.parent.mkdir(parents=True)
-    knn.write_text(
-        "class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
 
     class _Inf:
         def create(self, prompt, _schema):
             assert "pca->catboost" not in prompt
             assert "Pick one site that can change model quality" not in prompt
-            assert (
-                "operations, models, preprocessing, data handling, defaults"
-                not in prompt
-            )
+            assert "operations, models, preprocessing, data handling, defaults" not in prompt
             assert "status=skip" in prompt
             assert "status=read" in prompt
             assert "status=run" in prompt
@@ -2059,10 +1909,7 @@ def test_discover_trace_keeps_static_pool_and_raw_llm_pick(tmp_path: Path):
         leads[0].file_path,
         leads[0].line,
         static_rows=trace["pool_rows_static"],
-        final_rows=[
-            {"rank": i, "file_path": x.file_path, "line": x.line}
-            for i, x in enumerate(leads, start=1)
-        ],
+        final_rows=[{"rank": i, "file_path": x.file_path, "line": x.line} for i, x in enumerate(leads, start=1)],
         llm_pick=trace["llm_pick"],
     )
     assert loc["picked_by_llm"] is True
@@ -2081,18 +1928,9 @@ def test_localization_rank_delta_and_raw_pick():
         {"rank": 2, "file_path": "fedot/a.py", "line": 1},
     ]
     pick = {"file_path": "fedot/b.py", "line": 2, "why": "quality"}
-    up = localization(
-        "fedot/b.py", 2, static_rows=static, final_rows=final, llm_pick=pick
-    )
-    assert up == {
-        "static_rank": 2,
-        "final_rank": 1,
-        "rank_delta": 1,
-        "picked_by_llm": True,
-    }
-    down = localization(
-        "fedot/a.py", 1, static_rows=static, final_rows=final, llm_pick=pick
-    )
+    up = localization("fedot/b.py", 2, static_rows=static, final_rows=final, llm_pick=pick)
+    assert up == {"static_rank": 2, "final_rank": 1, "rank_delta": 1, "picked_by_llm": True}
+    down = localization("fedot/a.py", 1, static_rows=static, final_rows=final, llm_pick=pick)
     assert down["rank_delta"] == -1
     assert down["picked_by_llm"] is False
 
@@ -2104,17 +1942,13 @@ def test_discover_captures_llm_pick_raw(tmp_path: Path):
 
     knn = tmp_path / "fedot" / "core" / "operations" / "knn.py"
     knn.parent.mkdir(parents=True)
-    knn.write_text(
-        "class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
-    raw = json.dumps(
-        {
-            "file_path": "fedot/core/operations/knn.py",
-            "line": 2,
-            "why": "scale before knn extra note",
-            **_causal_fields(2),
-        }
-    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
+    raw = json.dumps({
+        "file_path": "fedot/core/operations/knn.py",
+        "line": 2,
+        "why": "scale before knn extra note",
+        **_causal_fields(2),
+    })
 
     class _Inf:
         def query(self, _messages, *args, **kwargs):
@@ -2232,12 +2066,7 @@ def test_context_includes_sibling_runtime_methods(tmp_path: Path):
         encoding="utf-8",
     )
     ctx = context_from_lead(
-        MatchSite(
-            channel="repo_map",
-            file_path="fedot/core/operations/knn.py",
-            line=2,
-            why="method Knn.fit",
-        ),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/knn.py", line=2, why="method Knn.fit"),
         tmp_path,
     )
     assert "def fit" in ctx
@@ -2252,12 +2081,7 @@ def test_context_from_lead_sends_whole_file(tmp_path: Path):
         encoding="utf-8",
     )
     ctx = context_from_lead(
-        MatchSite(
-            channel="repo_map",
-            file_path="fedot/core/operations/pca.py",
-            line=5,
-            why="method Pca.transform",
-        ),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/pca.py", line=5, why="method Pca.transform"),
         tmp_path,
     )
     assert "def helper" in ctx
@@ -2268,19 +2092,11 @@ def test_context_from_lead_sends_whole_file(tmp_path: Path):
 def test_context_slices_long_file(tmp_path: Path):
     src = tmp_path / "fedot" / "core" / "operations" / "wide.py"
     src.parent.mkdir(parents=True)
-    body = (
-        "x = 1\n" * 450
-        + "class P:\n    def transform(self, data):\n        return data\n"
-    )
+    body = "x = 1\n" * 450 + "class P:\n    def transform(self, data):\n        return data\n"
     src.write_text(body, encoding="utf-8")
     line = body.splitlines().index("    def transform(self, data):") + 1
     ctx = context_from_lead(
-        MatchSite(
-            channel="repo_map",
-            file_path="fedot/core/operations/wide.py",
-            line=line,
-            why="method P.transform",
-        ),
+        MatchSite(channel="repo_map", file_path="fedot/core/operations/wide.py", line=line, why="method P.transform"),
         tmp_path,
     )
     assert "def transform" in ctx
@@ -2301,9 +2117,9 @@ def test_bounded_context_prioritizes_measured_symbol_over_repeated_runtime_rows(
         + "    return important_contract\n",
         encoding="utf-8",
     )
-    lead_line = (
-        src.read_text(encoding="utf-8").splitlines().index("def metric_path(data):") + 1
-    )
+    lead_line = src.read_text(encoding="utf-8").splitlines().index(
+        "def metric_path(data):"
+    ) + 1
     repeated = tuple(
         f'runtime operation instances: model_{index}/Wrapper fit params={{"very_long": "{("x" * 500)}"}} | '
         f'model_{index}/Wrapper predict params={{"very_long": "{("y" * 500)}"}}'
@@ -2350,12 +2166,8 @@ def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.Monkey
         },
     )
     leads = [
-        MatchSite(
-            channel="repo_map", file_path="fedot/a.py", line=1, why="method A.fit"
-        ),
-        MatchSite(
-            channel="repo_map", file_path="fedot/b.py", line=2, why="method B.fit"
-        ),
+        MatchSite(channel="repo_map", file_path="fedot/a.py", line=1, why="method A.fit"),
+        MatchSite(channel="repo_map", file_path="fedot/b.py", line=2, why="method B.fit"),
     ]
     seen: list[str] = []
 
@@ -2363,9 +2175,7 @@ def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.Monkey
         seen.append(lead.file_path)
         return PatchCandidate("c1", lead.file_path, "old", "new")
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.scout", lambda *_a, **_k: leads
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.scout", lambda *_a, **_k: leads)
     monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.fix_lead", fake_fix)
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.measure_stock",
@@ -2381,17 +2191,9 @@ def test_run_once_skips_replayed_lead(tmp_path: Path, monkeypatch: pytest.Monkey
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.campaign.verdict",
-        lambda *_a, **_k: Dec(
-            keep=False,
-            reason="target_delta 0.0000 < 0.01",
-            target_delta=0.0,
-            regression_deltas={},
-        ),
+        lambda *_a, **_k: Dec(keep=False, reason="target_delta 0.0000 < 0.01", target_delta=0.0, regression_deltas={}),
     )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.campaign.snapshot_diff",
-        lambda *_a, **_k: "diff",
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.campaign.snapshot_diff", lambda *_a, **_k: "diff")
     run_once(
         checkout=checkout,
         workspace=tmp_path,
@@ -2453,9 +2255,7 @@ def test_oracle_lead_uses_runtime_line(tmp_path: Path):
     assert "fit" in lead.why
 
 
-def test_measure_repair_no_inference_is_no_patch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_measure_repair_no_inference_is_no_patch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.commands.repair import measure_repair
 
     rel = "fedot/api/time.py"
@@ -2471,9 +2271,7 @@ def test_measure_repair_no_inference_is_no_patch(
         "def determine_operation_timeout():\n    return 1\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: src
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: src)
     monkeypatch.setattr(
         "fedotllm.agents.evolve.commands.repair.split_gold",
         lambda: {"dev": [rel], "test": []},
@@ -2486,17 +2284,13 @@ def test_measure_repair_no_inference_is_no_patch(
         "fedotllm.agents.evolve.commands.repair.unique_files",
         lambda *_a, **_k: [],
     )
-    payload = measure_repair(
-        inference=None, checkout=work, workspace=tmp_path / "ws", limit=1
-    )
+    payload = measure_repair(inference=None, checkout=work, workspace=tmp_path / "ws", limit=1)
     assert payload["n"] == 1
     assert payload["patch_rate"] == 0
     assert payload["rows"][0]["status"] == "no_patch"
 
 
-def test_measure_repair_files_override_split(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_measure_repair_files_override_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.commands.repair import measure_repair
 
     rel = "fedot/core/operations/knn.py"
@@ -2512,19 +2306,10 @@ def test_measure_repair_files_override_split(
         "class K:\n    def fit(self):\n        return 1\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: src
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.split_gold",
-        lambda: {"dev": ["fedot/api/time.py"], "test": []},
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.static_leads", lambda *_a, **_k: []
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.unique_files", lambda *_a, **_k: []
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: src)
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.split_gold", lambda: {"dev": ["fedot/api/time.py"], "test": []})
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.static_leads", lambda *_a, **_k: [])
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.unique_files", lambda *_a, **_k: [])
     payload = measure_repair(
         inference=None,
         checkout=work,
@@ -2535,9 +2320,7 @@ def test_measure_repair_files_override_split(
     assert payload["rows"][0]["file_path"] == rel
 
 
-def test_gate_saved_repairs_flags_new_pytest_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_gate_saved_repairs_flags_new_pytest_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.commands.repair import gate_saved_repairs
 
     workspace = tmp_path / "ws"
@@ -2556,12 +2339,8 @@ def test_gate_saved_repairs_flags_new_pytest_failures(
     stock = tmp_path / "stock"
     (stock / "fedot").mkdir(parents=True)
     (stock / "fedot" / "a.py").write_text("x = 1\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: stock
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.apply_patch", lambda *_a, **_k: True
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: stock)
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.apply_patch", lambda *_a, **_k: True)
     calls = {"n": 0}
 
     def fake_tests(_checkout):
@@ -2574,18 +2353,14 @@ def test_gate_saved_repairs_flags_new_pytest_failures(
             {"test/unit/test_a.py::test_x"},
         )
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.measure_fedot_tests", fake_tests
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.measure_fedot_tests", fake_tests)
     payload = gate_saved_repairs(workspace=workspace, checkout=checkout)
     assert payload["tests_ok_rate"] == 0
     assert payload["rows"][0]["status"] == "tests_fail"
     assert "fedot_tests_regressed" in (payload["rows"][0]["reason"] or "")
 
 
-def test_holdout_saved_repairs_records_drop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_holdout_saved_repairs_records_drop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.commands.repair import holdout_saved_repairs
     from fedotllm.agents.evolve.types import Decision as Dec
 
@@ -2604,12 +2379,8 @@ def test_holdout_saved_repairs_records_drop(
     stock = tmp_path / "stock"
     (stock / "fedot").mkdir(parents=True)
     (stock / "fedot" / "a.py").write_text("x = 1\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: stock
-    )
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.repair.apply_patch", lambda *_a, **_k: True
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.resolve_fedot_src", lambda: stock)
+    monkeypatch.setattr("fedotllm.agents.evolve.commands.repair.apply_patch", lambda *_a, **_k: True)
     monkeypatch.setattr(
         "fedotllm.agents.evolve.commands.repair.measure_stock",
         lambda *_a, **_k: {"t": _score("t", "crash", 0.5)},
@@ -2620,26 +2391,17 @@ def test_holdout_saved_repairs_records_drop(
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.commands.repair.verdict",
-        lambda *_a, **_k: Dec(
-            keep=False,
-            reason="target_delta 0.0000 < 0.01",
-            target_delta=0.0,
-            regression_deltas={},
-        ),
+        lambda *_a, **_k: Dec(keep=False, reason="target_delta 0.0000 < 0.01", target_delta=0.0, regression_deltas={}),
     )
     payload = holdout_saved_repairs(workspace=workspace, checkout=checkout)
     assert payload["keep_rate"] == 0
     assert payload["rows"][0]["status"] == "drop"
 
 
-def test_run_fedot_snippet_blocks_harness(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_run_fedot_snippet_blocks_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.execution import run_code as rc
 
-    out = rc.run_fedot_snippet(
-        tmp_path, "from fedotllm.agents.evolve.evaluation.scorer import score"
-    )
+    out = rc.run_fedot_snippet(tmp_path, "from fedotllm.agents.evolve.evaluation.scorer import score")
     assert out.status == "blocked"
     assert out.detail.startswith("<blocked")
 
@@ -2655,9 +2417,7 @@ def test_run_fedot_snippet_blocks_importlib_harness(tmp_path: Path):
     assert out.status == "blocked"
 
 
-def test_run_fedot_snippet_redacts_secret_stdout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_run_fedot_snippet_redacts_secret_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import sys
 
     from fedotllm.agents.evolve.execution import run_code as rc
@@ -2678,9 +2438,7 @@ def test_llm_pick_runs_then_picks(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     knn = tmp_path / "fedot" / "core" / "operations" / "knn.py"
     knn.parent.mkdir(parents=True)
-    knn.write_text(
-        "class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
+    knn.write_text("class Knn:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
     calls = {"n": 0}
 
     class _Inf:
@@ -2739,9 +2497,7 @@ def test_llm_pick_has_global_action_and_per_file_run_limits(
         calls["run"] += 1
         return SnippetResult(status="ok", code="print(1)", stdout="ok")
 
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.execution.run_code.run_fedot_snippet", _run
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.execution.run_code.run_fedot_snippet", _run)
     trace: dict = {}
     discover_leads(
         tmp_path,
@@ -2796,9 +2552,7 @@ def test_llm_pick_reads_neighbor_then_picks(tmp_path: Path):
             return SiteProposal(status="skip")
 
     trace: dict = {}
-    leads = discover_leads(
-        tmp_path, inference=_Inf(), limit=3, max_picks=1, trace=trace
-    )
+    leads = discover_leads(tmp_path, inference=_Inf(), limit=3, max_picks=1, trace=trace)
     assert calls["n"] == 2
     assert trace["llm_pick"]["file_path"].endswith("helper.py")
     assert trace["llm_pick_rounds"][0]["status"] == "read"
@@ -2806,41 +2560,24 @@ def test_llm_pick_reads_neighbor_then_picks(tmp_path: Path):
 
 
 @pytest.mark.parametrize("action_budget,expected_picks", [(1, 0), (2, 1)])
-def test_unread_pick_target_requires_source_review_and_reconfirmation(
-    tmp_path, action_budget, expected_picks
-):
+def test_unread_pick_target_requires_source_review_and_reconfirmation(tmp_path, action_budget, expected_picks):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, discover_leads
 
     root = tmp_path / "fedot/core/operations"
     root.mkdir(parents=True)
-    (root / "aa.py").write_text(
-        "class A:\n    def fit(self, data):\n        return data\n"
-    )
-    (root / "bb.py").write_text(
-        "class B:\n    def fit(self, data):\n        return data * 2\n"
-    )
+    (root / "aa.py").write_text("class A:\n    def fit(self, data):\n        return data\n")
+    (root / "bb.py").write_text("class B:\n    def fit(self, data):\n        return data * 2\n")
     prompts = []
 
     class Inference:
         def create(self, prompt, _schema):
             prompts.append(prompt)
-            return SiteProposal(
-                status="pick",
-                file_path="fedot/core/operations/bb.py",
-                line=2,
-                why="inspect another implementation",
-                **_causal_fields(2),
-            )
+            return SiteProposal(status="pick", file_path="fedot/core/operations/bb.py",
+                                line=2, why="inspect another implementation", **_causal_fields(2))
 
     trace = {}
-    leads = discover_leads(
-        tmp_path,
-        inference=Inference(),
-        limit=1,
-        max_picks=1,
-        max_actions=action_budget,
-        trace=trace,
-    )
+    leads = discover_leads(tmp_path, inference=Inference(), limit=1, max_picks=1,
+                           max_actions=action_budget, trace=trace)
     assert len(leads) == expected_picks
     if expected_picks:
         assert len(prompts) == 2
@@ -2857,12 +2594,8 @@ def test_llm_pick_continues_after_first_pick(tmp_path: Path):
 
     root = tmp_path / "fedot" / "core" / "operations"
     root.mkdir(parents=True)
-    (root / "aa.py").write_text(
-        "class A:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
-    (root / "bb.py").write_text(
-        "class B:\n    def fit(self, data):\n        return data\n", encoding="utf-8"
-    )
+    (root / "aa.py").write_text("class A:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
+    (root / "bb.py").write_text("class B:\n    def fit(self, data):\n        return data\n", encoding="utf-8")
     catalog: list[str] = []
     prompts: list[str] = []
 
@@ -2883,21 +2616,10 @@ def test_llm_pick_continues_after_first_pick(tmp_path: Path):
             return SiteProposal(status="skip")
 
     trace: dict = {}
-    discover_leads(
-        tmp_path,
-        inference=_Inf(),
-        limit=8,
-        max_picks=2,
-        trace=trace,
-        prior_hypotheses=[
-            {
-                "file_path": "fedot/old.py",
-                "line": 1,
-                "mechanism": "previous source mechanism",
-                "proposed_change": "previous source proposal",
-            }
-        ],
-    )
+    discover_leads(tmp_path, inference=_Inf(), limit=8, max_picks=2, trace=trace,
+                   prior_hypotheses=[{"file_path": "fedot/old.py", "line": 1,
+                                      "mechanism": "previous source mechanism",
+                                      "proposed_change": "previous source proposal"}])
     assert len(catalog) >= 2
     assert catalog[0] != catalog[1]
     assert len(trace["llm_picks"]) == 2
@@ -2907,9 +2629,7 @@ def test_llm_pick_continues_after_first_pick(tmp_path: Path):
     assert "adjacent line does not make it new" in prompts[-1]
 
 
-def test_propose_patch_runs_then_patches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_propose_patch_runs_then_patches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from fedotllm.agents.evolve.agents.propose import PatchProposal, propose_patch
 
     calls = {"n": 0}
@@ -2918,9 +2638,7 @@ def test_propose_patch_runs_then_patches(
         def create(self, prompt, _schema):
             calls["n"] += 1
             if calls["n"] == 1:
-                return PatchProposal(
-                    status="run", run_code="print(1)", file_path="fedot/core/a.py"
-                )
+                return PatchProposal(status="run", run_code="print(1)", file_path="fedot/core/a.py")
             assert "ran-ok" in prompt
             return PatchProposal(
                 file_path="fedot/core/a.py",
@@ -2930,7 +2648,9 @@ def test_propose_patch_runs_then_patches(
 
     monkeypatch.setattr(
         "fedotllm.agents.evolve.execution.run_code.run_fedot_snippet",
-        lambda *_a, **_k: SnippetResult(status="ok", code="print(1)", stdout="ran-ok"),
+        lambda *_a, **_k: SnippetResult(
+            status="ok", code="print(1)", stdout="ran-ok"
+        ),
     )
     cand = propose_patch(
         inference=_Inf(),
@@ -3139,9 +2859,7 @@ def test_llm_summary_keeps_started_calls_without_a_result(tmp_path: Path):
     assert summary["structured_calls_unfinished"] == 2
 
 
-def test_llm_summary_prefers_actual_provider_attempts_and_counts_retries(
-    tmp_path: Path,
-):
+def test_llm_summary_prefers_actual_provider_attempts_and_counts_retries(tmp_path: Path):
     import json
 
     from fedotllm.agents.evolve.controller.session import _llm_attempt_summary
@@ -3149,12 +2867,7 @@ def test_llm_summary_prefers_actual_provider_attempts_and_counts_retries(
     events = [
         {"event": "llm_query_started"},
         {"event": "provider_attempt_started", "attempt_id": "a", "is_retry": False},
-        {
-            "event": "provider_attempt_result",
-            "attempt_id": "a",
-            "status": "error",
-            "error_type": "TimeoutError",
-        },
+        {"event": "provider_attempt_result", "attempt_id": "a", "status": "error", "error_type": "TimeoutError"},
         {"event": "provider_attempt_started", "attempt_id": "b", "is_retry": True},
         {"event": "provider_attempt_result", "attempt_id": "b", "status": "ok"},
         {"event": "provider_local_rejection", "error_type": "EvolveBudgetExhausted"},
@@ -3215,7 +2928,8 @@ def test_findings_count_defect_identity_across_different_patches(tmp_path: Path)
     record("third", "patch-c", "assert another_call() == 4", resumed=True)
 
     rows = [
-        json.loads(line) for line in findings.read_text(encoding="utf-8").splitlines()
+        json.loads(line)
+        for line in findings.read_text(encoding="utf-8").splitlines()
     ]
     assert rows[0]["novelty"]["category"] == "new_unique"
     assert rows[1]["novelty"]["category"] == "repeat"

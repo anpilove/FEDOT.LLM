@@ -43,20 +43,12 @@ def _run_fixture(tmp_path, name, body):
     script.write_text(textwrap.dedent(body))
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3])
-    return subprocess.run(
-        [sys.executable, str(script), str(tmp_path / f"{name}.stacks.txt")],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    return subprocess.run([sys.executable, str(script), str(tmp_path / f"{name}.stacks.txt")],
+                          env=env, capture_output=True, text=True, timeout=10)
 
 
 def test_sampler_preserves_native_sleep_duration(tmp_path):
-    result = _run_fixture(
-        tmp_path,
-        "native_sleep",
-        """
+    result = _run_fixture(tmp_path, "native_sleep", """
         import ctypes, json, sys, time
         from fedotllm.agents.evolve.evaluation.stack_sampler import periodic_stack_samples
         sleep = ctypes.PyDLL(None).sleep
@@ -66,8 +58,7 @@ def test_sampler_preserves_native_sleep_duration(tmp_path):
         with periodic_stack_samples(sys.argv[1], interval_seconds=0.02) as status:
             sleep(1)
         print(json.dumps({"elapsed": time.monotonic() - started, "status": status}))
-    """,
-    )
+    """)
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert 0.95 <= payload["elapsed"] < 4
@@ -75,18 +66,14 @@ def test_sampler_preserves_native_sleep_duration(tmp_path):
 
 
 def test_sampler_does_not_block_joblib_import_or_process_exit(tmp_path):
-    result = _run_fixture(
-        tmp_path,
-        "joblib_import",
-        """
+    result = _run_fixture(tmp_path, "joblib_import", """
         import sys, time
         from fedotllm.agents.evolve.evaluation.stack_sampler import periodic_stack_samples
         with periodic_stack_samples(sys.argv[1], interval_seconds=0.005):
             import joblib
             time.sleep(0.03)
         print("clean_exit")
-    """,
-    )
+    """)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "clean_exit"
 
@@ -97,9 +84,7 @@ def test_sampler_storage_failure_is_observational(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("preserve")
     completed = False
-    with periodic_stack_samples(
-        blocker / "stacks.txt", interval_seconds=0.01
-    ) as status:
+    with periodic_stack_samples(blocker / "stacks.txt", interval_seconds=0.01) as status:
         completed = True
     assert completed
     assert status["enabled"] is False
@@ -107,9 +92,7 @@ def test_sampler_storage_failure_is_observational(tmp_path):
     assert blocker.read_text() == "preserve"
 
 
-def test_slow_diagnostic_write_does_not_block_context_exit_or_close_writer_fd(
-    tmp_path, monkeypatch
-):
+def test_slow_diagnostic_write_does_not_block_context_exit_or_close_writer_fd(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.evaluation import stack_sampler as sampler
 
     entered, release, wrote = threading.Event(), threading.Event(), threading.Event()

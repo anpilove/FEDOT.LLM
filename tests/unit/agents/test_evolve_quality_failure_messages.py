@@ -8,16 +8,10 @@ from fedotllm.agents.evolve.controller.quality_queue import quality_result_messa
 @pytest.mark.parametrize("status", ["fedot_budget_timeout", "unverified_metric"])
 def test_missing_verified_metrics_do_not_produce_a_rejection_message(status):
     reason = "metric not measured or verified"
-    message = quality_result_message(
-        {
-            "candidate_id": "proposal-a",
-            "status": status,
-            "reason": reason,
-            "keep": None,
-            "quality_outcome": "not_evaluated",
-            "task_ids": ["dataset-a"],
-        }
-    )
+    message = quality_result_message({
+        "candidate_id": "proposal-a", "status": status, "reason": reason,
+        "keep": None, "quality_outcome": "not_evaluated", "task_ids": ["dataset-a"],
+    })
 
     assert "proposal-a" in message
     assert reason in message

@@ -3652,7 +3652,6 @@ def test_failed_final_becomes_overall_drop_but_preserves_dev_keep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     from fedotllm.agents.evolve.controller.campaign import run_once
-
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.transfer.evaluate_transfer",
         lambda *_a, **_k: (True, {"reason": "transfer_confirmed"}),
@@ -4129,10 +4128,7 @@ def test_final_uses_run_once_workloads_not_global_exam(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     from fedotllm.agents.evolve.controller.campaign import _record_final
-
-    monkeypatch.setattr(
-        "fedotllm.agents.evolve.controller.transfer.validate_transfer", lambda _: None
-    )
+    monkeypatch.setattr("fedotllm.agents.evolve.controller.transfer.validate_transfer", lambda _: None)
     monkeypatch.setattr(
         "fedotllm.agents.evolve.controller.transfer.evaluate_transfer",
         lambda *_a, **_k: (True, {"reason": "transfer_confirmed"}),
@@ -6423,9 +6419,7 @@ def test_behavior_probe_rejects_semantic_noop_and_accepts_runtime_change(
     assert no_change["probe_valid"] is True
     assert no_change["hypothesis_result"] == "toy_probe_did_not_see_effect"
     assert changed["status"] == "changed"
-    assert (
-        changed["hypothesis_result"] == "mechanism_supported_pending_independent_gates"
-    )
+    assert changed["hypothesis_result"] == "mechanism_supported_pending_independent_gates"
 
 
 def test_behavior_probe_requires_declared_observation_and_real_stock_execution(
@@ -6538,7 +6532,9 @@ def test_probe_repair_does_not_consume_an_unmeasured_patch(
     assert len(metrics) == expected_metrics
     assert not decision.keep  # A better probe must never grant metric acceptance.
     if first_status in {"no_change", "changed"}:
-        assert decision.reason == ("duplicate_patch_after:no_affected_metric_signal")
+        assert decision.reason == (
+            "duplicate_patch_after:no_affected_metric_signal"
+        )
     elif expected_probes == 1:
         assert decision.reason.startswith("duplicate_patch")
     else:
@@ -6607,9 +6603,7 @@ def test_unknown_scope_keeps_full_dev_protect_set_before_final(tmp_path, monkeyp
 
     source = _source(tmp_path)
     # Keep this scope-routing unit test independent of the live 40-task registry.
-    monkeypatch.setattr(
-        loop, "hidden_exam", lambda: (("catboost", "rf"), ("catboost", "rf"))
-    )
+    monkeypatch.setattr(loop, "hidden_exam", lambda: (("catboost", "rf"), ("catboost", "rf")))
     lead = MatchSite("execution", "fedot/a.py", 1, "shared implementation")
     candidate = PatchCandidate(
         "shared", edits=[PatchEdit("fedot/a.py", "return 1", "return 2")]
@@ -6668,9 +6662,7 @@ def test_neutral_verified_quality_change_is_preserved_as_maintenance_keep(
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
-    monkeypatch.setattr(
-        loop, "hidden_exam", lambda: (("catboost", "rf"), ("catboost", "rf"))
-    )
+    monkeypatch.setattr(loop, "hidden_exam", lambda: (("catboost", "rf"), ("catboost", "rf")))
     lead = MatchSite(
         "execution",
         "fedot/a.py",
@@ -6713,10 +6705,7 @@ def test_neutral_verified_quality_change_is_preserved_as_maintenance_keep(
             False,
             {
                 "reason": "no_affected_metric_signal",
-                "dev": {
-                    "reason": "no_affected_metric_signal",
-                    "infrastructure_error": False,
-                },
+                "dev": {"reason": "no_affected_metric_signal", "infrastructure_error": False},
                 "shadow": {
                     "evaluated": True,
                     "reason": "no_affected_metric_signal",
@@ -7261,7 +7250,7 @@ def test_correctness_verifier_rejects_reproduced_unsupported_precondition(
     source = _source(tmp_path)
     (source / "fedot/a.py").write_text(
         "def value(source_name='default'):\n"
-        '    """source_name is the label of an existing source."""\n'
+        "    \"\"\"source_name is the label of an existing source.\"\"\"\n"
         "    return source_name == 'default'\n",
         encoding="utf-8",
     )

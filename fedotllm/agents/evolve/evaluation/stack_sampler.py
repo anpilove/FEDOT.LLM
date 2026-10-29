@@ -46,9 +46,7 @@ def _capture_frames():
             while frame is not None and depth < _MAX_FRAMES_PER_THREAD:
                 code = frame.f_code
                 filename = json.dumps(code.co_filename, ensure_ascii=False)
-                lines.append(
-                    f"  File {filename}, line {frame.f_lineno} in {code.co_name}\n"
-                )
+                lines.append(f"  File {filename}, line {frame.f_lineno} in {code.co_name}\n")
                 frame = frame.f_back
                 depth += 1
             if frame is not None:
@@ -63,9 +61,7 @@ def _capture_frames():
 
 
 @contextmanager
-def periodic_stack_samples(
-    path, *, interval_seconds=15.0, scope="python_process_threads"
-):
+def periodic_stack_samples(path, *, interval_seconds=15.0, scope="python_process_threads"):
     """Sample all Python threads; diagnostics never control the observed work.
 
     The daemon owns its descriptor and closes it itself. Context exit waits

@@ -3,7 +3,6 @@
 No FINAL evaluation while selecting the batch. A study has one FINAL batch;
 failed/exposed holdouts cannot be reused for another adaptive search.
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -16,9 +15,7 @@ from fedotllm.agents.evolve.evaluation.eval import run_stock, run_patched
 from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL, FOLDS
 from fedotllm.agents.evolve.evaluation.tasks import load_task
 from fedotllm.agents.evolve.execution.checkout import (
-    create_experiment_checkout,
-    discard_experiment_checkout,
-    source_fingerprint,
+    create_experiment_checkout, discard_experiment_checkout, source_fingerprint,
 )
 from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.protocol import acceptance_protocol_fingerprint
@@ -34,53 +31,28 @@ def _save(path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def preregister(
-    lead,
-    stock,
-    lift_ids,
-    path: Path,
-    *,
-    operation_params=None,
-    source=None,
-    screen_sources: int = 3,
-) -> dict:
+def preregister(lead, stock, lift_ids, path: Path, *, operation_params=None, source=None,
+                screen_sources: int = 3) -> dict:
     """Select from baseline coverage, never from patched scores or best deltas."""
-    eligible = sorted(
-        task for task in lift_ids if task in stock and _line_reached(stock[task], lead)
-    )
+    eligible = sorted(task for task in lift_ids if task in stock and _line_reached(stock[task], lead))
     operation_params = operation_params or {}
     if operation_params:
-        eligible = [
-            task
-            for task in eligible
-            if set(load_task(task).nodes) & set(operation_params)
-        ]
+        eligible = [task for task in eligible if set(load_task(task).nodes) & set(operation_params)]
     target = eligible[0] if eligible else None
     plan = {
-        "protocol": PROTOCOL,
-        "lead": asdict(lead),
-        "target_task": target,
+        "protocol": PROTOCOL, "lead": asdict(lead), "target_task": target,
         "target_selection": "lexicographically_first_baseline_covered_workload",
-        "eligible_tasks": eligible,
-        "target_metric": load_task(target).metric if target else None,
-        "data_hashes": {
-            task: result.data_evidence.get("data_hash")
-            for task, result in sorted(stock.items())
-        },
+        "eligible_tasks": eligible, "target_metric": load_task(target).metric if target else None,
+        "data_hashes": {task: result.data_evidence.get("data_hash") for task, result in sorted(stock.items())},
         "operation_params": operation_params,
-        "cv_folds": list(FOLDS),
-        "model_seeds": [42, 43, 44],
+        "cv_folds": list(FOLDS), "model_seeds": [42, 43, 44],
         "protect_policy": "no_practically_material_regression; identical_baseline_crash_is_unmeasured",
         "final_policy": "one_batch_of_three_candidates_frozen_before_FINAL",
     }
     from fedotllm.agents.evolve.controller.transfer import preregister_transfer
-
     plan["transfer"] = (
-        preregister_transfer(
-            source, target, lead, operation_params, screen_sources=screen_sources
-        )
-        if source is not None
-        else None
+        preregister_transfer(source, target, lead, operation_params, screen_sources=screen_sources)
+        if source is not None else None
     )
     plan = json.loads(json.dumps(plan))
     # Exclusive creation makes accidental retargeting on resume visible.
@@ -94,60 +66,26 @@ def preregister(
     return plan
 
 
-def _pair(
-    source,
-    experiment,
-    tasks,
-    *,
-    split,
-    fold=None,
-    seed=42,
-    target=None,
-    operation_params=None,
-):
+def _pair(source, experiment, tasks, *, split, fold=None, seed=42, target=None, operation_params=None):
     override = {"evaluation_protocol": PROTOCOL}
     if fold is not None:
         override["resample_fold"] = fold
     before, after = {}, {}
     for task in tasks:
-        before[task] = run_stock(
-            task,
-            checkout=source,
-            split=split,
-            seed=seed,
-            collect_coverage=True,
-            task_override=override,
-        )
-        after[task] = run_patched(
-            task,
-            checkout=experiment,
-            split=split,
-            seed=seed,
-            collect_coverage=True,
-            task_override=override,
-        )
+        before[task] = run_stock(task, checkout=source, split=split, seed=seed,
+                                 collect_coverage=True, task_override=override)
+        after[task] = run_patched(task, checkout=experiment, split=split, seed=seed,
+                                  collect_coverage=True, task_override=override)
         if task == target and operation_params:
             # Preserve the original default workload as an additional guard.
             # Explicit reproduction parameters define the target scenario only.
             before[task + "::default"] = before[task]
             after[task + "::default"] = after[task]
             affected = {**override, "operation_params": operation_params}
-            before[task] = run_stock(
-                task,
-                checkout=source,
-                split=split,
-                seed=seed,
-                collect_coverage=True,
-                task_override=affected,
-            )
-            after[task] = run_patched(
-                task,
-                checkout=experiment,
-                split=split,
-                seed=seed,
-                collect_coverage=True,
-                task_override=affected,
-            )
+            before[task] = run_stock(task, checkout=source, split=split, seed=seed,
+                                    collect_coverage=True, task_override=affected)
+            after[task] = run_patched(task, checkout=experiment, split=split, seed=seed,
+                                     collect_coverage=True, task_override=affected)
     return before, after
 
 
@@ -194,58 +132,25 @@ def judge_pair(before, after, target, *, practical=True):
     passed = deltas[target] >= threshold
     return passed, {
         "reason": "passed" if passed else "target_no_gain",
-        "target": target,
-        "metric": spec.metric,
-        "delta": deltas[target],
-        "threshold": threshold,
-        "deltas": deltas,
+        "target": target, "metric": spec.metric, "delta": deltas[target],
+        "threshold": threshold, "deltas": deltas,
         "unchanged_baseline_crashes_unmeasured": baseline_crashes,
         "data": before[target].data_evidence,
     }
 
 
-def _stage(
-    source,
-    experiment,
-    tasks,
-    target,
-    *,
-    split,
-    fold=None,
-    seed=42,
-    practical=True,
-    operation_params=None,
-    transfer=None,
-    transfer_scope="full",
-    measurement_budget=None,
-):
-    before, after = _pair(
-        source,
-        experiment,
-        tasks,
-        split=split,
-        fold=fold,
-        seed=seed,
-        target=target,
-        operation_params=operation_params,
-    )
+def _stage(source, experiment, tasks, target, *, split, fold=None, seed=42, practical=True,
+           operation_params=None, transfer=None, transfer_scope="full", measurement_budget=None):
+    before, after = _pair(source, experiment, tasks, split=split, fold=fold, seed=seed,
+                          target=target, operation_params=operation_params)
     passed, result = judge_pair(before, after, target, practical=practical)
     result.update(split=split, fold=fold, seed=seed, passed=passed)
     if transfer is not None and result["reason"] in {"passed", "target_no_gain"}:
         from fedotllm.agents.evolve.controller.transfer import evaluate_transfer
-
         transferred, evidence = evaluate_transfer(
-            source,
-            experiment,
-            transfer,
-            params=operation_params,
-            split=split,
-            fold=fold,
-            seed=seed,
-            practical=practical,
-            comparisons=BATCH_SIZE,
-            scope=transfer_scope,
-            budget=measurement_budget,
+            source, experiment, transfer, params=operation_params, split=split,
+            fold=fold, seed=seed, practical=practical, comparisons=BATCH_SIZE,
+            scope=transfer_scope, budget=measurement_budget,
         )
         result["transfer"] = evidence
         passed = transferred
@@ -263,19 +168,8 @@ def _reserve(path: Path, payload) -> bool:
     return True
 
 
-def evaluate_candidate(
-    source,
-    experiment,
-    candidate,
-    verification,
-    plan,
-    *,
-    lead,
-    tasks,
-    study: Path,
-    workspace: Path,
-    measurement_budget=None,
-):
+def evaluate_candidate(source, experiment, candidate, verification, plan, *,
+                       lead, tasks, study: Path, workspace: Path, measurement_budget=None):
     """Return a research decision; no metric-neutral result satisfies the goal."""
     target = plan["target_task"]
     rows = []
@@ -289,22 +183,14 @@ def evaluate_candidate(
         if final is not None:
             delta = final_result.get("delta")
         return Decision(
-            keep,
-            reason,
-            delta,
-            regression_deltas=final_result.get("deltas", {}),
-            stage="metric_study",
-            final_keep=final,
-            dev_keep=bool(rows and rows[0].get("passed")),
-            metric_goal_keep=keep
-            and verification.status == "verified_bug"
-            and final is True,
+            keep, reason, delta, regression_deltas=final_result.get("deltas", {}),
+            stage="metric_study", final_keep=final, dev_keep=bool(rows and rows[0].get("passed")),
+            metric_goal_keep=keep and verification.status == "verified_bug" and final is True,
         )
 
     if not target:
         return done("metric_not_measured_no_covered_target")
     from fedotllm.agents.evolve.controller.transfer import validate_transfer
-
     transfer_error = validate_transfer(plan.get("transfer"))
     if transfer_error:
         return done(transfer_error)
@@ -313,35 +199,20 @@ def evaluate_candidate(
     identity = {
         "source_hash": source_fingerprint(source),
         "acceptance_protocol": acceptance_protocol_fingerprint(),
-        "data_protocol": PROTOCOL,
-        "tasks": list(tasks),
-        "batch_size": BATCH_SIZE,
+        "data_protocol": PROTOCOL, "tasks": list(tasks), "batch_size": BATCH_SIZE,
         "data_hashes": plan["data_hashes"],
     }
     manifest = study / "study.json"
-    if (
-        not _reserve(manifest, identity)
-        and json.loads(manifest.read_text()) != identity
-    ):
+    if not _reserve(manifest, identity) and json.loads(manifest.read_text()) != identity:
         return done("metric_study_identity_mismatch")
     params = plan.get("operation_params")
     passed, result, before, _ = _stage(
-        source,
-        experiment,
-        tasks,
-        target,
-        split="dev",
-        operation_params=params,
-        transfer=plan["transfer"],
-        transfer_scope="screen",
-        measurement_budget=measurement_budget,
+        source, experiment, tasks, target, split="dev", operation_params=params,
+        transfer=plan["transfer"], transfer_scope="screen", measurement_budget=measurement_budget,
     )
     rows.append(result)
-    if any(
-        not plan["data_hashes"].get(task)
-        or before[task].data_evidence.get("data_hash") != plan["data_hashes"][task]
-        for task in tasks
-    ):
+    if any(not plan["data_hashes"].get(task) or before[task].data_evidence.get("data_hash") != plan["data_hashes"][task]
+           for task in tasks):
         return done("metric_data_changed_since_preregistration")
     if not _line_reached(before[target], lead):
         return done("metric_not_measured_branch_not_executed")
@@ -355,19 +226,11 @@ def evaluate_candidate(
     local_seed_outcomes = []
     for seed in (43, 44):
         passed, result, measured, _ = _stage(
-            source,
-            experiment,
-            (target,),
-            target,
-            split="dev",
-            seed=seed,
+            source, experiment, (target,), target, split="dev", seed=seed,
             operation_params=params,
         )
         rows.append(result)
-        if (
-            measured[target].data_evidence.get("data_hash")
-            != plan["data_hashes"][target]
-        ):
+        if measured[target].data_evidence.get("data_hash") != plan["data_hashes"][target]:
             return done("metric_data_changed_since_preregistration")
         local_seed_outcomes.append(result["reason"])
         if result["reason"] not in {"passed", "target_no_gain"}:
@@ -377,20 +240,11 @@ def evaluate_candidate(
     local_fold_outcomes = []
     for fold in FOLDS:
         passed, result, measured, _ = _stage(
-            source,
-            experiment,
-            (target,),
-            target,
-            split="dev",
-            fold=fold,
-            practical=False,
-            operation_params=params,
+            source, experiment, (target,), target, split="dev", fold=fold,
+            practical=False, operation_params=params,
         )
         rows.append(result)
-        if (
-            measured[target].data_evidence.get("data_hash")
-            != plan["data_hashes"][target]
-        ):
+        if measured[target].data_evidence.get("data_hash") != plan["data_hashes"][target]:
             return done("metric_data_changed_since_preregistration")
         if result["reason"] not in {"passed", "target_no_gain"}:
             return done("metric_CV_rejected:" + result["reason"])
@@ -412,34 +266,20 @@ def evaluate_candidate(
     # Candidate uniqueness and cross-dataset replication are separate checks.
     site_key = hashlib.sha256(f"{lead.file_path}:{lead.line}".encode()).hexdigest()[:16]
     frozen = {
-        "candidate": asdict(candidate),
-        "plan": plan,
-        "dataset": dataset,
+        "candidate": asdict(candidate), "plan": plan, "dataset": dataset,
         "site_key": site_key,
-        "workspace": str(workspace.resolve()),
-        "source_hash": identity["source_hash"],
-        "patch_hash": hashlib.sha256(
-            json.dumps(asdict(candidate), sort_keys=True).encode()
-        ).hexdigest(),
+        "workspace": str(workspace.resolve()), "source_hash": identity["source_hash"],
+        "patch_hash": hashlib.sha256(json.dumps(asdict(candidate), sort_keys=True).encode()).hexdigest(),
     }
     # Once this site's SHADOW is exposed, do not tune another revision to it.
     if not _reserve(study / "shadow-locks" / f"{site_key}.json", frozen):
         return done("metric_SHADOW_site_already_exposed")
     passed, result, measured, _ = _stage(
-        source,
-        experiment,
-        tasks,
-        target,
-        split="shadow",
-        operation_params=params,
-        transfer=plan["transfer"],
-        measurement_budget=measurement_budget,
+        source, experiment, tasks, target, split="shadow", operation_params=params,
+        transfer=plan["transfer"], measurement_budget=measurement_budget,
     )
     rows.append(result)
-    if any(
-        measured[task].data_evidence.get("data_hash") != plan["data_hashes"][task]
-        for task in tasks
-    ):
+    if any(measured[task].data_evidence.get("data_hash") != plan["data_hashes"][task] for task in tasks):
         return done("metric_data_changed_since_preregistration")
     if not passed:
         return done("metric_heldout_rejected")  # no held-out scores for Fixer
@@ -452,16 +292,11 @@ def evaluate_candidate(
         return done("metric_ready_waiting_for_frozen_FINAL_batch")
     results = finalize_batch(source, study, measurement_budget=measurement_budget)
     report["final_batch"] = results
-    current = next(
-        (r for r in results["cases"] if r["candidate"] == candidate.candidate_id), None
-    )
+    current = next((r for r in results["cases"] if r["candidate"] == candidate.candidate_id), None)
     accepted = bool(current and current["passed"])
     report["current_final_result"] = current["result"] if current else {}
-    return done(
-        "metric_FINAL_confirmed" if accepted else "metric_FINAL_rejected",
-        keep=accepted,
-        final=accepted,
-    )
+    return done("metric_FINAL_confirmed" if accepted else "metric_FINAL_rejected",
+                keep=accepted, final=accepted)
 
 
 def finalize_batch(source: Path, study: Path, *, measurement_budget=None) -> dict:
@@ -471,24 +306,16 @@ def finalize_batch(source: Path, study: Path, *, measurement_budget=None) -> dic
     study.mkdir(parents=True, exist_ok=True)
     with (study / "final-execution.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return _finalize_batch_locked(
-            source, study, measurement_budget=measurement_budget
-        )
+        return _finalize_batch_locked(source, study, measurement_budget=measurement_budget)
 
 
-def _finalize_batch_locked(
-    source: Path, study: Path, *, measurement_budget=None
-) -> dict:
+def _finalize_batch_locked(source: Path, study: Path, *, measurement_budget=None) -> dict:
     """Seal every patch before the first FINAL query; fail closed on reuse."""
     result_path = study / "final-results.json"
     sealed = study / "final-batch.json"
     ready = (
-        json.loads(sealed.read_text())["candidates"]
-        if sealed.exists()
-        else [
-            json.loads(path.read_text())
-            for path in sorted((study / "ready").glob("*.json"))
-        ]
+        json.loads(sealed.read_text())["candidates"] if sealed.exists() else
+        [json.loads(path.read_text()) for path in sorted((study / "ready").glob("*.json"))]
     )
     if len(ready) != BATCH_SIZE or len({r["site_key"] for r in ready}) != BATCH_SIZE:
         raise ValueError("FINAL requires three frozen candidate sites")
@@ -498,29 +325,17 @@ def _finalize_batch_locked(
     if manifest["acceptance_protocol"] != acceptance_protocol_fingerprint():
         raise ValueError("study acceptance protocol changed")
     from fedotllm.agents.evolve.controller.transfer import validate_transfer
-
     for row in ready:
         error = validate_transfer(row["plan"].get("transfer"))
         if error:
             raise ValueError(error)
     frozen_batch = {"study": manifest, "candidates": ready}
-    if (
-        not _reserve(sealed, frozen_batch)
-        and json.loads(sealed.read_text()) != frozen_batch
-    ):
+    if not _reserve(sealed, frozen_batch) and json.loads(sealed.read_text()) != frozen_batch:
         raise ValueError("FINAL batch identity changed")
     if result_path.exists():
         return json.loads(result_path.read_text())
     checkpoint = study / "final-checkpoint.jsonl"
-    cases = (
-        [
-            json.loads(line)
-            for line in checkpoint.read_text().splitlines()
-            if line.strip()
-        ]
-        if checkpoint.exists()
-        else []
-    )
+    cases = [json.loads(line) for line in checkpoint.read_text().splitlines() if line.strip()] if checkpoint.exists() else []
     completed = {row["candidate"] for row in cases}
     frozen_ids = {row["candidate"]["candidate_id"] for row in ready}
     if len(completed) != len(cases) or not completed <= frozen_ids:
@@ -528,60 +343,38 @@ def _finalize_batch_locked(
     for index, row in enumerate(ready):
         if row["candidate"]["candidate_id"] in completed:
             continue
-        tree = create_experiment_checkout(
-            source, study, run_id="final", candidate_id=str(index)
-        )
+        tree = create_experiment_checkout(source, study, run_id="final", candidate_id=str(index))
         try:
             raw = row["candidate"]
-            candidate = PatchCandidate(
-                raw["candidate_id"], edits=[PatchEdit(**e) for e in raw["edits"]]
-            )
+            candidate = PatchCandidate(raw["candidate_id"], edits=[PatchEdit(**e) for e in raw["edits"]])
             if not apply_patch(tree, candidate):
                 passed, result = False, {"reason": "frozen_patch_replay_failed"}
             else:
                 passed, result, before, after = _stage(
-                    source,
-                    tree,
-                    tuple(manifest["tasks"]),
-                    row["plan"]["target_task"],
-                    split="final",
+                    source, tree, tuple(manifest["tasks"]), row["plan"]["target_task"], split="final",
                     operation_params=row["plan"].get("operation_params"),
                     transfer=row["plan"]["transfer"],
                     measurement_budget=measurement_budget,
                 )
-                if any(
-                    before[task].data_evidence.get("data_hash")
-                    != manifest.get("data_hashes", {}).get(task.split("::")[0])
-                    for task in before
-                ):
+                if any(before[task].data_evidence.get("data_hash") != manifest.get("data_hashes", {}).get(task.split("::")[0])
+                       for task in before):
                     passed = False
                     result["reason"] = "FINAL_data_changed_since_preregistration"
                 if passed:
-                    prior = {
-                        i
-                        for stage in row["development_evidence"]
-                        for i in stage.get("data", {}).get("validation_ids", [])
-                    }
+                    prior = {i for stage in row["development_evidence"]
+                             for i in stage.get("data", {}).get("validation_ids", [])}
                     if prior & set(result["data"]["validation_ids"]):
                         passed = False
                         result["reason"] = "FINAL_validation_overlap"
                 # FINAL uncertainty is evaluated for every affected source by
                 # the transfer stage; the template dataset gets no extra vote.
-            case = {
-                "candidate": candidate.candidate_id,
-                "passed": passed,
-                "result": result,
-            }
+            case = {"candidate": candidate.candidate_id, "passed": passed, "result": result}
             cases.append(case)
             append_journal(study / "final-checkpoint.jsonl", case)
         finally:
             discard_experiment_checkout(tree, workspace=study, source=source)
-    result = {
-        "cases": cases,
-        "metric_confirmed_count": sum(r["passed"] for r in cases),
-        "requires_independent_defect_and_novelty_audit": True,
-        "goal_achieved": False,
-        "FINAL_consumed": True,
-    }
+    result = {"cases": cases, "metric_confirmed_count": sum(r["passed"] for r in cases),
+              "requires_independent_defect_and_novelty_audit": True,
+              "goal_achieved": False, "FINAL_consumed": True}
     _save(result_path, result)
     return result
