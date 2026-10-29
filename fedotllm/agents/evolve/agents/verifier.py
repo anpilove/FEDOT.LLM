@@ -612,9 +612,9 @@ def verify_lead(
     if inference is None:
         return VerificationResult("infrastructure_error", detail="verifier inference unavailable")
     base_context = context_from_lead(lead, checkout, max_chars=8_000)
-    card = build_fedot_context(checkout, lead.file_path)
-    if card is not None:
-        base_context += "\n\nFEDOT architecture card:\n" + card.render(max_chars=3_500)
+    source_context = build_fedot_context(checkout, lead.file_path)
+    if source_context is not None:
+        base_context += "\n\nFEDOT architecture context:\n" + source_context.render(max_chars=3_500)
     tool_history: list[str] = []
     seen_tool_actions: set[tuple[str, str, str, int]] = set()
     seen_read_lines: dict[str, list[int]] = {}

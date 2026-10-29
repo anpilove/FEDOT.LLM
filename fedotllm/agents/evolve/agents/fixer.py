@@ -300,9 +300,9 @@ def fix_lead(
     # A 80k whole-file prompt made inexpensive models lose the actual lead and
     # verifier result.  The model can pull any omitted helper with read/search.
     ctx = context_from_lead(lead, checkout, max_chars=10_000)
-    card = build_fedot_context(checkout, lead.file_path)
-    if card is not None:
-        ctx += "\n\nFEDOT architecture card:\n" + card.render(max_chars=3_500)
+    source_context = build_fedot_context(checkout, lead.file_path)
+    if source_context is not None:
+        ctx += "\n\nFEDOT architecture context:\n" + source_context.render(max_chars=3_500)
     if verification.strip():
         ctx += f"\n\nIndependent verifier result:\n{verification.strip()}\n"
     if feedback.strip():

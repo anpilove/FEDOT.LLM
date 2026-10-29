@@ -220,7 +220,7 @@ class MatchSite:
 
 @dataclass
 class Decision:
-    keep: bool
+    keep: bool | None
     reason: str
     target_delta: float | None
     regression_deltas: dict[str, float | None] = field(default_factory=dict)
@@ -233,6 +233,19 @@ class Decision:
     experiment_id: str = ""
     infrastructure_error: bool = False
     metric_goal_keep: bool = False
+    quality_failure: Literal[
+        "candidate_error", "evaluation_error", "fedot_budget_timeout", "unverified_metric"
+    ] | None = None
+    quality_outcome: Literal[
+        "broad_positive",
+        "local_positive",
+        "regression",
+        "insufficient_effect",
+        "not_evaluated",
+    ] | None = None
+    improved_task_count: int = 0
+    regressed_task_count: int = 0
+    unresolved_task_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.dev_keep is None and self.stage == "dev":

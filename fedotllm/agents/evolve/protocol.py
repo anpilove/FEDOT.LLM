@@ -90,6 +90,7 @@ def score_protocol_fingerprint() -> str:
             "evaluation/_worker.py",
             "evaluation/_fedot_quality_worker.py",
             "evaluation/quality_registry.py",
+            "evaluation/quality_scope.py",
             "evaluation/fedot_quality.py",
             "evaluation/openml_fold.py",
             "execution/process.py",

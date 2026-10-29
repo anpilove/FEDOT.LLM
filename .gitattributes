@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Preserve the checksum-pinned OpenML metadata, including its original line endings.
+tests/fixtures/openml/task_31.xml -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

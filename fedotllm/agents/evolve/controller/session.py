@@ -11,6 +11,7 @@ from typing import Callable
 from fedotllm.agents.evolve.storage.findings import end_run
 from fedotllm.agents.evolve.storage.journal import append_journal
 from fedotllm.agents.evolve.storage.checkpoint import save_checkpoint
+from fedotllm.agents.evolve.controller.quality_queue import summarize_quality_queue
 from fedotllm.agents.evolve.types import Decision
 
 
@@ -211,6 +212,7 @@ def finish_campaign(
         "llm_usage": llm_usage,
         "llm_attempts": _llm_attempt_summary(workspace),
         "finding_counts": _run_finding_summary(findings_path, run_id),
+        "quality_queue": summarize_quality_queue(workspace),
         "decision": asdict(decision),
         "artifacts": {
             "trace": "trace.jsonl",
@@ -238,6 +240,7 @@ def finish_campaign(
                 str(path.relative_to(workspace))
                 for path in sorted((workspace / "maintenance_fixes").glob("*.patch"))
             ],
+            "quality_queue": "quality_queue/",
         },
     }
     (workspace / "campaign_summary.json").write_text(

@@ -1,6 +1,6 @@
-"""Deterministic structural context cards for FEDOT source.
+"""Deterministic structural context for FEDOT source.
 
-The card is derived only from the inspected checkout: Python AST, FEDOT's
+The context is derived only from the inspected checkout: Python AST, FEDOT's
 operation registries, default parameters, search-space declarations and tests.
 It contains no benchmark or oracle knowledge and performs no LLM calls.
 """
@@ -56,7 +56,7 @@ class OperationContext:
 
 
 @dataclass(frozen=True)
-class FedotContextCard:
+class FedotSourceContext:
     file_path: str
     symbol: str
     kind: str
@@ -99,7 +99,7 @@ class FedotContextCard:
         limit = max(200, int(max_chars))
         if len(text) <= limit:
             return text
-        marker = "\n...[context card truncated]"
+        marker = "\n...[source context truncated]"
         return text[: limit - len(marker)].rsplit("\n", 1)[0] + marker
 
 
@@ -110,8 +110,8 @@ def build_fedot_context(
     symbol: str = "",
     caller_limit: int = 6,
     test_limit: int = 6,
-) -> FedotContextCard | None:
-    """Build a source-grounded card for one FEDOT file or symbol.
+) -> FedotSourceContext | None:
+    """Build a source-grounded context for one FEDOT file or symbol.
 
     ``file_path`` must resolve to a Python file under ``checkout/fedot``.
     A missing symbol falls back to a file-level outline rather than guessing a
@@ -147,7 +147,7 @@ def build_fedot_context(
         operations,
         limit=max(0, test_limit),
     )
-    return FedotContextCard(
+    return FedotSourceContext(
         file_path=rel,
         symbol=_qualified_name(selected),
         kind=selected.kind if selected is not None else "file",

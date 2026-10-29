@@ -1192,6 +1192,7 @@ def test_llm_finding_dedup_requires_matching_acceptance_protocol(tmp_path: Path)
             "patch_hash": "patch-a",
             "score_protocol_hash": "score-a",
             "evaluation_protocol_hash": "accept-a",
+            "stage": "quality",
             "keep": False,
             "reason": "target_delta 0.0 below per-task threshold",
             "target_delta": 0.0,
@@ -1201,6 +1202,7 @@ def test_llm_finding_dedup_requires_matching_acceptance_protocol(tmp_path: Path)
     payload = json.loads(dataset.read_text(encoding="utf-8"))
     assert payload["score_protocol_hash"] == "score-a"
     assert payload["evaluation_protocol_hash"] == "accept-a"
+    assert payload["stage"] == "quality"
     assert tried_patch_hashes_from_findings(
         dataset,
         source_hash="source-a",
@@ -3085,6 +3087,88 @@ def test_last_revision_pytest_feedback_gets_one_contract_repair_extension(
     ]
     assert len(extension) == 1
     assert extension[0]["gate"] == "pytest"
+
+
+def test_fixer_budget_exhaustion_preserves_reproducible_pytest_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.storage.run_budget import EvolveBudgetExhausted
+
+    source = _source(tmp_path)
+    _accept_behavior_probe(monkeypatch)
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed value")
+    candidate = PatchCandidate(
+        "break-contract",
+        edits=[PatchEdit("fedot/a.py", "return 1", "return 2")],
+    )
+    fixer_calls = 0
+
+    def fake_fix(*_args, **_kwargs):
+        nonlocal fixer_calls
+        fixer_calls += 1
+        if fixer_calls == 1:
+            return candidate
+        raise EvolveBudgetExhausted("query budget exhausted during repair")
+
+    failed_test = TestResult(
+        "test_failures",
+        1,
+        failed_nodes={"test/unit/test_contract.py::test_width"},
+        output="E assert 1 == 2",
+    )
+    tests = [failed_test, failed_test]
+    stock = {"catboost": ScoreResult("catboost", "ok", 0.8)}
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fake_fix)
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: stock,
+    )
+    monkeypatch.setattr(loop, "_hydrate_configuration_surfaces", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_fedot_tests",
+        lambda *_a, **_k: tests.pop(0),
+    )
+    monkeypatch.setattr(loop, "measure_patched", lambda *_a, **_k: stock)
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+
+    workspace = tmp_path / "budget-after-pytest-failure"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=FAST_RUN_POLICY,
+    )
+
+    assert decision.keep is False
+    assert decision.infrastructure_error is False
+    assert decision.stage == "dev"
+    assert decision.reason.startswith("fedot_tests_regressed")
+    rows = [
+        json.loads(line)
+        for line in (workspace / "journal.jsonl").read_text().splitlines()
+    ]
+    stopped = [row for row in rows if row.get("event") == "revision_budget_exhausted"]
+    assert len(stopped) == 1
+    assert stopped[0]["stop_reason"].startswith("EvolveBudgetExhausted:")
+    assert "query budget exhausted during repair" in stopped[0]["stop_reason"]
+    assert stopped[0]["preserved_decision"]["reason"].startswith(
+        "fedot_tests_regressed"
+    )
 
 
 def test_pytest_contract_source_is_bounded_and_rejects_path_escape(tmp_path: Path):
@@ -6448,7 +6532,9 @@ def test_probe_repair_does_not_consume_an_unmeasured_patch(
     assert len(metrics) == expected_metrics
     assert not decision.keep  # A better probe must never grant metric acceptance.
     if first_status in {"no_change", "changed"}:
-        assert decision.reason == "no_affected_metric_signal"
+        assert decision.reason == (
+            "duplicate_patch_after:no_affected_metric_signal"
+        )
     elif expected_probes == 1:
         assert decision.reason.startswith("duplicate_patch")
     else:
@@ -6512,10 +6598,12 @@ def test_duplicate_reason_refers_to_the_same_patch_not_intervening_attempt(
     assert decision.reason == "duplicate_patch_after:" + attempts[0]["reason"]
 
 
-def test_small_signal_with_unknown_scope_confirms_all_workloads(tmp_path, monkeypatch):
+def test_unknown_scope_keeps_full_dev_protect_set_before_final(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
+    # Keep this scope-routing unit test independent of the live 40-task registry.
+    monkeypatch.setattr(loop, "hidden_exam", lambda: (("catboost", "rf"), ("catboost", "rf")))
     lead = MatchSite("execution", "fedot/a.py", 1, "shared implementation")
     candidate = PatchCandidate(
         "shared", edits=[PatchEdit("fedot/a.py", "return 1", "return 2")]
@@ -6557,11 +6645,15 @@ def test_small_signal_with_unknown_scope_confirms_all_workloads(tmp_path, monkey
             fedot_quality_jobs=False,
         ),
     )
-    assert scopes == [(("catboost", "rf"), ("catboost",), ("catboost", "rf"), True)]
+    assert scopes == []
     assert result.keep
-    assert result.metric_signal_keep
-    assert result.reason == "confirmed_small_metric_keep"
-    assert (tmp_path / "work" / "metric_signal_fixes" / "shared.patch").is_file()
+    assert result.reason == "affected_metric_moved_pending_final"
+    trace_rows = [
+        json.loads(line)
+        for line in (tmp_path / "work" / "trace.jsonl").read_text().splitlines()
+    ]
+    campaign_start = next(row for row in trace_rows if row["event"] == "campaign_start")
+    assert campaign_start["protect_ids"] == ["catboost", "rf"]
 
 
 def test_neutral_verified_quality_change_is_preserved_as_maintenance_keep(
@@ -6570,6 +6662,7 @@ def test_neutral_verified_quality_change_is_preserved_as_maintenance_keep(
     from fedotllm.agents.evolve.controller import campaign as loop
 
     source = _source(tmp_path)
+    monkeypatch.setattr(loop, "hidden_exam", lambda: (("catboost", "rf"), ("catboost", "rf")))
     lead = MatchSite(
         "execution",
         "fedot/a.py",
@@ -6604,6 +6697,22 @@ def test_neutral_verified_quality_change_is_preserved_as_maintenance_keep(
     )
     monkeypatch.setattr(
         loop, "_candidate_confirmation_scope", lambda *_a, **_k: ("catboost",)
+    )
+    monkeypatch.setattr(
+        loop,
+        "_quick_quality_screen",
+        lambda *_a, **_k: (
+            False,
+            {
+                "reason": "no_affected_metric_signal",
+                "dev": {"reason": "no_affected_metric_signal", "infrastructure_error": False},
+                "shadow": {
+                    "evaluated": True,
+                    "reason": "no_affected_metric_signal",
+                    "infrastructure_error": False,
+                },
+            },
+        ),
     )
     monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "maintenance diff")
 

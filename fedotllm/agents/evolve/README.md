@@ -7,6 +7,16 @@ EvolveAgent самостоятельно ищет улучшения в исхо
 Главный принцип: **агент ищет, отдельный контроллер принимает решение**.
 LLM не видит результаты финальной оценки и не может подстроиться под них.
 
+## Термины
+
+- **Предложенное улучшение** — гипотеза об изменении FEDOT и соответствующий патч.
+- **Ревизия улучшения** — конкретная версия патча и гипотезы.
+- **Проверка улучшения** — сравнение исходного FEDOT и FEDOT с этой ревизией на заранее выбранных датасетах.
+- **Классы задач** — классификация, регрессия и прогнозирование временных рядов. Они определяют набор датасетов проверки.
+- **Результат проверки** — метрики по датасетам и итоговое решение либо причина, по которой проверка не завершена.
+
+Предложенное улучшение → проверка улучшения → датасеты выбранных классов задач → результат проверки.
+
 ## Как это работает
 
 ```text
@@ -83,16 +93,81 @@ Fixer не видит финальные метрики. Он может улу�
 | | Hunt | Judge |
 |---|---|---|
 | Зачем | Найти исполняемый код и отсеять сломанные патчи | Принять итоговое решение |
-| Данные | 26 коротких classification, regression и time-series пайплайнов | 24 OpenML-CC18 + 3 ряда FEDOT (`beer`, `australia`, `salaries`) |
-| Запуск | Фиксированный `PipelineBuilder`, без composer и tuning | `Fedot(best_quality)`, tuning, до 1 часа |
-| Метрика | Только диагностический сигнал | ROC-AUC для OpenML, MAE для временных рядов |
-| Результат | Кандидат в очереди | KEEP / DROP |
+| Данные | Короткие classification, regression и time-series пайплайны | 24 classification, 8 regression, 8 forecasting; подмножество выбирается по затронутому коду |
+| Запуск | Фиксированный `PipelineBuilder`, без composer и tuning | `Fedot(best_quality)`, tuning; бюджет поиска 75 минут после получения compute-слота, общий лимит стороны 90 минут с резервом на метрику; внешний watchdog 10800 секунд |
+| Метрика | Только диагностический сигнал | Метрика и направление улучшения заморожены для каждого датасета в registry |
+| Результат | Предложенное улучшение в очереди | KEEP / DROP после всей проверки либо явная причина незавершённой оценки |
 
-**KEEP:** есть значимое улучшение хотя бы на одной задаче и нет существенных
-регрессий на остальных.
+**KEEP:** все требуемые стороны дали конечные метрики, нет регрессий и улучшены
+больше половины датасетов либо минимум два датасета. Действующий алгоритм —
+`evaluation/fedot_quality.py::decision_from_quality_jobs`.
 
-**Инфраструктурная ошибка:** composing не стартовал или запуск завершился по
-таймауту. Это не считается ухудшением патча.
+**Незавершённая оценка:** timeout, ошибка исходной/изменённой версии, недостающие
+датасеты или сбой инфраструктуры. Это не подтверждённое ухудшение качества.
+Отсутствие composing само по себе не отменяет конечную метрику: активность поиска
+сохраняется отдельно как диагностика.
+
+Изменения общего или неизвестного кода проверяются на широком наборе. Изменения
+`regression.py` затрагивают регрессию и forecasting. Сужение до датасетов с
+категориальными признаками разрешено для известного изолированного helper
+one-hot encoder; комментарии, строки и гипотеза агента сами по себе набор не сужают.
+
+## Длительная кампания
+
+Отдельный модуль [FEDOT.LLM Evolve Controller](controller/README.md) обслуживает
+очередь с восстановлением результатов и ограничением
+времени работы children. По умолчанию он проверяет уже предложенные улучшения.
+`--hunt` включает новые кампании поиска с отдельными лимитами запросов, стоимости
+кампании и общего бюджета. В одной кампании Hunt и Judge остаются отдельными
+фазами, а Judge параллельно проверяет предложения: каждая пара состоит из одного
+датасета, исходного FEDOT и той же версии с предложенным улучшением. Исходная и
+изменённая стороны идут последовательно, а разные пары получают слоты из общего
+справедливого пула. Так одна длинная проверка не закрепляет свободные слоты за
+собой до конца всего предложения.
+
+```bash
+python -m fedotllm.agents.evolve.controller serve \
+  --fedot /absolute/path/to/FEDOT \
+  --workspace /absolute/path/to/campaign \
+  --stock-cache /absolute/path/to/campaign/stock_cache \
+  --duration-seconds 604800 --hunt --target-proposals 100 \
+  --llm-max-queries 30 --llm-max-cost-usd 0.25 --hunt-total-cost-usd 10
+```
+
+Ресурсный профиль сервиса по умолчанию: 4 CPU на задачу, до 7 пар одновременно. Для
+явной диагностической очереди `quality-drain` поддерживает до 8 пар при квоте не
+менее 32 CPU; по умолчанию предел остаётся 7. Нативный
+лимит FEDOT на операцию обучения применяется внутри worker; отдельный жёсткий
+предел 3600 секунд ограничивает всю сторону целиком: запуск Python, импорт,
+загрузка данных, `fit`, прогноз, метрики и сохранение. Если сторона не завершилась
+за это время, контроллер завершает её изолированную группу процессов и сохраняет
+`timeout` без метрики. Это не означает, что FEDOT завершился штатно сам. Guardian
+с пределом 10800 секунд — аварийная защита на случай остановки самого контроллера,
+а не штатный срок ожидания обучения. Завершённый timeout автоматически не
+повторяется и не даёт KEEP/DROP; повторы ограничены только подтверждёнными
+прерываниями или временными сетевыми ошибками. При сбое сохранения активные
+worker отменяются и очередь закрывается fail-closed.
+
+Перед запуском scheduler собирает готовые пары стартовой волны не дольше
+10 секунд, затем выдаёт слоты по кругу. Это ограничивает стартовый перекос,
+не позволяя медленной подготовке одного предложения задержать готовые проверки
+дольше этого интервала.
+
+Сохраняются `service_manifest.json`, `logs/service_status.json`, отдельные логи
+children и атомарные события в `quality_attempts/` до записи в `quality_jobs.jsonl`.
+Повторный запуск в том же workspace сохраняет срок окончания и бюджеты; изменение
+кода, источника или конфигурации требует нового workspace. Закончившиеся стороны
+переиспользуются только при совпадении источника, среды, registry и числа CPU.
+
+`all_measured` означает, что все требуемые stock/patch метрики сохранены;
+`terminal_with_errors` — очередь завершена с непроверенными улучшениями. Heartbeat
+показывает работу supervisor; продвижение подтверждают новые finished-события.
+
+Порядок серверной приёмки и фактические исправления:
+[Работа над ошибками контроллера](../../../docs/superpowers/plans/2026-10-01-evolve-reliability.md).
+Восстановление сервиса после перезагрузки хоста требует отдельного service manager;
+сам контроллер восстанавливает свои children и очередь. Сто улучшений за неделю
+не гарантируются: срок зависит от классов задач, ошибок и реального времени fit.
 
 ### Ограничение поиска
 
@@ -117,18 +192,57 @@ HPO и часть `fedot/api/` сейчас покрыты хуже, потом�
 python -m fedotllm.agents.evolve
 ```
 
-Основные команды: `doctor`, `run`, `continue`, `quality-job`, `quality-drain`.
+Поиск: `doctor`, `run`, `continue`. Контроллер имеет собственные команды `info`,
+`status`, `launch`, `serve`, `drain`. Прежние `quality-drain` и `quality-watch`
+сохранены как совместимые точки входа.
 
-## Результаты текущей кампании
+## Историческая сводка кампании
 
 - создано **49 кандидатов**;
 - **5** прошли серверную часовую оценку;
 - дополнительно выполнено **14** локальных часовых запусков;
 - подтверждённых улучшений качества пока **0**;
-- основные причины: регрессия на другой задаче, timeout или незапустившийся composing.
+- основные причины в прежней сводке: регрессия на другой задаче, timeout или незапустившийся composing.
+
+Эта сводка не подтверждает состояние текущего серверного процесса. Результаты,
+отклонённые только из-за отсутствия composing, требуют отдельного пересмотра по
+сохранённым метрикам; их число здесь не переоценивается.
 
 Все найденные гипотезы, патчи и результаты проверки:
 https://github.com/anpilove/FEDOT/issues
 
 - `#1–#13` — воспроизводимые дефекты из проверки runtime-инвариантов;
 - `#14–#62` — кандидаты LLM-hunt с патчами и статусами оценки.
+### Live quality-run report
+
+The quality-run JSONL journal is the source for a local Markdown/JSON report and,
+when installed, SQLite-backed MLflow. After a server-artifact snapshot has been
+copied into the run directory:
+
+```bash
+uv pip install --python .venv/bin/python '.[quality-tracking]'
+.venv/bin/python research/evolve/scripts/sync_hour_verdicts.py \
+  --workspace research/evolve/campaigns/<date>/<run-id> --local-only --mlflow
+.venv/bin/mlflow ui \
+  --backend-store-uri sqlite:///research/evolve/campaigns/<date>/<run-id>/reports/mlflow.db \
+  --host 127.0.0.1
+```
+
+The Markdown report is written to `<run-id>/reports/hour_verdicts_summary.md`.
+It labels the server snapshot as fresh or stale and lists proposal hypothesis,
+dataset progress, baseline and patched metrics, and the quality outcome. MLflow
+uses one parent run per proposal revision and one child run per dataset attempt;
+different metric families stay in separate child runs. If an issue URL is
+present in the frozen proposal record and `gh` is authenticated, the reporting
+script updates one comment marked as controller-owned. Local reports do not
+depend on MLflow or GitHub being available.
+
+To build a read-only index of all saved quality queues and journals, preserving
+each source path and leaving events with missing or conflicting IDs unresolved:
+
+```bash
+.venv/bin/python research/evolve/scripts/index_quality_history.py \
+  --campaign-root research/evolve/campaigns \
+  --output research/evolve/campaigns/<date>/quality_history_index.jsonl \
+  --summary research/evolve/campaigns/<date>/quality_history_index_summary.json
+```

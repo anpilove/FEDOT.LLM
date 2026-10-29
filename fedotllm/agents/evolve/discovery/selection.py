@@ -22,7 +22,7 @@ from fedotllm.agents.evolve.discovery.context import (
 )
 from fedotllm.agents.evolve.execution.guard import deny_write
 from fedotllm.agents.evolve.discovery.repo_map import in_metric_scan
-from fedotllm.agents.evolve.discovery.navigation import architecture_cards
+from fedotllm.agents.evolve.discovery.navigation import architecture_contexts
 from fedotllm.agents.evolve.storage.replay import semantic_site_id
 from fedotllm.agents.evolve.types import MatchSite, ToolAction
 
@@ -1011,7 +1011,7 @@ def _llm_pick(
     catalog_plan: dict = {"presented": False, "selected_indices": []}
     if present_full_catalog and catalog and action_limit > 1:
         paths = tuple(item.file_path for item in catalog)
-        cards = architecture_cards(checkout, paths, max_chars_per_file=500)
+        contexts = architecture_contexts(checkout, paths, max_chars_per_file=500)
         annotations = "\n".join(
             f"[{index}] {item.file_path}:{item.line} | {item.why[:180]} | "
             f"signals={','.join(item.signals)}"
@@ -1022,8 +1022,8 @@ def _llm_pick(
             "inspection. Select up to three zero-based indices with the strongest "
             "independent correctness or predictive-quality mechanisms. Do not infer "
             "a solution from a filename alone; this is only a search order. Every "
-            "catalog entry remains eligible later.\n\nArchitecture cards:\n"
-            + cards
+            "catalog entry remains eligible later.\n\nArchitecture contexts:\n"
+            + contexts
             + "\n\nRuntime ranking annotations:\n"
             + annotations
         )

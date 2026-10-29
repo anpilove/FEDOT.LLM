@@ -22,7 +22,7 @@ from fedotllm.agents.evolve.benchmark.micro_agent import (
 )
 from fedotllm.agents.evolve.benchmark.micro_discovery import FileSelection
 from fedotllm.agents.evolve.discovery.navigation import (
-    architecture_cards,
+    architecture_contexts,
     inspect_shortlist,
 )
 from fedotllm.agents.evolve.execution.checkout import (
@@ -446,8 +446,8 @@ def _observation(result: SnippetResult) -> str | None:
     return values[0] if len(values) == 1 else None
 
 
-def _cards(source: Path, catalog: tuple[str, ...] = _CATALOG) -> str:
-    return architecture_cards(source, catalog, max_chars_per_file=1_500)
+def _architecture_contexts(source: Path, catalog: tuple[str, ...] = _CATALOG) -> str:
+    return architecture_contexts(source, catalog, max_chars_per_file=1_500)
 
 
 class ControllerLeadSelection(FileSelection):
@@ -471,7 +471,7 @@ def _public_lead(
         "Do not assume a repair is necessary. The verifier will decide.\n"
     )
     shortlist = calls.create(
-        context + "Choose up to three zero-based catalog indices.\n" + _cards(source, catalog),
+        context + "Choose up to three zero-based catalog indices.\n" + _architecture_contexts(source, catalog),
         FileShortlist, stage="hidden_file_localization", metadata={},
     )
     indices = list(dict.fromkeys(
@@ -484,7 +484,7 @@ def _public_lead(
         + inspect_shortlist(source, catalog, indices)
         + "\nChoose an original catalog index and an exact source line inside "
         "the relevant class/function. Do not propose a patch.\n"
-        + _cards(source, catalog),
+        + _architecture_contexts(source, catalog),
         ControllerLeadSelection, stage="hidden_file_navigation", metadata={},
     )
     if not 0 <= selected.selected_index < len(catalog):

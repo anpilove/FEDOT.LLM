@@ -1,4 +1,6 @@
 from types import SimpleNamespace
+import subprocess
+import sys
 
 import pytest
 
@@ -19,6 +21,26 @@ class FakeInference:
         self.provider_calls += 1
         self.usage["cost_usd"] += next(self.costs, 0.0)
         return str(messages)
+
+
+def test_importing_quality_executor_does_not_import_llm_provider_stack():
+    probe = (
+        "import builtins, sys\n"
+        "original = builtins.__import__\n"
+        "def guarded(name, *args, **kwargs):\n"
+        "    if name == 'fedotllm.llm':\n"
+        "        raise ModuleNotFoundError('blocked optional provider stack')\n"
+        "    return original(name, *args, **kwargs)\n"
+        "builtins.__import__ = guarded\n"
+        "from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue\n"
+        "assert 'fedotllm.llm' not in sys.modules\n"
+        "assert callable(drain_quality_queue)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_query_cap_counts_real_provider_attempts_and_restores_client():

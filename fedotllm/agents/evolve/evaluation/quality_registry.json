@@ -1,22 +1,79 @@
 {
   "schema_version": 1,
-  "identity": "fedot-best_quality-3600s-official-fold",
+  "identity": "fedot-best_quality-side5400-fit4500s-cc18-ctr23-8ts-v19-private-invocation-isolated-tuning",
+  "tuning_evaluation_policy": "isolated-objective-process-v1",
+  "candidate_dispatcher": "isolated-candidate-process-v1",
   "api": "fedot",
   "preset": "best_quality",
   "with_tuning": true,
-  "timeout_seconds": 3600,
+  "timeout_seconds": 5400,
+  "fedot_search_budget_seconds": 4500,
+  "fedot_timeout_policy": "return_best",
+  "final_fit_reserve_seconds": 1500,
+  "watchdog_seconds": 10800,
+  "max_pipeline_fit_policy": "per-cv-fold-v1",
+  "max_pipeline_evaluation_policy": "per-cv-candidate-v1",
+  "fedot_cache_policy": "disabled-sqlite-v1",
   "seed": 42,
-  "require_search_ran": true,
+  "require_search_ran": false,
   "portfolio": false,
-  "cpu_quota": 32,
-  "n_jobs_per_job": 8,
+  "cpu_quota": 28,
+  "n_jobs_per_job": 4,
   "selection": {
     "suite": "OpenML-CC18",
     "study": 99,
-    "rule": "Official OpenML-CC18 study 99 task order, first 20 classification tasks, plus already-registered AMLB/CC18 tasks outside that prefix. Official repeat=0 fold=0. Plus three full FEDOT public univariate TS series (beer, australia, salaries). Frozen before any quality scores. Not the full 72-task suite, not toy CSV.",
-    "cc18_prefix_tasks": [3, 6, 11, 12, 14, 15, 16, 18, 22, 23, 28, 29, 31, 32, 37, 43, 45, 49, 53, 219],
-    "extra_openml_tasks": [10101, 3917, 9952, 146818],
-    "fedot_public_ts": ["beer", "australia", "salaries"]
+    "rule": "Frozen 24 classification tasks, 8 OpenML-CTR23 regression tasks, 3 full public FEDOT series and 5 checksum-pinned FEDOT real-case series, selected before scores. Shared or unknown code evaluates the full set. Regression evaluation code also affects forecasting. Regression and five local series use relative deltas; the three existing public series retain absolute thresholds. The frozen categorical trait covers 8 classification and 3 regression datasets, but narrowing is allowed only for an isolated known one-hot helper with categorical-only callers and matching source spans; comments, strings, shared transforms, unknown callers and AST ambiguity cannot narrow the scope.",
+    "cc18_prefix_tasks": [
+      3,
+      6,
+      11,
+      12,
+      14,
+      15,
+      16,
+      18,
+      22,
+      23,
+      28,
+      29,
+      31,
+      32,
+      37,
+      43,
+      45,
+      49,
+      53,
+      219
+    ],
+    "extra_openml_tasks": [
+      10101,
+      3917,
+      9952,
+      146818
+    ],
+    "fedot_public_ts": [
+      "beer",
+      "australia",
+      "salaries"
+    ],
+    "ctr23_regression_tasks": [
+      361616,
+      361234,
+      361235,
+      361237,
+      361617,
+      361618,
+      361241,
+      361242
+    ],
+    "fedot_local_ts": [
+      "temperature",
+      "traffic",
+      "economic",
+      "arctic",
+      "metocean"
+    ],
+    "regression_suite": "OpenML-CTR23"
   },
   "starter_task_ids": [
     "openml-31-credit-g",
@@ -43,9 +100,22 @@
     "openml-45-splice",
     "openml-49-tic-tac-toe",
     "openml-219-electricity",
+    "openml-regression-moneyball",
+    "openml-regression-abalone",
+    "openml-regression-airfoil-self-noise",
+    "openml-regression-concrete-strength",
+    "openml-regression-energy-efficiency",
+    "openml-regression-forest-fires",
+    "openml-regression-protein",
+    "openml-regression-superconductivity",
     "fedot-ts-beer",
     "fedot-ts-australia",
-    "fedot-ts-salaries"
+    "fedot-ts-salaries",
+    "fedot-ts-temperature",
+    "fedot-ts-traffic",
+    "fedot-ts-economic",
+    "fedot-ts-arctic",
+    "fedot-ts-metocean"
   ],
   "datasets": [
     {
@@ -60,7 +130,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML/AMLB supervised task 31 on the complete German credit table (1000 rows, 20 mixed features). Predefined 10-fold, repeat=0 fold=0. Not a FEDOT examples/real_cases CSV slice."
+      "why_full": "Official OpenML/AMLB supervised task 31 on the complete German credit table (1000 rows, 20 mixed features). Predefined 10-fold, repeat=0 fold=0. Not a FEDOT examples/real_cases CSV slice.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-10101-blood-transfusion",
@@ -144,7 +217,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML/AMLB/CC18 task 3 on the complete King-Rook vs King-Pawn table (3196 rows, 36 categorical features). Predefined 10-fold, repeat=0 fold=0."
+      "why_full": "Official OpenML/AMLB/CC18 task 3 on the complete King-Rook vs King-Pawn table (3196 rows, 36 categorical features). Predefined 10-fold, repeat=0 fold=0.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-146818-australian",
@@ -158,7 +234,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML/AMLB task 146818 on the complete Statlog Australian credit table (dataset 40981). Predefined 10-fold, repeat=0 fold=0."
+      "why_full": "Official OpenML/AMLB task 146818 on the complete Statlog Australian credit table (dataset 40981). Predefined 10-fold, repeat=0 fold=0.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-6-letter",
@@ -284,7 +363,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML-CC18 study 99 task 23 on the complete contraceptive-method-choice table (1473 rows, 9 mixed features, 3 classes). Predefined 10-fold, repeat=0 fold=0."
+      "why_full": "Official OpenML-CC18 study 99 task 23 on the complete contraceptive-method-choice table (1473 rows, 9 mixed features, 3 classes). Predefined 10-fold, repeat=0 fold=0.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-28-optdigits",
@@ -312,7 +394,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML-CC18 study 99 task 29 on the complete credit-approval table (690 rows, 15 mixed features). Predefined 10-fold, repeat=0 fold=0. Full dataset, not a FEDOT examples CSV slice."
+      "why_full": "Official OpenML-CC18 study 99 task 29 on the complete credit-approval table (690 rows, 15 mixed features). Predefined 10-fold, repeat=0 fold=0. Full dataset, not a FEDOT examples CSV slice.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-32-pendigits",
@@ -354,7 +439,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML-CC18 study 99 task 45 on the complete splice-junction table (dataset 46, 3190 rows, 60 categorical features, 3 classes). Predefined 10-fold, repeat=0 fold=0."
+      "why_full": "Official OpenML-CC18 study 99 task 45 on the complete splice-junction table (dataset 46, 3190 rows, 60 categorical features, 3 classes). Predefined 10-fold, repeat=0 fold=0.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-49-tic-tac-toe",
@@ -368,7 +456,10 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML-CC18 study 99 task 49 on the complete tic-tac-toe endgame table (dataset 50, 958 rows, 9 categorical features). Predefined 10-fold, repeat=0 fold=0."
+      "why_full": "Official OpenML-CC18 study 99 task 49 on the complete tic-tac-toe endgame table (dataset 50, 958 rows, 9 categorical features). Predefined 10-fold, repeat=0 fold=0.",
+      "tags": [
+        "categorical"
+      ]
     },
     {
       "task_id": "openml-219-electricity",
@@ -382,7 +473,139 @@
       "min_delta": 0.01,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Official OpenML-CC18 study 99 task 219 on the complete electricity table (dataset 151, 45312 rows, 8 mixed features). Predefined 10-fold, repeat=0 fold=0. Full stream-classification task, not a subsample."
+      "why_full": "Official OpenML-CC18 study 99 task 219 on the complete electricity table (dataset 151, 45312 rows, 8 mixed features). Predefined 10-fold, repeat=0 fold=0. Full stream-classification task, not a subsample.",
+      "tags": [
+        "categorical"
+      ]
+    },
+    {
+      "task_id": "openml-regression-moneyball",
+      "source": "openml_task",
+      "openml_task": 361616,
+      "openml_data": 41021,
+      "name": "Moneyball",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Mixed baseball statistics with missing values; OpenML-CTR23 repeat 0 fold 0.",
+      "tags": [
+        "categorical"
+      ]
+    },
+    {
+      "task_id": "openml-regression-abalone",
+      "source": "openml_task",
+      "openml_task": 361234,
+      "openml_data": 44956,
+      "name": "Abalone",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Small mixed-feature biology regression; OpenML-CTR23 repeat 0 fold 0.",
+      "tags": [
+        "categorical"
+      ]
+    },
+    {
+      "task_id": "openml-regression-airfoil-self-noise",
+      "source": "openml_task",
+      "openml_task": 361235,
+      "openml_data": 44957,
+      "name": "Airfoil Self-Noise",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Small numeric engineering regression; OpenML-CTR23 repeat 0 fold 0."
+    },
+    {
+      "task_id": "openml-regression-concrete-strength",
+      "source": "openml_task",
+      "openml_task": 361237,
+      "openml_data": 44959,
+      "name": "Concrete Compressive Strength",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Small nonlinear materials regression; OpenML-CTR23 repeat 0 fold 0."
+    },
+    {
+      "task_id": "openml-regression-energy-efficiency",
+      "source": "openml_task",
+      "openml_task": 361617,
+      "openml_data": 44960,
+      "name": "Energy Efficiency",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Building energy regression; OpenML-CTR23 repeat 0 fold 0, heating_load target."
+    },
+    {
+      "task_id": "openml-regression-forest-fires",
+      "source": "openml_task",
+      "openml_task": 361618,
+      "openml_data": 44962,
+      "name": "Forest Fires",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Small ecological regression with a strongly skewed target; OpenML-CTR23 repeat 0 fold 0.",
+      "tags": [
+        "categorical"
+      ]
+    },
+    {
+      "task_id": "openml-regression-protein",
+      "source": "openml_task",
+      "openml_task": 361241,
+      "openml_data": 44963,
+      "name": "Physicochemical Protein",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Medium-large protein-property regression; OpenML-CTR23 repeat 0 fold 0."
+    },
+    {
+      "task_id": "openml-regression-superconductivity",
+      "source": "openml_task",
+      "openml_task": 361242,
+      "openml_data": 44964,
+      "name": "Superconductivity",
+      "problem": "regression",
+      "metric": "rmse",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "delta_mode": "relative",
+      "fold": 0,
+      "repeat": 0,
+      "why_full": "Wide materials table with 81 features; OpenML-CTR23 repeat 0 fold 0."
     },
     {
       "task_id": "fedot-ts-beer",
@@ -396,7 +619,8 @@
       "forecast_horizon": 12,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Full Australian monthly beer-production series from the public FEDOT examples/data/ts/beer.csv loader (476 months, 1956-01 to 1995-08). Chronological last-12 holdout. Not an evolve toy CSV slice."
+      "why_full": "Full Australian monthly beer-production series from the public FEDOT examples/data/ts/beer.csv loader (476 months, 1956-01 to 1995-08). Chronological last-12 holdout. Not an evolve toy CSV slice.",
+      "data_sha256": "afe6c1a326bb8f47b1cc03a34a48fee87ea6798566aba3bf123215f654705831"
     },
     {
       "task_id": "fedot-ts-australia",
@@ -410,7 +634,8 @@
       "forecast_horizon": 12,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Full Australia monthly series from the public FEDOT examples/data/ts/australia.csv loader (204 observations). Chronological last-12 holdout. Same file the FEDOT api_forecasting example uses."
+      "why_full": "Full Australia monthly series from the public FEDOT examples/data/ts/australia.csv loader (204 observations). Chronological last-12 holdout. Same file the FEDOT api_forecasting example uses.",
+      "data_sha256": "9887228f527074f13e1309313745012f62ce71be7d6f592032349d6a1bbaee06"
     },
     {
       "task_id": "fedot-ts-salaries",
@@ -424,7 +649,98 @@
       "forecast_horizon": 14,
       "fold": 0,
       "repeat": 0,
-      "why_full": "Full daily salary series from the public FEDOT examples/data/ts/salaries.csv loader (2016-10-07 to 2018-04-03). Chronological last-14 holdout. Not a 100-point toy window."
+      "why_full": "Full daily salary series from the public FEDOT examples/data/ts/salaries.csv loader (2016-10-07 to 2018-04-03). Chronological last-14 holdout. Not a 100-point toy window.",
+      "data_sha256": "e37688e4d86f52d3e4348fcc59212cab45f8bc4f0264b02e600f89ff22d22a70"
+    },
+    {
+      "task_id": "fedot-ts-temperature",
+      "source": "fedot_local_ts",
+      "name": "temperature",
+      "problem": "ts_forecasting",
+      "metric": "mae",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "fold": 0,
+      "repeat": 0,
+      "forecast_horizon": 24,
+      "ts_dataset": "temperature",
+      "data_path": "time_series/temperature.csv",
+      "target": "value",
+      "data_sha256": "cee2fa66f87286c6595c89ff275a4e16400c5a91a1b3715afeda7f6286b344a1",
+      "why_full": "Full 17,520-point FEDOT real-case hourly temperature series; chronological last-24 holdout.",
+      "delta_mode": "relative"
+    },
+    {
+      "task_id": "fedot-ts-traffic",
+      "source": "fedot_local_ts",
+      "name": "traffic",
+      "problem": "ts_forecasting",
+      "metric": "mae",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "fold": 0,
+      "repeat": 0,
+      "forecast_horizon": 24,
+      "ts_dataset": "traffic",
+      "data_path": "time_series/traffic.csv",
+      "target": "value",
+      "data_sha256": "e2662462792e32a657e647ad56230670c4fa93f42ec0b591e88fc1165ccbb0a6",
+      "why_full": "Full 17,520-point FEDOT real-case hourly traffic series; chronological last-24 holdout.",
+      "delta_mode": "relative"
+    },
+    {
+      "task_id": "fedot-ts-economic",
+      "source": "fedot_local_ts",
+      "name": "economic",
+      "problem": "ts_forecasting",
+      "metric": "mae",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "fold": 0,
+      "repeat": 0,
+      "forecast_horizon": 12,
+      "ts_dataset": "economic",
+      "data_path": "time_series/economic_data.csv",
+      "target": "value",
+      "data_sha256": "cf3758a3542894e7a8021b75aa8e056c27aca835573684665c5178d65a42c6d2",
+      "why_full": "Full 1,028-point FEDOT real-case economic weekly series; chronological last-12 holdout.",
+      "delta_mode": "relative"
+    },
+    {
+      "task_id": "fedot-ts-arctic",
+      "source": "fedot_local_ts",
+      "name": "arctic",
+      "problem": "ts_forecasting",
+      "metric": "mae",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "fold": 0,
+      "repeat": 0,
+      "forecast_horizon": 14,
+      "ts_dataset": "arctic",
+      "data_path": "arctic/topaz_multi_ts.csv",
+      "target": "61_91",
+      "data_sha256": "79140033ac6d55f3e6f02283a6c9800517363a8e62ec7393d359438cffefc574",
+      "why_full": "FEDOT TOPAZ multivariate Arctic series; fixed target 61_91 and chronological last-14 holdout.",
+      "delta_mode": "relative"
+    },
+    {
+      "task_id": "fedot-ts-metocean",
+      "source": "fedot_local_ts",
+      "name": "metocean",
+      "problem": "ts_forecasting",
+      "metric": "mae",
+      "higher_is_better": false,
+      "min_delta": 0.01,
+      "fold": 0,
+      "repeat": 0,
+      "forecast_horizon": 24,
+      "ts_dataset": "metocean",
+      "data_path": "metocean/metocean_data_train.csv",
+      "target": "sea_height",
+      "data_sha256": "dd0eeedc7ff26d4f4388896f434a2770b5008e213c7b72be17f29936f4357443",
+      "why_full": "FEDOT metocean series; fixed sea_height target and chronological last-24 holdout.",
+      "delta_mode": "relative"
     }
   ]
 }

@@ -61,6 +61,7 @@ def apply_patch(
     candidate: PatchCandidate,
     *,
     diagnostics: list[str] | None = None,
+    dry_run: bool = False,
 ) -> bool:
     """Validate every edit in memory, then write all touched files atomically."""
 
@@ -161,6 +162,8 @@ def apply_patch(
                 f"{target.relative_to(checkout)}: only FEDOT .py and .json files are patchable"
             )
         prepared[target] = patched
+    if dry_run:
+        return True
     originals = {target: target.read_text(encoding="utf-8") for target in prepared}
     written: list[Path] = []
     try:

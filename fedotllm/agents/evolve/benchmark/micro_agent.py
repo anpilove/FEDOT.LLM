@@ -93,11 +93,11 @@ def _visible_case(case: MicroCase, source: Path) -> tuple[str, int]:
     if not target.is_file():
         raise FileNotFoundError(f"allowed source file is missing: {case.prompt.file_path}")
     text = target.read_text(encoding="utf-8", errors="replace")
-    card = build_fedot_context(source, case.prompt.file_path)
-    library_context = card.render(max_chars=6_000) if card is not None else ""
+    source_context = build_fedot_context(source, case.prompt.file_path)
+    library_context = source_context.render(max_chars=6_000) if source_context is not None else ""
     return (
         model_facing_context(case)
-        + ("\n\nFEDOT architecture card:\n" + library_context if library_context else "")
+        + ("\n\nFEDOT architecture context:\n" + library_context if library_context else "")
         + "\n\nComplete allowed source file:\n"
         + f"--- {case.prompt.file_path} ---\n"
         + text,

@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import os
-import signal
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 from fedotllm.agents.evolve.execution.guard import repo_root
-from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python
+from fedotllm.agents.evolve.execution.process import clean_subprocess_env, fedot_python, run_worker
 from fedotllm.agents.evolve.storage.journal import append_journal
 from fedotllm.agents.evolve.execution.snippet_policy import redact_snippet_output, snippet_blocked
 from fedotllm.agents.evolve.types import SnippetResult
@@ -73,6 +72,9 @@ def run_fedot_snippet(
 
     checkout = checkout.resolve()
     blob = code or ""
+    limit = SNIPPET_TIMEOUT_S if timeout_s is None else float(timeout_s)
+    if not math.isfinite(limit) or limit <= 0:
+        raise ValueError("timeout_s must be finite and positive")
     blocked = snippet_blocked(blob)
     if blocked:
         result = SnippetResult(
@@ -90,7 +92,6 @@ def run_fedot_snippet(
         return result
 
     combined = "\n".join([*(history or []), _echo_last_expression(blob)])
-    limit = SNIPPET_TIMEOUT_S if timeout_s is None else float(timeout_s)
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="evolve-snippet-") as temp:
         script = Path(temp) / "snippet.py"
@@ -112,41 +113,31 @@ def run_fedot_snippet(
             cmd.extend(["--target-file", str(target_file), "--target-symbol", trace_target["symbol"],
                         "--target-result", str(target_result)])
         try:
-            proc = subprocess.Popen(
+            outcome = run_worker(
                 cmd,
                 cwd=checkout,
                 env=clean_subprocess_env(checkout, repo_root=repo_root()),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
+                timeout=limit,
             )
-            try:
-                stdout, stderr = proc.communicate(timeout=limit)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                stdout, stderr = proc.communicate()
+            if outcome.timed_out:
                 result = SnippetResult(
                     status="timeout",
                     code=blob,
-                    stdout=redact_snippet_output((stdout or "")[-MAX_OUTPUT_CHARS:]),
-                    stderr=redact_snippet_output((stderr or "")[-MAX_OUTPUT_CHARS:]),
+                    stdout=redact_snippet_output(outcome.stdout[-MAX_OUTPUT_CHARS:]),
+                    stderr=redact_snippet_output(outcome.stderr[-MAX_OUTPUT_CHARS:]),
                     exit_code=None,
                     duration_s=time.perf_counter() - started,
                     detail=f"<timed out after {limit:g}s>",
                 )
             else:
                 result = SnippetResult(
-                    status="ok" if proc.returncode == 0 else "runtime_error",
+                    status="ok" if outcome.returncode == 0 else "runtime_error",
                     code=blob,
-                    stdout=redact_snippet_output((stdout or "")[-MAX_OUTPUT_CHARS:]),
-                    stderr=redact_snippet_output((stderr or "")[-MAX_OUTPUT_CHARS:]),
-                    exit_code=proc.returncode,
+                    stdout=redact_snippet_output(outcome.stdout[-MAX_OUTPUT_CHARS:]),
+                    stderr=redact_snippet_output(outcome.stderr[-MAX_OUTPUT_CHARS:]),
+                    exit_code=outcome.returncode,
                     duration_s=time.perf_counter() - started,
-                    detail="" if proc.returncode == 0 else f"process exited {proc.returncode}",
+                    detail="" if outcome.returncode == 0 else f"process exited {outcome.returncode}",
                 )
         except OSError as exc:
             result = SnippetResult(

@@ -116,19 +116,49 @@ class _SnippetImportBlocker(MetaPathFinder):
 
 
 @contextmanager
-def snippet_runtime_guards(checkout: Path):
-    """Block evaluator imports and reads outside the experiment checkout."""
+def snippet_runtime_guards(
+    checkout: Path,
+    *,
+    runtime_package_roots: tuple[Path, ...] = (),
+):
+    """Block evaluator imports and external reads except package-owned resources."""
 
     checkout = checkout.resolve()
+    package_roots = tuple(path.resolve() for path in runtime_package_roots)
     blocker = _SnippetImportBlocker()
     sys.meta_path.insert(0, blocker)
     real_open = builtins.open
+
+    def is_package_resource_read(path: Path, mode: str) -> bool:
+        if any(flag in mode for flag in "wax+"):
+            return False
+        try:
+            caller = Path(sys._getframe(2).f_code.co_filename).resolve()
+        except (OSError, RuntimeError):
+            return False
+        for root in package_roots:
+            try:
+                caller_relative = caller.relative_to(root)
+                path.relative_to(root)
+            except ValueError:
+                continue
+            if not caller_relative.parts:
+                continue
+            package_root = root / caller_relative.parts[0]
+            try:
+                path.relative_to(package_root)
+            except ValueError:
+                continue
+            return True
+        return False
 
     def guarded_open(file, *args, **kwargs):  # noqa: ANN001
         path = Path(file)
         resolved = path.resolve() if path.is_absolute() else (checkout / path).resolve()
         if checkout not in resolved.parents and resolved != checkout:
-            raise PermissionError(f"snippet file access outside checkout: {resolved}")
+            mode = str(args[0] if args else kwargs.get("mode", "r"))
+            if not is_package_resource_read(resolved, mode):
+                raise PermissionError(f"snippet file access outside checkout: {resolved}")
         return real_open(resolved, *args, **kwargs)
 
     builtins.open = guarded_open

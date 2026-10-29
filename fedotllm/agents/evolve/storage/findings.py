@@ -251,6 +251,7 @@ def append_finding(
         "source_hash": source_hash,
         "score_protocol_hash": row.get("score_protocol_hash") or "",
         "evaluation_protocol_hash": row.get("evaluation_protocol_hash") or "",
+        "stage": row.get("stage") or "",
         "hypothesis_id": row.get("hypothesis_id") or None,
         "revision": row.get("revision"),
         "lead": row.get("lead"),

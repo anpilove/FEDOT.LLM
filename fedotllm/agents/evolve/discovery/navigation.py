@@ -7,7 +7,7 @@ from pathlib import Path
 from fedotllm.agents.evolve.discovery.fedot_context import build_fedot_context
 
 
-def architecture_cards(
+def architecture_contexts(
     checkout: Path,
     paths: tuple[str, ...],
     *,
@@ -15,10 +15,10 @@ def architecture_cards(
 ) -> str:
     rows: list[str] = []
     for index, file_path in enumerate(paths):
-        card = build_fedot_context(checkout, file_path)
+        source_context = build_fedot_context(checkout, file_path)
         rendered = (
-            card.render(max_chars=max_chars_per_file)
-            if card is not None
+            source_context.render(max_chars=max_chars_per_file)
+            if source_context is not None
             else f"file={file_path}"
         )
         rows.append(f"[{index}]\n{rendered}")

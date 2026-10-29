@@ -29,7 +29,7 @@ from fedotllm.agents.evolve.benchmark.micro_agent import (
     _usage_requests,
 )
 from fedotllm.agents.evolve.discovery.fedot_context import build_fedot_context
-from fedotllm.agents.evolve.discovery.navigation import architecture_cards
+from fedotllm.agents.evolve.discovery.navigation import architecture_contexts
 from fedotllm.agents.evolve.execution.checkout import (
     create_experiment_checkout,
     discard_experiment_checkout,
@@ -97,12 +97,12 @@ _FILE_PROMPT = """A FEDOT public behavior violates this contract:
 
 Choose the single source file most likely to own the violated contract. The
 four candidates are structurally related, so base the choice on lifecycle,
-parameter ownership, and data flow visible in their architecture cards. Return
+parameter ownership, and data flow visible in their architecture contexts. Return
 the zero-based candidate index and a concrete mechanism. Do not request source
 code yet.
 
-Candidate architecture cards:
-{cards}"""
+Candidate architecture contexts:
+{contexts}"""
 
 _REPAIR_PROMPT = """A FEDOT public behavior violates this contract:
 {symptom}
@@ -113,8 +113,8 @@ The controller selected this source file for deeper inspection:
 Locate the responsible mechanism in this file and make the smallest safe
 correction. The private reproduction and expected output are unavailable.
 
-FEDOT architecture card:
-{card}
+FEDOT architecture context:
+{source_context}
 
 Complete selected source file:
 --- {file_path} ---
@@ -138,19 +138,19 @@ def _case_repaired(stages: list[dict[str, Any]]) -> bool:
     )
 
 
-def _cards(source: Path, paths: tuple[str, ...]) -> str:
-    return architecture_cards(source, paths, max_chars_per_file=3_000)
+def _architecture_contexts(source: Path, paths: tuple[str, ...]) -> str:
+    return architecture_contexts(source, paths, max_chars_per_file=3_000)
 
 
 def _repair_context(case: MicroCase, source: Path, file_path: str) -> tuple[str, int]:
     target = source / file_path
     text = target.read_text(encoding="utf-8", errors="replace")
-    card = build_fedot_context(source, file_path)
+    source_context = build_fedot_context(source, file_path)
     return (
         _REPAIR_PROMPT.format(
             symptom=case.prompt.symptom,
             file_path=file_path,
-            card=card.render(max_chars=6_000) if card is not None else "",
+            source_context=source_context.render(max_chars=6_000) if source_context is not None else "",
             source=text,
         ),
         len(text.splitlines()),
@@ -192,7 +192,7 @@ def run_micro_discovery_benchmark(
         try:
             selection = calls.create(
                 _FILE_PROMPT.format(
-                    symptom=case.prompt.symptom, cards=_cards(source, pool)
+                    symptom=case.prompt.symptom, contexts=_architecture_contexts(source, pool)
                 ),
                 FileSelection,
                 stage="file_localization",

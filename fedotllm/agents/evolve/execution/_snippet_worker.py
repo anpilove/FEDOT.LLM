@@ -6,6 +6,7 @@ import argparse
 import json
 import runpy
 import sys
+import sysconfig
 from pathlib import Path
 
 
@@ -47,7 +48,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if target_file and args.target_symbol:
             sys.settrace(trace)
-        with snippet_runtime_guards(checkout):
+        runtime_package_roots = tuple(
+            Path(value)
+            for value in {sysconfig.get_path("purelib"), sysconfig.get_path("platlib")}
+            if value
+        )
+        with snippet_runtime_guards(
+            checkout, runtime_package_roots=runtime_package_roots
+        ):
             runpy.run_path(str(args.script), run_name="__main__")
     finally:
         sys.settrace(None)

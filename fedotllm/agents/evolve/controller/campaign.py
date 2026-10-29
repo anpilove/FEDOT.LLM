@@ -983,7 +983,14 @@ def run_once(
                     priority="high",
                     probe_status="",
                     toy_metric="priority_only",
+                    hypothesis={
+                        "id": hypothesis.id,
+                        "claim": hypothesis.claim,
+                        "expected_effect": hypothesis.expected_effect,
+                    },
+                    source_root=source,
                 )
+                queued_job = json.loads(job_path.read_text(encoding="utf-8"))
                 final_decision = Decision(
                     False,
                     "queued_for_fedot_quality",
@@ -995,8 +1002,14 @@ def run_once(
                     {
                         "event": "quality_queue",
                         "candidate": candidate.candidate_id,
+                        "candidate_revision_id": queued_job.get("candidate_revision_id"),
+                        "proposal_id": queued_job.get("proposal_id"),
+                        "patch_sha256": queued_job.get("patch_sha256"),
                         "path": str(job_path),
                         "priority": "high",
+                        "hypothesis": queued_job["hypothesis"],
+                        "quality_scope": queued_job["quality_scope"],
+                        "task_ids": queued_job["task_ids"],
                     },
                 )
             else:
@@ -1380,6 +1393,21 @@ def run_once(
                         return finish(last)
                     break
                 except (EvolveBudgetExhausted, LLMRequestTimeout) as exc:
+                    if last.reason != "no_patch" and not last.infrastructure_error:
+                        append_journal(
+                            journal,
+                            {
+                                "event": "revision_budget_exhausted",
+                                "lead": {
+                                    "file_path": lead.file_path,
+                                    "line": lead.line,
+                                },
+                                "revision": revision,
+                                "stop_reason": f"{type(exc).__name__}: {exc}"[:500],
+                                "preserved_decision": asdict(last),
+                            },
+                        )
+                        return finish(last)
                     return finish(
                         Decision(
                             keep=False,
@@ -1891,7 +1919,14 @@ def run_once(
                         priority=priority,
                         probe_status=probe_status,
                         toy_metric="early_gain" if toy_moved else "no_veto",
+                        hypothesis={
+                            "id": hypothesis.id,
+                            "claim": hypothesis.claim,
+                            "expected_effect": hypothesis.expected_effect,
+                        },
+                        source_root=source,
                     )
+                    queued_job = json.loads(job_path.read_text(encoding="utf-8"))
                     last = Decision(
                         False,
                         "queued_for_fedot_quality",
@@ -1904,10 +1939,16 @@ def run_once(
                         {
                             "event": "quality_queue",
                             "candidate": candidate.candidate_id,
+                            "candidate_revision_id": queued_job.get("candidate_revision_id"),
+                            "proposal_id": queued_job.get("proposal_id"),
+                            "patch_sha256": queued_job.get("patch_sha256"),
                             "path": str(job_path),
                             "priority": priority,
                             "probe_status": probe_status,
                             "toy_metric": "priority_only",
+                            "hypothesis": queued_job["hypothesis"],
+                            "quality_scope": queued_job["quality_scope"],
+                            "task_ids": queued_job["task_ids"],
                         },
                     )
                     record_attempt(
@@ -2459,8 +2500,6 @@ def run_once(
                         continue
                     break
                 if last.infrastructure_error:
-                    break
-                if last.reason == "no_affected_metric_signal":
                     break
                 if last.reason == "queued_for_fedot_quality":
                     break

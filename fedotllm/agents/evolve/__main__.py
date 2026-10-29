@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -277,12 +278,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "quality-job",
-        help="Stock vs patch Fedot(best_quality, timeout=3600s) on registered full OpenML tasks",
+        help="Stock vs patch Fedot(best_quality, timeout=3600s) on registered quality tasks",
     )
     _add_quality_args(
         p,
         workspace="/tmp/evolve-fedot-quality",
-        tasks_help="Comma-separated quality task ids; default is the registry pool (24 OpenML + public TS)",
+        tasks_help=(
+            "Comma-separated quality task ids; default is all 40 registered tasks "
+            "(24 classification, 8 regression, 8 forecasting)"
+        ),
     )
     p.add_argument("--patch-checkout", type=Path, default=None)
     p.add_argument(
@@ -298,8 +302,21 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_quality_args(
         p,
         workspace="/tmp/evolve-agent-quality-drain",
-        tasks_help="Comma-separated quality task ids; default pool is the full registry, then tabular vs TS per patch",
+        tasks_help=(
+            "Comma-separated quality task ids; default is the full registry, filtered per patch "
+            "to classification/regression/forecasting or all tasks for shared/unknown changes"
+        ),
     )
+    p.add_argument("--continue-on-error", action="store_true",
+                   help="Continue other improvements after exhausted dataset retries")
+    p.add_argument("--max-pair-slots", type=int, default=7,
+                   help="Maximum concurrent dataset pairs (default 7; explicit diagnostic cap up to 8)")
+
+    p = sub.add_parser("quality-watch", help="Serve a durable quality campaign with bounded child lifetimes")
+    _add_fedot(p)
+    _add_workspace(p, "/tmp/evolve-agent-quality-service")
+    from fedotllm.agents.evolve.controller.__main__ import add_service_arguments
+    add_service_arguments(p)
 
     p = sub.add_parser("metric-finalize", help="Resume only an already frozen metric FINAL batch; no LLM")
     _add_fedot(p)
@@ -425,7 +442,10 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
         bind_stock_cache,
         run_quality_stock_jobs,
     )
-    from fedotllm.agents.evolve.evaluation.quality_registry import list_quality_task_ids
+    from fedotllm.agents.evolve.evaluation.quality_registry import (
+        list_quality_task_ids,
+        load_quality_registry,
+    )
     from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
     from fedotllm.agents.evolve.storage.journal import append_journal
 
@@ -435,7 +455,9 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
     args.workspace.mkdir(parents=True, exist_ok=True)
     journal = args.workspace / "quality_jobs.jsonl"
     stock_cache = bind_stock_cache(args.stock_cache)
-    task_ids = _csv(args.tasks) or list_quality_task_ids()
+    registry = load_quality_registry()
+    registered_task_ids = list_quality_task_ids(registry)
+    task_ids = _csv(args.tasks) or registered_task_ids
     print(
         json.dumps(
             {
@@ -491,7 +513,12 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
                 ],
             }
         )
-        return 0 if all(row["search_ran"] for row in rows) else EXIT_INFRASTRUCTURE
+        measured = bool(rows) and all(
+            row["stock"]["status"] == "ok"
+            and math.isfinite(float(row["stock"]["score"]))
+            for row in rows
+        )
+        return 0 if measured else EXIT_INFRASTRUCTURE
     decision = measure_fedot_quality(
         source,
         args.patch_checkout.resolve(),
@@ -519,16 +546,23 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
 def _cmd_quality_drain(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from fedotllm.agents.evolve.controller.quality_executor import drain_quality_queue
     from fedotllm.agents.evolve.evaluation.fedot_quality import bind_stock_cache
-    from fedotllm.agents.evolve.evaluation.quality_registry import list_quality_task_ids
+    from fedotllm.agents.evolve.evaluation.quality_registry import (
+        list_quality_task_ids,
+        load_quality_registry,
+    )
     from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
 
     args.workspace.mkdir(parents=True, exist_ok=True)
     stock_cache = bind_stock_cache(args.stock_cache)
-    task_ids = _csv(args.tasks) or list_quality_task_ids()
+    registry = load_quality_registry()
+    registered_task_ids = list_quality_task_ids(registry)
+    task_ids = _csv(args.tasks) or registered_task_ids
     print(
         json.dumps(
             {
                 "event": "quality-drain-start",
+                "registry_identity": registry.identity,
+                "registered_task_count": len(registered_task_ids),
                 "task_ids": list(task_ids),
                 "stock_cache": str(stock_cache),
             }
@@ -542,14 +576,21 @@ def _cmd_quality_drain(args: argparse.Namespace, parser: argparse.ArgumentParser
         task_ids=task_ids,
         n_jobs=args.n_jobs,
         cpu_quota=args.cpu_quota,
+        max_pair_slots=args.max_pair_slots,
         stock_cache=stock_cache,
+        continue_on_error=getattr(args, "continue_on_error", False),
     )
     _print_json(payload)
     failed = any(
-        job.get("status") in {"apply_failed", "infrastructure_error"}
+        job.get("status") not in {"keep", "drop"}
         for job in payload["jobs"]
     )
     return EXIT_INFRASTRUCTURE if not payload["stock_ok"] or failed else 0
+
+
+def _cmd_quality_watch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from fedotllm.agents.evolve.controller.__main__ import serve
+    return serve(args, parser)
 
 
 def _cmd_metric_finalize(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -912,6 +953,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     budget_payload = budget.snapshot().to_dict() if budget is not None else None
     _write_json(run_workspace / "run_budget.json", budget_payload)
     summary_path = run_workspace / "campaign_summary.json"
+    summary = None
     if summary_path.is_file():
         try:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -931,6 +973,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "regression_deltas": decision.regression_deltas,
             "workspace": str(run_workspace),
             "run_budget": budget_payload,
+            "quality_queue": (summary or {}).get("quality_queue"),
         }
     )
     return _decision_exit_code(decision)
@@ -939,6 +982,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 HANDLERS: dict[str, Handler] = {
     "quality-job": _cmd_quality_job,
     "quality-drain": _cmd_quality_drain,
+    "quality-watch": _cmd_quality_watch,
     "metric-finalize": _cmd_metric_finalize,
     "eval-contract": _cmd_eval_contract,
     "doctor": _cmd_doctor,
