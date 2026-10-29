@@ -2,14 +2,17 @@ name: Pre-commit checks
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, codex/project-setup]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
 
@@ -18,17 +21,9 @@ jobs:
       with:
         version: "latest"
 
-    - name: Set up Python 3.10
-      run: uv python install 3.10
+    - name: Set up Python 3.11
+      run: uv python install 3.11
 
-    - name: Install dependencies
+    - name: Run pre-commit hooks
       run: |
-        uv sync --dev
-
-    - name: Check code formatting with ruff
-      run: |
-        uv run ruff format --check .
-
-    - name: Lint code with ruff
-      run: |
-        uv run ruff check .
+        uvx --python 3.11 --from pre-commit==4.2.0 pre-commit run --all-files --show-diff-on-failure
