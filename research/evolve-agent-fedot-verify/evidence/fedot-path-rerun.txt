@@ -1,0 +1,22 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.18, pytest-8.4.0, pluggy-1.6.0 -- /workspace/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.9.0, mock-3.14.1, asyncio-1.0.0, Faker-37.3.0, langsmith-0.3.45, cov-6.1.1
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
+
+tests/unit/agents/test_evolve_metric_study.py::test_cli_resumes_existing_final_without_model PASSED [ 33%]
+tests/unit/agents/test_evolve_microbenchmark.py::test_stock_microbenchmark_reproduces_all_private_contracts FAILED [ 66%]
+tests/unit/agents/test_evolve_microbenchmark.py::test_stock_microbenchmark_does_not_write_fedot PASSED [100%]
+
+=================================== FAILURES ===================================
+__________ test_stock_microbenchmark_reproduces_all_private_contracts __________
+tests/unit/agents/test_evolve_microbenchmark.py:88: in test_stock_microbenchmark_reproduces_all_private_contracts
+    assert result.ok is True
+E   AssertionError: assert False is True
+E    +  where False = MicroFastResult(source_hash='0fe7d0dce5753b9cce0979056873fb9f90762b5fe6d4505fac3c485fc13e1a45', cases=(MicroCaseResult(case_id='partial_poly_params', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.6615846969999666)]), MicroCaseResult(case_id='lda_effective_solver', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.6010256770000524)]), MicroCaseResult(case_id='lagged_reproducibility', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.599191291000011)]), MicroCaseResult(case_id='polyfit_parameter_identity', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.4586625220000542)]), MicroCaseResult(case_id='nonfinite_target_preprocessing', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.4735284679999268)]), MicroCaseResult(case_id='merge_parent_index_alignment', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.5447171139999227)]), MicroCaseResult(case_id='single_column_multits_lagged', stages=[MicroStageResult(stage='stock_probe', status='failed', reason='probe status is runtime_error: process exited 1', observation=None, duration_s=1.5559599550000485)]))).ok
+=========================== short test summary info ============================
+FAILED tests/unit/agents/test_evolve_microbenchmark.py::test_stock_microbenchmark_reproduces_all_private_contracts
+========================= 1 failed, 2 passed in 21.42s =========================

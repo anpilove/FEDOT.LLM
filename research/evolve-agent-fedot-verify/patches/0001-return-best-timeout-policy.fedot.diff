@@ -1,0 +1,82 @@
+diff --git a/fedot/api/api_utils/api_composer.py b/fedot/api/api_utils/api_composer.py
+index cfb7d6ee..a19c0024 100644
+--- a/fedot/api/api_utils/api_composer.py
++++ b/fedot/api/api_utils/api_composer.py
+@@ -66,7 +66,12 @@ class ApiComposer:
+             timeout: float = self.params.timeout
+             with_tuning = self.params.get('with_tuning')
+ 
+-            self.timer = ApiTime(time_for_automl=timeout, with_tuning=with_tuning)
++            self.timer = ApiTime(
++                time_for_automl=timeout,
++                with_tuning=with_tuning,
++                timeout_policy=self.params.get('timeout_policy', 'legacy'),
++                final_fit_reserve_seconds=self.params.get('final_fit_reserve_seconds', 0),
++            )
+ 
+             initial_assumption, fitted_assumption = self.propose_and_fit_initial_assumption(train_data)
+ 
+diff --git a/fedot/api/api_utils/api_params_repository.py b/fedot/api/api_utils/api_params_repository.py
+index e8e0baf5..ec62c8e2 100644
+--- a/fedot/api/api_utils/api_params_repository.py
++++ b/fedot/api/api_utils/api_params_repository.py
+@@ -70,7 +70,11 @@ class ApiParamsRepository:
+             keep_history=True,
+             history_dir=default_fedot_data_dir(),
+             with_tuning=True,
+-            seed=None
++            seed=None,
++            # EvolveAgent / quality-worker contract (return_best).
++            timeout_policy='legacy',
++            final_fit_reserve_seconds=0,
++            max_pipeline_evaluation_time=None,
+         )
+         return default_param_values_dict
+ 
+diff --git a/fedot/api/main.py b/fedot/api/main.py
+index f9a998f7..3d02dcfd 100644
+--- a/fedot/api/main.py
++++ b/fedot/api/main.py
+@@ -120,6 +120,8 @@ class Fedot:
+         self.history: Optional[OptHistory] = None
+ 
+         fedot_composer_timer.reset_timer()
++        # Populated by return_best budget handling; None under legacy policy.
++        self.fit_budget_outcome = None
+ 
+     def fit(self,
+             features: FeaturesType,
+diff --git a/fedot/api/time.py b/fedot/api/time.py
+index 66fac7a1..b089ebd1 100644
+--- a/fedot/api/time.py
++++ b/fedot/api/time.py
+@@ -16,6 +16,8 @@ class ApiTime:
+     def __init__(self, **time_params):
+         self.time_for_automl = time_params.get('time_for_automl')
+         self.with_tuning = time_params.get('with_tuning')
++        self.timeout_policy = time_params.get('timeout_policy', 'legacy')
++        self.final_fit_reserve_seconds = float(time_params.get('final_fit_reserve_seconds') or 0)
+ 
+         self.__define_timeouts_for_stages()
+ 
+@@ -32,10 +34,18 @@ class ApiTime:
+             self.timeout_for_composing = None
+         else:
+             # Time for composing based on tuning parameters
++            effective = float(self.time_for_automl)
++            if self.timeout_policy == 'return_best' and self.final_fit_reserve_seconds > 0:
++                # Hold the final-fit reserve out of the search window so composition
++                # and tuning cannot consume the whole side budget.
++                reserve_minutes = self.final_fit_reserve_seconds / 60.0
++                if reserve_minutes >= effective:
++                    raise ValueError('final_fit_reserve_seconds must leave a positive search window')
++                effective = effective - reserve_minutes
+             if self.with_tuning:
+-                self.timeout_for_composing = self.time_for_automl * COMPOSING_TUNING_PROPORTION
++                self.timeout_for_composing = effective * COMPOSING_TUNING_PROPORTION
+             else:
+-                self.timeout_for_composing = self.time_for_automl
++                self.timeout_for_composing = effective
+ 
+     def have_time_for_composing(self, pop_size: int, n_jobs: int) -> bool:
+         timeout_not_set = self.timedelta_composing is None

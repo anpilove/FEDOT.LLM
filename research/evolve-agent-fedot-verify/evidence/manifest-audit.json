@@ -1,0 +1,50 @@
+{
+  "n_datasets": 40,
+  "by_problem": {
+    "classification": 24,
+    "regression": 8,
+    "ts_forecasting": 8
+  },
+  "by_source": {
+    "openml_task": 32,
+    "fedot_public_ts": 3,
+    "fedot_local_ts": 5
+  },
+  "duplicate_task_ids": [],
+  "starter_missing_from_datasets": [],
+  "datasets_missing_from_starter": [],
+  "openml_mismatch": {
+    "in_selection_not_datasets": [],
+    "in_datasets_not_selection": []
+  },
+  "manifest_hash_ok": 13,
+  "manifest_hash_bad": [],
+  "manifest_hash_missing": [],
+  "local_ts_task_ids": [
+    "fedot-ts-temperature",
+    "fedot-ts-traffic",
+    "fedot-ts-economic",
+    "fedot-ts-arctic",
+    "fedot-ts-metocean"
+  ],
+  "public_ts_task_ids": [
+    "fedot-ts-beer",
+    "fedot-ts-australia",
+    "fedot-ts-salaries"
+  ],
+  "registry_final_metric_needles": [],
+  "prompt_final_leak_hits": [],
+  "text_flags": {
+    "offline_env": "EVOLVE_QUALITY_DATA_OFFLINE",
+    "cache_policy": "disabled-sqlite-v1",
+    "timeout_policy": "return_best"
+  },
+  "budgets": {
+    "timeout_seconds": 5400,
+    "fedot_search_budget_seconds": 4500,
+    "final_fit_reserve_seconds": 1500,
+    "watchdog_seconds": 10800,
+    "n_jobs_per_job": 4,
+    "cpu_quota": 28
+  }
+}

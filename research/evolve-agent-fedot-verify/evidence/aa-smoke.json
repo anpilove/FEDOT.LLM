@@ -1,0 +1,9 @@
+2026-11-08 12:39:23,405 - TabPFN is required but not installed. Install with `pip install fedot[extra]` or `pip install tabpfn`.
+{
+  "aa_scores": [
+    1.0,
+    1.0
+  ],
+  "equal": true,
+  "claim": "no quality improvement claim; API+measurability only"
+}
