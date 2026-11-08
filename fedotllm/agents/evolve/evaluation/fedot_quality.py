@@ -487,6 +487,60 @@ def _iter_stock_cache_paths(
     return [exact] if exact.is_file() else []
 
 
+def _cached_worker_attempt_ok(payload: dict, *, task_id: str) -> bool:
+    """Reject a cached worker result whose attempt identity contradicts this stock task.
+
+    GOLEM ``GraphVerifier`` drops an invalid graph before evaluation. A stock
+    cache entry may omit attempt fields, but a present field that names another
+    task, side, or attempt is not a reusable measurement.
+    """
+
+    observations = payload.get("metric_observations")
+    observations = observations if isinstance(observations, dict) else {}
+
+    def field(name: str):
+        if name in observations:
+            return observations.get(name)
+        return payload.get(name)
+
+    recorded_task = field("task_id")
+    if recorded_task not in (None, "", task_id):
+        return False
+    source_dataset = field("source_dataset")
+    if source_dataset not in (None, "", task_id):
+        return False
+    side = field("side")
+    if side not in (None, "", "stock"):
+        return False
+    attempt = field("attempt")
+    if attempt is not None and (
+        isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1
+    ):
+        return False
+    attempt_id = field("attempt_id")
+    if attempt_id in (None, ""):
+        return True
+    if not isinstance(attempt_id, str):
+        return False
+    proposal, recorded_task_id, recorded_side, recorded_attempt = (
+        (*attempt_id.rsplit(":", 3), "", "", "", "")[:4]
+    )
+    if (
+        not proposal
+        or recorded_task_id != task_id
+        or recorded_side != "stock"
+        or not recorded_attempt.isdigit()
+        or int(recorded_attempt) < 1
+    ):
+        return False
+    if attempt is not None and int(recorded_attempt) != attempt:
+        return False
+    proposal_id = field("proposal_id")
+    if isinstance(proposal_id, str) and proposal_id and proposal_id != proposal:
+        return False
+    return True
+
+
 def _identity_matches(payload: dict, expected: dict) -> bool:
     identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
     blob = {**payload, **identity}
@@ -550,6 +604,8 @@ def _load_stock_cache(
             continue
         if not _identity_matches(payload, expected):
             continue
+        if not _cached_worker_attempt_ok(payload, task_id=dataset.task_id):
+            continue
         try:
             result = _score_from_payload(
                 dataset.task_id,
@@ -582,6 +638,11 @@ def _store_stock_cache(
 ) -> None:
     if (result.status != "ok" or not math.isfinite(float(result.score))
             or (result.metric_observations or {}).get("metric_valid") is not True):
+        return
+    if not _cached_worker_attempt_ok(
+        {"task_id": result.task_id, "metric_observations": result.metric_observations},
+        task_id=dataset.task_id,
+    ):
         return
     root = _stock_cache_root(stock_cache_root)
     root.mkdir(parents=True, exist_ok=True)

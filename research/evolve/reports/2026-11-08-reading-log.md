@@ -24,6 +24,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `split_individuals_to_evaluate` skips an individual whose `fitness.valid` is already true. A `quality_task_worker_spawned` row for the same attempt used to erase a finished timeout and leave the side interrupted, so the next pair sent it through fit again.
 - GOLEM `OptimisationTimer` starts another generation only when the timeout is strictly longer than the time already spent plus the average generation. A transient failure that had already used the whole side budget still started a second attempt with a fresh full timeout.
 - GOLEM elitism copies the best individuals into the next population and does not evaluate them again. A warm stock cache still opened a new stock attempt before the cache was read, so recovery could send that identity through fit.
+- GOLEM `GraphVerifier` returns false, or raises, when a graph fails a rule, and that graph is not evaluated. A stock cache entry whose worker attempt identity named another side or task was still reused as a stock hit.
 
 ## Found
 
@@ -59,4 +60,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A finished timeout stays settled when a later spawn or start names the same attempt. That side is reused and is not sent through fit.
 - [x] A failure that already used the side timeout does not start another attempt of that length. A short transient failure can still use the one allowed retry.
 - [x] A stock cache hit is returned before a worker plan is created. The pair does not launch a stock worker and does not record `started` or `spawned` for that identity.
-- [ ] Read GOLEM `GraphVerifier`: an invalid graph is rejected before evaluation. Check that a worker result whose identity does not match the attempt cannot be reused from the stock cache.
+- [x] A stock cache entry whose attempt identity names another side, task, or attempt is not loaded and is not stored.
+- [ ] Read GOLEM `has_no_cycle`: a cyclic graph is rejected before evaluation. Check that a recovered side cannot adopt a worker result whose `attempt_id` belongs to a different attempt.

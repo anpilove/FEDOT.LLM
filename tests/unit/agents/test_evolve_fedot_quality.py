@@ -999,6 +999,63 @@ def test_stock_cache_hit_does_not_open_another_worker_attempt(tmp_path, monkeypa
     assert async_row["stock_result"].metric_observations["cache_hit"] is True
 
 
+def test_stock_cache_rejects_a_worker_result_from_another_attempt(tmp_path):
+    from fedotllm.agents.evolve.evaluation import fedot_quality as fq
+    from fedotllm.agents.evolve.types import ScoreResult
+
+    cache = tmp_path / "stock_cache"
+    fq.bind_stock_cache(cache)
+    registry = load_quality_registry()
+    dataset = get_dataset("openml-31-credit-g", registry)
+    checkout = tmp_path / "FEDOT"
+    checkout.mkdir()
+    source_sha256 = fq._source_sha256(str(checkout.resolve()))
+    identity = fq.stock_cache_identity(
+        dataset, registry, n_jobs=8, source_sha256=source_sha256
+    )
+    path = fq._stock_cache_path(dataset, registry, 8)
+    path.write_text(json.dumps({
+        "task_id": dataset.task_id,
+        "status": "ok",
+        "score": 0.77,
+        "duration_s": 1.0,
+        "metric_observations": {
+            "metric_valid": True,
+            "side": "patch",
+            "attempt": 2,
+            "proposal_id": "other-proposal",
+            "attempt_id": f"other-proposal:{dataset.task_id}:patch:2",
+        },
+        "identity": identity,
+    }))
+
+    assert fq._load_stock_cache(
+        dataset, registry, 8, env_hash="test", source_sha256=source_sha256
+    ) is None
+
+    path.unlink()
+    fq._store_stock_cache(
+        ScoreResult(
+            task_id=dataset.task_id,
+            status="ok",
+            score=0.77,
+            metric_observations={
+                "metric_valid": True,
+                "side": "patch",
+                "attempt": 2,
+                "attempt_id": f"other-proposal:{dataset.task_id}:patch:2",
+            },
+        ),
+        dataset,
+        registry,
+        8,
+        source_sha256=source_sha256,
+        stock_cache_root=cache,
+    )
+
+    assert not path.exists()
+
+
 @pytest.mark.parametrize("metric_observations", [{}, {"metric_valid": False}])
 def test_stock_cache_rejects_success_score_without_valid_metric_attestation(
     tmp_path, metric_observations
