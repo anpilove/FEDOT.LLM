@@ -85,6 +85,76 @@ def test_one_invalid_lift_does_not_keep_the_rest_of_the_pack():
     assert missing.reason == "timeout_or_invalid"
 
 
+def test_evidence_signal_does_not_keep_when_another_lift_is_invalid():
+    stock = {
+        "cholesterol": _row("cholesterol", "ok", 50.0),
+        "rf": _row("rf", "ok", 0.70),
+    }
+    patched = {
+        "cholesterol": _row("cholesterol", "ok", 49.8),
+        "rf": _row("rf", "invalid", float("nan"), "memory_error"),
+    }
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("cholesterol", "rf"),
+        protect_ids=("cholesterol", "rf"),
+        evidence_only=True,
+    )
+
+    assert decision.keep is False
+    assert decision.reason == "timeout_or_invalid"
+    assert decision.infrastructure_error is True
+
+
+def test_stock_crash_is_not_a_measured_baseline():
+    stock = {"catboost": _row("catboost", "crash", 0.5)}
+    patched = {"catboost": _row("catboost", "ok", 0.90)}
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        evidence_only=True,
+    )
+
+    assert decision.keep is False
+    assert decision.reason == "timeout_or_invalid"
+    assert decision.infrastructure_error is True
+
+
+def test_evidence_confirmation_counts_a_crashed_seed(tmp_path):
+    from fedotllm.agents.evolve.controller.confirmation import confirm_dev
+    from fedotllm.agents.evolve.evaluation.judge import verdict
+
+    def stock(exam_ids, *, seed=42, **_kwargs):
+        status = "crash" if seed == 44 else "ok"
+        score = 0.5 if status == "crash" else 0.80
+        return {task_id: ScoreResult(task_id, status, score) for task_id in exam_ids}
+
+    def patched(exam_ids, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.90) for task_id in exam_ids}
+
+    confirmed, detail = confirm_dev(
+        tmp_path,
+        tmp_path,
+        ("catboost",),
+        ("catboost",),
+        ("catboost",),
+        evidence_only=True,
+        measure_stock_fn=stock,
+        measure_patched_fn=patched,
+        verdict_fn=verdict,
+    )
+
+    assert confirmed is False
+    assert detail["seed_confirmed"] is False
+    assert detail["infrastructure_failures"] == 1
+    assert detail["improved_seeds"] == 2
+
+
 def test_affected_metric_treats_candidate_invalid_as_regressed():
     label, delta = _normalized_delta(
         "rf",

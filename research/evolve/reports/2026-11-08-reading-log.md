@@ -17,6 +17,7 @@ no quality KEEP, no OpenML registry run.
 - `storage_guard.py` treats errno 28 and 122 as capacity failures. The worker previously recognized only errno 28, so a quota error during fit became `fedot_fit_error`.
 - `supervisor.py` returns immediately when the saved ledger is `storage_error`, and a child exit 75 also latches that state. `drain` itself was still willing to select `queued` and `running` jobs.
 - GOLEM fitness comparison: an invalid fitness is never better than a measured one, so a failed evaluation is not a successful individual. `compare_pack` previously skipped an invalid lift dataset and could still return `keep=True` from the other datasets.
+- GOLEM `EvaluationDispatcher.apply_evaluation_results` drops an individual whose evaluation returned nothing. `population_evaluation_info` warns when half or fewer of the population evaluated. `compare_pack` previously substituted the task sentinel for `status=crash`, so a crashed stock side became a numeric baseline. `confirm_dev` counted only `timeout` and `invalid`, so that crashed seed was skipped and the other seeds could still confirm a metric signal.
 
 ## Found
 
@@ -45,4 +46,5 @@ no quality KEEP, no OpenML registry run.
 - [x] The supervisor does not relaunch a latched `storage_error`. Drain now refuses too, before it selects `queued` or `running` jobs.
 - [x] One invalid lift dataset blocks `compare_pack` KEEP. A candidate failure stays a broken patch. Any other missing score stays infrastructure and `keep=False`.
 - [x] Quality decision already returns `keep=None` when any dataset is unresolved. A test now locks one measured gain plus one `invalid` dataset.
-- [ ] Check `evidence_only` compare: a small positive signal must not become KEEP when another lift dataset is invalid.
+- [x] `evidence_only` does not return `metric_signal` when another lift dataset is invalid. A stock `crash` is not a sentinel baseline. One crashed DEV seed counts as infrastructure and blocks confirmation.
+- [ ] Read the GOLEM dispatcher warning at 50% successful evaluations and check that a quality pack with half or fewer measured datasets cannot be summarized as measured.

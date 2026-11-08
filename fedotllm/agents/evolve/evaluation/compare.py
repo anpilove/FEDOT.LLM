@@ -20,9 +20,9 @@ def _failure_kind(result: ScoreResult) -> str | None:
     return kind if isinstance(kind, str) else None
 
 
-def _numeric(result: ScoreResult, sentinel: float) -> float | None:
-    if result.status == "crash":
-        return sentinel
+def _numeric(result: ScoreResult) -> float | None:
+    # A crash has no fitness. GOLEM drops an individual that was not evaluated
+    # and never treats an invalid fitness as a measured value.
     if result.status != "ok" or not math.isfinite(result.score):
         return None
     return result.score
@@ -97,14 +97,14 @@ def compare_pack(
     lift_ok = False
     best: float | None = None
     for task_id in lift_ids:
-        hib, floor, sent, mode = _spec(
+        hib, floor, _sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
         if patched_broke(stock[task_id], patched[task_id]):
             lift_deltas[task_id] = None
             continue
-        a = _numeric(stock[task_id], sent)
-        b = _numeric(patched[task_id], sent)
+        a = _numeric(stock[task_id])
+        b = _numeric(patched[task_id])
         if a is None or b is None:
             lift_deltas[task_id] = None
             continue
@@ -139,7 +139,7 @@ def compare_pack(
             infrastructure_error=True,
         )
     for task_id in protect_ids:
-        hib, floor, sent, mode = _spec(
+        hib, floor, _sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
         if patched_broke(stock[task_id], patched[task_id]):
@@ -150,8 +150,8 @@ def compare_pack(
                 target_delta=best,
                 regression_deltas=regressions,
             )
-        a = _numeric(stock[task_id], sent)
-        b = _numeric(patched[task_id], sent)
+        a = _numeric(stock[task_id])
+        b = _numeric(patched[task_id])
         if a is None or b is None:
             regressions[task_id] = None
             return Decision(
