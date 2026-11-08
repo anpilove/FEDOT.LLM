@@ -496,6 +496,30 @@ def _identity_matches(payload: dict, expected: dict) -> bool:
     return all(blob.get(key) == value for key, value in expected.items())
 
 
+def _stock_cache_hit(
+    dataset: QualityDataset,
+    registry: QualityRegistry,
+    checkout: Path,
+    *,
+    n_jobs: int,
+    python: str,
+    stock_cache_root: Path | str | None,
+    env_hash: str,
+) -> ScoreResult | None:
+    """Return a measured stock identity. GOLEM elitism does not evaluate it again."""
+
+    return _load_stock_cache(
+        dataset,
+        registry,
+        n_jobs,
+        env_hash=env_hash,
+        fedot_commit=_fedot_commit(checkout),
+        source_sha256=_source_sha256(str(checkout.resolve())),
+        worker_runtime=interpreter_identity(checkout, executable=python),
+        stock_cache_root=stock_cache_root,
+    )
+
+
 def _load_stock_cache(
     dataset: QualityDataset,
     registry: QualityRegistry,
@@ -814,15 +838,14 @@ def run_quality_side(
                 error=exc,
             )
     if side == "stock":
-        cached = _load_stock_cache(
+        cached = _stock_cache_hit(
             dataset,
             registry,
-            spec["n_jobs"],
-            env_hash=env_hash,
-            fedot_commit=fedot_commit,
-            source_sha256=source_sha256,
-            worker_runtime=worker_runtime,
+            checkout,
+            n_jobs=spec["n_jobs"],
+            python=python,
             stock_cache_root=stock_cache_root,
+            env_hash=env_hash,
         )
         if cached is not None:
             hit_path = (cached.metric_observations or {}).get("cache_path") or cache_path
@@ -1262,6 +1285,23 @@ def run_quality_pair(
             if on_side_event is not None:
                 on_side_event(side_spec, side, "reused", previous, attempt_count or 1)
             return previous
+        if side == "stock":
+            cached = _stock_cache_hit(
+                dataset,
+                registry,
+                checkout,
+                n_jobs=spec["n_jobs"],
+                python=python,
+                stock_cache_root=stock_cache_root,
+                env_hash=f"{registry.identity}|{dataset.task_id}|stock|{spec['n_jobs']}",
+            )
+            if cached is not None:
+                owner_paths = (cached.metric_observations or {}).get("worker_paths")
+                if isinstance(owner_paths, dict):
+                    side_spec["worker_paths"] = dict(owner_paths)
+                if on_side_event is not None:
+                    on_side_event(side_spec, side, "finished", cached, attempt_count or 1)
+                return cached
         attempt = attempt_count + 1
         while True:
             _check_cancellation(cancellation_event)
@@ -1393,6 +1433,25 @@ def _run_quality_pair_async(
             reused: Future[ScoreResult] = Future()
             reused.set_result(prior)
             return reused
+        if side == "stock":
+            cached = _stock_cache_hit(
+                dataset,
+                registry,
+                checkout,
+                n_jobs=spec["n_jobs"],
+                python=python,
+                stock_cache_root=stock_cache_root,
+                env_hash=f"{registry.identity}|{dataset.task_id}|stock|{spec['n_jobs']}",
+            )
+            if cached is not None:
+                owner_paths = (cached.metric_observations or {}).get("worker_paths")
+                if isinstance(owner_paths, dict):
+                    side_spec["worker_paths"] = dict(owner_paths)
+                if on_side_event is not None:
+                    on_side_event(side_spec, side, "finished", cached, attempt_count or 1)
+                reused_cache: Future[ScoreResult] = Future()
+                reused_cache.set_result(cached)
+                return reused_cache
 
         current_attempt = attempt_count + attempt + 1
         side_spec["worker_paths"] = create_worker_artifact_plan(

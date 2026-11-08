@@ -900,6 +900,105 @@ def test_stock_cache_requires_exact_compute_profile_and_complete_identity(tmp_pa
     assert hit.metric_observations["cache_hit"] is True
 
 
+def test_stock_cache_hit_does_not_open_another_worker_attempt(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.evaluation import fedot_quality as fq
+
+    cache = tmp_path / "stock_cache"
+    fq.bind_stock_cache(cache)
+    registry = load_quality_registry()
+    dataset = get_dataset("openml-31-credit-g", registry)
+    checkout = tmp_path / "FEDOT"
+    checkout.mkdir()
+    monkeypatch.setattr(fq, "_fedot_commit", lambda _checkout: "commit-a")
+    monkeypatch.setattr(fq, "_source_sha256", lambda _checkout: "source-a")
+    monkeypatch.setattr(fq, "fedot_python", lambda _checkout: sys.executable)
+    monkeypatch.setattr(fq, "interpreter_identity", lambda *_args, **_kwargs: "runtime-a")
+    monkeypatch.setattr(fq, "clean_subprocess_env", lambda *_args, **_kwargs: {"PATH": ""})
+    identity = fq.stock_cache_identity(
+        dataset,
+        registry,
+        fedot_commit="commit-a",
+        source_sha256="source-a",
+        n_jobs=4,
+        worker_runtime="runtime-a",
+    )
+    fq._stock_cache_path(dataset, registry, 4).write_text(json.dumps({
+        "task_id": dataset.task_id,
+        "status": "ok",
+        "score": 0.77,
+        "duration_s": 12.0,
+        "metric_observations": {"metric_valid": True, "search_ran": True},
+        "identity": identity,
+    }))
+    launched = []
+
+    def fake_worker(cmd, **_kwargs):
+        spec = json.loads(Path(cmd[cmd.index("--spec-json") + 1]).read_text(encoding="utf-8"))
+        launched.append(spec["side"])
+        out_path = Path(cmd[cmd.index("--out") + 1])
+        out_path.write_text(json.dumps({
+            "task_id": dataset.task_id,
+            "side": spec["side"],
+            "attempt": spec["attempt"],
+            "attempt_id": spec["attempt_id"],
+            "worker_invocation_id": spec["worker_invocation_id"],
+            "registry_identity": spec["registry_identity"],
+            "evaluation_identity": spec.get("evaluation_identity"),
+            "status": "ok",
+            "score": 0.7,
+            "duration_s": 1.0,
+            "metric_observations": {"metric_valid": True, "search_ran": True},
+        }))
+        return WorkerOutcome(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(fq, "run_worker", fake_worker)
+    events = []
+    result = fq.run_quality_pair(
+        dataset,
+        stock_checkout=checkout,
+        patch_checkout=checkout,
+        n_jobs=4,
+        registry=registry,
+        on_side_event=lambda _spec, side, phase, score, attempt: events.append(
+            (side, phase, attempt)
+        ),
+    )
+
+    assert launched == ["patch"]
+    assert [event for event in events if event[0] == "stock"] == [("stock", "finished", 1)]
+    assert result["stock_result"].score == 0.77
+    assert result["stock_result"].metric_observations["cache_hit"] is True
+
+    from concurrent.futures import Future
+
+    def submit_immediately(work, **_kwargs):
+        future = Future()
+        try:
+            future.set_result(work())
+        except BaseException as exc:
+            future.set_exception(exc)
+        return future
+
+    launched.clear()
+    async_events = []
+    async_row = fq._run_quality_pair_async(
+        dataset,
+        stock_checkout=checkout,
+        patch_checkout=checkout,
+        n_jobs=4,
+        registry=registry,
+        submit_compute=submit_immediately,
+        on_side_event=lambda _spec, side, phase, score, attempt: async_events.append(
+            (side, phase, attempt)
+        ),
+    ).result(timeout=2)
+
+    assert launched == ["patch"]
+    assert [event for event in async_events if event[0] == "stock"] == [("stock", "finished", 1)]
+    assert async_row["stock_result"].score == 0.77
+    assert async_row["stock_result"].metric_observations["cache_hit"] is True
+
+
 @pytest.mark.parametrize("metric_observations", [{}, {"metric_valid": False}])
 def test_stock_cache_rejects_success_score_without_valid_metric_attestation(
     tmp_path, metric_observations
