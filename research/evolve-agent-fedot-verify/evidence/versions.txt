@@ -1,0 +1,10 @@
+date_utc=2026-11-08T12:29:29Z
+branch=cursor/evolve-agent-fedot-verify-01e8
+fedotllm_commit=467957bd10a150559f8a79a204a100fd90fac6b5
+base_branch=origin/research/evolve-agent-setup
+base_commit=467957bd10a150559f8a79a204a100fd90fac6b5
+requested_task6_commit=949f285 (NOT present on remote)
+fedot_pin_manifest=8990f28b0664c99f7eb2fddcee3931151fe16e79
+fedot_git_head=8990f28b0664c99f7eb2fddcee3931151fe16e79
+fedot_pypi_version=0.7.5
+python=3.11.18

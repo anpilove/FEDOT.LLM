@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.18, pytest-8.4.0, pluggy-1.6.0 -- /workspace/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.9.0, mock-3.14.1, asyncio-1.0.0, Faker-37.3.0, langsmith-0.3.45, cov-6.1.1
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 6 items
+
+tests/unit/agents/test_evolve_mvp.py::test_dev_final_indices_are_disjoint_and_repeatable PASSED [ 16%]
+tests/unit/agents/test_evolve_transfer.py::test_ordinary_final_without_transfer_never_evaluates_or_accepts PASSED [ 33%]
+tests/unit/agents/test_evolve_transfer.py::test_final_reserve_is_available_only_to_final_stage PASSED [ 50%]
+tests/unit/agents/test_evolve_quality_cancellation.py::test_dataset_parallelism_never_exceeds_seven_even_with_large_quota PASSED [ 66%]
+tests/unit/agents/test_evolve_quality_reliability.py::test_unfinished_spawned_event_recovers_as_interrupted_attempt PASSED [ 83%]
+tests/unit/agents/test_evolve_review_regressions.py::test_dev_success_is_not_final_acceptance_and_final_uses_ablated_edits PASSED [100%]
+
+============================== 6 passed in 1.82s ===============================
