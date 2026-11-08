@@ -114,6 +114,84 @@ def test_async_resume_reuses_completed_stock_and_runs_unfinished_patch(
     assert row["patched_result"].score == 0.9
 
 
+def test_spent_side_budget_does_not_start_another_full_attempt(tmp_path, monkeypatch):
+    registry = quality_registry.load_quality_registry()
+    dataset = registry.datasets[0]
+    task_id = dataset.task_id
+    calls = []
+
+    def full_budget_transient(_dataset, *, side, **_kwargs):
+        calls.append(side)
+        if side == "stock":
+            return ScoreResult(
+                task_id=task_id,
+                status="crash",
+                score=float("nan"),
+                detail="ConnectionError: reset",
+                duration_s=float(registry.timeout_seconds),
+            )
+        return ScoreResult(
+            task_id=task_id,
+            status="ok",
+            score=0.5,
+            metric_observations={"metric_valid": True, "search_ran": True},
+        )
+
+    monkeypatch.setattr(quality, "fedot_python", lambda checkout: sys.executable)
+    monkeypatch.setattr(quality, "_stock_cache_path", lambda *args, **kwargs: None)
+    monkeypatch.setattr(quality, "run_quality_side", full_budget_transient)
+
+    result = quality.run_quality_pair(
+        dataset,
+        stock_checkout=tmp_path / "stock",
+        patch_checkout=tmp_path / "patch",
+        registry=registry,
+    )
+
+    assert calls == ["stock", "patch"]
+    assert result["stock_result"].status == "crash"
+    assert result["stock_result"].duration_s == float(registry.timeout_seconds)
+
+
+def test_async_resume_does_not_extend_a_spent_side_budget(tmp_path, monkeypatch):
+    registry = quality_registry.load_quality_registry()
+    dataset = registry.datasets[0]
+    task_id = dataset.task_id
+    spent = ScoreResult(
+        task_id=task_id,
+        status="crash",
+        score=float("nan"),
+        detail="ConnectionError: reset",
+        duration_s=float(registry.timeout_seconds),
+    )
+    calls = []
+
+    def should_not_rerun(_dataset, *, side, **_kwargs):
+        calls.append(side)
+        raise AssertionError("a side that already used its timeout must not start again")
+
+    monkeypatch.setattr(quality, "fedot_python", lambda checkout: sys.executable)
+    monkeypatch.setattr(quality, "_stock_cache_path", lambda *args, **kwargs: None)
+    monkeypatch.setattr(quality, "run_quality_side", should_not_rerun)
+
+    row = quality._run_quality_pair_async(
+        dataset,
+        stock_checkout=tmp_path / "stock",
+        patch_checkout=tmp_path / "patch",
+        registry=registry,
+        submit_compute=_submit_immediately,
+        prior_side_results={
+            (task_id, "stock"): spent,
+            (task_id, "patch"): ScoreResult(task_id=task_id, status="ok", score=0.4),
+        },
+        prior_attempt_counts={(task_id, "stock"): 1, (task_id, "patch"): 1},
+        artifact_root=tmp_path / "artifacts",
+    ).result(timeout=1)
+
+    assert calls == []
+    assert row["stock_result"] is spent
+
+
 def test_quality_resource_check_preserves_storage_error_without_exception_notes(tmp_path, monkeypatch):
     import errno
 

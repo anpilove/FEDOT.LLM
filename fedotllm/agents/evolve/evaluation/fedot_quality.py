@@ -192,6 +192,41 @@ def _retryable_quality_failure(result: ScoreResult) -> bool:
     return any(marker in text for marker in transient_markers)
 
 
+def _attempt_elapsed_seconds(result: ScoreResult) -> float:
+    observations = result.metric_observations or {}
+    for key in ("side_elapsed_seconds", "elapsed_seconds"):
+        value = observations.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(value) and value >= 0:
+            return float(value)
+    duration = result.duration_s
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        return 0.0
+    if not math.isfinite(duration) or duration < 0:
+        return 0.0
+    return float(duration)
+
+
+def _next_attempt_fits(result: ScoreResult, *, completed_attempts: int, side_timeout: float) -> bool:
+    """GOLEM skips a generation that is longer than the time still left.
+
+    The next attempt fits only when the side timeout is strictly longer than
+    the time already spent plus the average length of the completed attempts.
+    A timeout, or a failure that already used the whole side budget, does not
+    receive another attempt of that length.
+    """
+
+    if not _retryable_quality_failure(result):
+        return False
+    if not math.isfinite(side_timeout) or side_timeout <= 0:
+        return False
+    completed = max(1, completed_attempts)
+    elapsed = _attempt_elapsed_seconds(result)
+    average = elapsed / completed
+    return side_timeout > elapsed + average
+
+
 def _async_stock_flight_key(
     dataset: QualityDataset,
     checkout: Path,
@@ -1217,7 +1252,9 @@ def run_quality_pair(
         previous = prior_side_results.get(key)
         attempt_count = int(prior_attempt_counts.get(key, 0))
         if previous is not None and (
-            not _retryable_quality_failure(previous) or attempt_count >= 2
+            attempt_count >= 2 or not _next_attempt_fits(
+                previous, completed_attempts=attempt_count, side_timeout=float(registry.timeout_seconds),
+            )
         ):
             original_paths = (previous.metric_observations or {}).get("worker_paths")
             if isinstance(original_paths, dict):
@@ -1257,7 +1294,9 @@ def run_quality_pair(
             )
             if on_side_event is not None:
                 on_side_event(side_spec, side, "finished", result, attempt)
-            if attempt >= 2 or not _retryable_quality_failure(result):
+            if attempt >= 2 or not _next_attempt_fits(
+                result, completed_attempts=attempt, side_timeout=float(registry.timeout_seconds),
+            ):
                 return result
             _check_cancellation(cancellation_event)
             attempt += 1
@@ -1342,7 +1381,9 @@ def _run_quality_pair_async(
         attempt_count = int(attempt_counts.get(key, 0))
         prior = previous_results.get(key)
         if prior is not None and (
-            not _retryable_quality_failure(prior) or attempt_count >= 2
+            attempt_count >= 2 or not _next_attempt_fits(
+                prior, completed_attempts=attempt_count, side_timeout=float(registry.timeout_seconds),
+            )
         ):
             original_paths = (prior.metric_observations or {}).get("worker_paths")
             if isinstance(original_paths, dict):
@@ -1617,7 +1658,11 @@ def _run_quality_pair_async(
                 retried.set_exception(exc)
                 return
             current_attempt = int(attempt_counts.get((dataset.task_id, side), 0)) + retry + 1
-            if current_attempt < 2 and _retryable_quality_failure(side_result):
+            if current_attempt < 2 and _next_attempt_fits(
+                side_result,
+                completed_attempts=current_attempt,
+                side_timeout=float(registry.timeout_seconds),
+            ):
                 try:
                     _check_cancellation(cancellation_event)
                     next_future = retrying_side(side, checkout, retry + 1)

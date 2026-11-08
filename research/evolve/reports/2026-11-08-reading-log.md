@@ -22,6 +22,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `evaluate_single` returns `None` when `timer.is_time_limit_reached()` before it builds a fitness. The worker previously kept a holdout number as `metric_valid=true` when fit returned after reporting `FedotBudgetExceeded` or `budget exhausted`.
 - GOLEM `apply_evaluation_results` keeps only evaluations that are not `None`. A worker that exits at the moment the parent deadline is already reached was recorded as a normal completion, so its result file could stand in for the timeout. Recovery already prefers a valid timeout manifest; that preference was not locked against a newer result file.
 - GOLEM `split_individuals_to_evaluate` skips an individual whose `fitness.valid` is already true. A `quality_task_worker_spawned` row for the same attempt used to erase a finished timeout and leave the side interrupted, so the next pair sent it through fit again.
+- GOLEM `OptimisationTimer` starts another generation only when the timeout is strictly longer than the time already spent plus the average generation. A transient failure that had already used the whole side budget still started a second attempt with a fresh full timeout.
 
 ## Found
 
@@ -55,4 +56,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A reported FEDOT budget timeout does not keep a later holdout number. The worker and the parent store `status=timeout`, `metric_valid=false`, and `discarded_holdout_score`.
 - [x] A completion observed at the deadline stays `task_timeout`. A newer result file next to a parent timeout manifest does not become the recovered metric.
 - [x] A finished timeout stays settled when a later spawn or start names the same attempt. That side is reused and is not sent through fit.
-- [ ] Read GOLEM `OptimisationTimer`: the next generation is skipped when the remaining time is shorter than the average generation. Check that a side already closed by timeout is not given another attempt of that length.
+- [x] A failure that already used the side timeout does not start another attempt of that length. A short transient failure can still use the one allowed retry.
+- [ ] Read GOLEM elitism: the best individuals are copied into the next population and are not evaluated again. Check that a stock cache hit does not launch a second worker for the same identity.
