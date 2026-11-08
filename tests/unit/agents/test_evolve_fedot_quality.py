@@ -409,7 +409,29 @@ def test_worker_metric_is_valid_even_when_composition_is_skipped():
     assert result.metric_observations["metric_valid"] is True
 
 
-@pytest.mark.parametrize("side", ["stock_result", "patched_result"])
+def test_parent_drops_a_holdout_number_reported_after_budget_timeout():
+    from fedotllm.agents.evolve.evaluation.fedot_quality import _score_from_payload
+
+    result = _score_from_payload(
+        "openml-31-credit-g",
+        {
+            "status": "ok",
+            "score": 0.73,
+            "log_tail": "FedotBudgetExceeded: final refit reserve exhausted\nholdout metric 0.73",
+            "metric_observations": {
+                "metric_valid": True,
+                "fedot_fit_budget_outcome": "budget exhausted",
+            },
+        },
+        env_hash="test-env",
+        cmd="worker",
+    )
+
+    assert result.status == "timeout"
+    assert result.score != result.score
+    assert result.metric_observations["metric_valid"] is False
+    assert result.metric_observations["failure_kind"] == "fedot_budget_timeout"
+    assert result.metric_observations["discarded_holdout_score"] == 0.73
 @pytest.mark.parametrize("invalid_observations", [{}, {"metric_valid": False}])
 def test_quality_decision_refuses_unattested_stock_or_patch_metrics(
     side, invalid_observations

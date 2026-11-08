@@ -452,6 +452,11 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
                 raise OSError(122, "Quota")
             if fail_stage == "budget":
                 raise FedotBudgetExceeded("final refit reserve exhausted")
+            if fail_stage == "budget_with_holdout":
+                logging.info("holdout metric 0.125")
+                logging.info("FedotBudgetExceeded: final refit reserve exhausted")
+                self.fit_budget_outcome = "budget exhausted"
+                return
 
         def predict(self, values):
             if fail_stage == "predict":
@@ -840,6 +845,45 @@ def test_worker_records_internal_fedot_budget_timeout_without_inventing_metric(t
     assert observations["metric_valid"] is False
     assert observations["fedot_budget_phase"] == "final_refit"
     assert observations["fedot_budget_seconds"] == 1500.0
+
+
+def test_budget_timeout_holdout_number_is_not_a_valid_metric(tmp_path, monkeypatch, capsys):
+    _install_fixture_dependencies(
+        monkeypatch,
+        fail_stage="budget_with_holdout",
+        expected_timeout_policy="return_best",
+        expected_final_fit_reserve_seconds=1500,
+        expected_max_pipeline_fit_minutes=1.8,
+        expected_max_pipeline_evaluation_minutes=9,
+        verbose_log=False,
+    )
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "fedot_timeout_policy": "return_best", "final_fit_reserve_seconds": 1500,
+        "seed": 42, "n_jobs": 4, "cv_folds": 5,
+        "max_pipeline_fit_time_seconds": 108,
+        "max_pipeline_evaluation_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "proposal_id": "proposal-7", "attempt_id": "proposal-7:fixture:patch:1",
+        "side": "patch", "attempt": 1, "worker_log_path": "/logs/worker.log",
+        "registry_identity": "registry-v2-return-best",
+        "max_pipeline_evaluation_policy": "per-cv-candidate-v1",
+    }))
+    out = tmp_path / "payload.json"
+
+    rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    payload = json.loads(out.read_text())
+
+    assert rc == 0, payload.get("detail")
+    assert payload["status"] == "timeout"
+    assert payload["score"] is None
+    assert payload["failure_kind"] == "fedot_budget_timeout"
+    observations = payload["metric_observations"]
+    assert observations["metric_valid"] is False
+    assert observations["metric_outcome"] == "not_measured"
+    assert observations["discarded_holdout_score"] == 0.125
 
 
 @pytest.mark.parametrize("composer_options", [[], "", 0, None])

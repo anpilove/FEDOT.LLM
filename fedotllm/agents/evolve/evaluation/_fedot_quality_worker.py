@@ -945,6 +945,7 @@ def _evaluate_worker_with_logging(
             if not math.isfinite(float(score)):
                 raise ValueError(f"FEDOT returned a non-finite {dataset.metric} score: {score}")
         log_text = log_stream.getvalue()
+        from fedotllm.agents.evolve.evaluation.return_best_policy import budget_timeout_reported
         search_ran, search_detail = _search_ran(
             model, log_text, composition_started=log_stream.composition_started,
             composition_skipped=log_stream.composition_skipped,
@@ -1008,6 +1009,23 @@ def _evaluate_worker_with_logging(
             },
             "log_tail": log_text[-4000:],
         }
+        if budget_timeout_reported(
+            payload["metric_observations"].get("fedot_fit_budget_outcome"),
+            log_text,
+        ):
+            # The holdout number was printed after the budget report. GOLEM
+            # drops that evaluation, so it is not an attested metric.
+            payload["metric_observations"]["discarded_holdout_score"] = score
+            payload["metric_observations"]["metric_valid"] = False
+            payload["metric_observations"]["metric_outcome"] = "not_measured"
+            payload["metric_observations"]["failure_kind"] = "fedot_budget_timeout"
+            payload.update(
+                status="timeout",
+                outcome="timeout",
+                failure_kind="fedot_budget_timeout",
+                score=None,
+                detail="FEDOT budget timeout reported after a holdout number",
+            )
         if not search_ran:
             payload["traceback"] = ""
     except Exception as exc:

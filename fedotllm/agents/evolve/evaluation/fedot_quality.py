@@ -37,6 +37,7 @@ from fedotllm.agents.evolve.evaluation.quality_registry import (
     load_quality_registry,
 )
 from fedotllm.agents.evolve.evaluation.pair_scheduler import SharedPairScheduler
+from fedotllm.agents.evolve.evaluation.return_best_policy import budget_timeout_reported
 from fedotllm.agents.evolve.evaluation.stock_flights import StockFlightRegistry
 from fedotllm.agents.evolve.execution.guard import repo_root
 from fedotllm.agents.evolve.execution.process import (
@@ -622,6 +623,17 @@ def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str)
     if not math.isfinite(duration) or duration < 0:
         raise ValueError("duration_s must be finite and nonnegative")
     raw_score = payload.get("score")
+    if status == "ok" and budget_timeout_reported(
+        observations.get("fedot_fit_budget_outcome"),
+        str(payload.get("log_tail") or ""),
+    ):
+        # A parent must not store a holdout number from a reported budget stop.
+        observations["discarded_holdout_score"] = raw_score
+        observations["metric_valid"] = False
+        observations["metric_outcome"] = "not_measured"
+        observations["failure_kind"] = "fedot_budget_timeout"
+        status = "timeout"
+        raw_score = None
     if status == "ok":
         if observations.get("metric_valid") is not True:
             raise ValueError(

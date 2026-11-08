@@ -10,8 +10,17 @@ call shape and does not pretend the pin implements return_best.
 from __future__ import annotations
 
 import inspect
+import re
 
 from fedotllm.agents.evolve.commands.preflight import WORKER_PARAMETERS
+
+# GOLEM evaluate_single returns None once its timer is reached. A later
+# holdout number is not a fitness. These phrases are the FEDOT budget report,
+# not the separate "timeout is too small for composing" skip.
+_BUDGET_TIMEOUT_TEXT = re.compile(
+    r"fedotbudgetexceeded|budget exhausted|budget exceeded",
+    re.IGNORECASE,
+)
 
 _EXPLICIT = (
     inspect.Parameter.POSITIONAL_ONLY,
@@ -31,6 +40,14 @@ class ReturnBestIncompatible(RuntimeError):
         }
         names = ", ".join(self.missing)
         super().__init__(f"Fedot.__init__ missing return_best parameters: {names}")
+
+
+def budget_timeout_reported(outcome, log_text: str = "") -> bool:
+    """True when FEDOT reported that its fit budget already stopped the search."""
+
+    if isinstance(outcome, str) and _BUDGET_TIMEOUT_TEXT.search(outcome):
+        return True
+    return bool(_BUDGET_TIMEOUT_TEXT.search(log_text or ""))
 
 
 def signature_compatibility(fedot_cls: type) -> dict:
