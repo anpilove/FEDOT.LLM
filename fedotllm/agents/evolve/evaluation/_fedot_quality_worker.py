@@ -758,6 +758,13 @@ def _evaluate_worker_with_logging(
 
         with timings.measure("fedot_import"):
             from fedot.api.main import Fedot
+            from fedotllm.agents.evolve.evaluation.return_best_policy import (
+                ReturnBestIncompatible, signature_compatibility,
+            )
+            if fedot_timeout_policy == "return_best":
+                compatibility = signature_compatibility(Fedot)
+                if not compatibility["compatible"]:
+                    raise ReturnBestIncompatible(compatibility["missing"])
 
         with timings.measure("load_fold"):
             dataset, fold = load_worker_fold(spec)
@@ -918,6 +925,7 @@ def _evaluate_worker_with_logging(
         payload = {
             "task_id": dataset.task_id,
             "status": status,
+            "outcome": status,
             "score": score,
             "detail": search_detail if not search_ran else "",
             "n_train": fold["n_train"],
@@ -971,7 +979,10 @@ def _evaluate_worker_with_logging(
     except Exception as exc:
         failed_stage = timings.failed_stage
         is_fedot_budget_timeout = _is_fedot_budget_timeout(exc)
-        if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        from fedotllm.agents.evolve.evaluation.return_best_policy import ReturnBestIncompatible
+        if isinstance(exc, ReturnBestIncompatible):
+            failure_kind = "return_best_incompatible"
+        elif isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
             failure_kind = "storage_error"
         elif is_fedot_budget_timeout:
             failure_kind = "fedot_budget_timeout"

@@ -593,7 +593,7 @@ def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str)
     if not isinstance(observations, dict):
         raise ValueError("metric_observations must be a JSON object")
     observations = dict(observations)
-    for key in ("failure_kind", "failed_stage", "last_stage", "stage_timings", "stage_status_path"):
+    for key in ("outcome", "failure_kind", "failed_stage", "last_stage", "stage_timings", "stage_status_path"):
         if key in payload:
             observations[key] = payload[key]
     status = payload.get("status")

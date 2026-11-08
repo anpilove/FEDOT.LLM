@@ -114,7 +114,15 @@ def test_worker_owns_tuning_guard_for_fit_and_preserves_its_diagnostics(
                     "cleanup_verified": state["cleaned"], "evaluations": 2}
 
     class Model:
-        def __init__(self, **kwargs):
+        def __init__(
+            self, timeout_policy, final_fit_reserve_seconds, cv_folds,
+            max_pipeline_fit_time, max_pipeline_evaluation_time, **kwargs,
+        ):
+            assert timeout_policy == "return_best"
+            assert final_fit_reserve_seconds == 300
+            assert max_pipeline_fit_time > 0
+            assert max_pipeline_evaluation_time > 0
+            assert cv_folds > 0
             self.api_composer = SimpleNamespace(was_optimised=True, was_tuned=True)
             self.history = None
 

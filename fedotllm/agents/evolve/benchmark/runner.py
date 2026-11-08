@@ -984,7 +984,7 @@ def run_component(
     if component == "micro-fast":
         from fedotllm.agents.evolve.benchmark.micro import run_stock_microbenchmark
 
-        payload = run_stock_microbenchmark(source).as_dict()
+        payload = run_stock_microbenchmark(source, workspace).as_dict()
         (workspace / "micro_fast_result.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )

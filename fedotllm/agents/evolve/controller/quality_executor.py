@@ -794,6 +794,8 @@ def measure_fedot_quality(
                     payload[key] = observations[key]
             payload["result"] = {
                 "status": result.status,
+                "outcome": observations.get("outcome") or result.status,
+                "failure_kind": observations.get("failure_kind"),
                 "score": result.score if math.isfinite(float(result.score)) else None,
                 "detail": result.detail,
                 "traceback": result.traceback,

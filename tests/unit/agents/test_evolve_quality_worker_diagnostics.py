@@ -372,7 +372,16 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
     monkeypatch.setitem(sys.modules, "fedot.api.api_utils.timeout", timeout_module)
 
     class FixtureFedot:
-        def __init__(self, **kwargs):
+        def __init__(
+            self, timeout_policy, final_fit_reserve_seconds, cv_folds,
+            max_pipeline_fit_time, max_pipeline_evaluation_time=None, **kwargs,
+        ):
+            kwargs["timeout_policy"] = timeout_policy
+            kwargs["final_fit_reserve_seconds"] = final_fit_reserve_seconds
+            kwargs["cv_folds"] = cv_folds
+            kwargs["max_pipeline_fit_time"] = max_pipeline_fit_time
+            if max_pipeline_evaluation_time is not None:
+                kwargs["max_pipeline_evaluation_time"] = max_pipeline_evaluation_time
             assert kwargs["timeout"] == 45
             assert kwargs["n_jobs"] == 4
             expected_fit = expected_max_pipeline_fit_minutes
