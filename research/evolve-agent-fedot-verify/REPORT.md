@@ -5,6 +5,18 @@
 Время фиксации: 2026-11-08 15:29 Europe/Moscow  
 Ничего не слито автоматически.
 
+## 0. Окружение (обязательное)
+
+Пользователь готовит Cloud Environment для этой проверки. **Его и нужно использовать** для A/A, FEDOT checkout, offline-ассетов и quality-прогонов — не собирать параллельный ad-hoc стек вместо него.
+
+Состояние на момент этого run:
+- Environment id: `498342df-a151-11f1-b532-320a589b8025` ([dashboard](https://cursor.com/dashboard/cloud-agents/environments/e/498342df-a151-11f1-b532-320a589b8025))
+- Этот агент **не** загрузился из build (`build: null` в `environment-info`)
+- Последний SUCCEEDED build `bld-20261108-14754188-…` — системный recurring snapshot без кастомного `install` под EvolveAgent/FEDOT/OpenML
+- В репо нет `environment.json`
+
+Правило для следующих шагов: дождаться готового env (или нового агента, загруженного из него); не объявлять quality-результат на самосборном venv.
+
 ## 1. Исходная точка (0,5 ч)
 
 | Артефакт | Значение | Статус |
@@ -14,11 +26,11 @@
 | FEDOT pin (manifest) | `8990f28b0664c99f7eb2fddcee3931151fe16e79` | доступен на GitHub |
 | FEDOT git checkout | `/tmp/fedot-verify/FEDOT` @ тот же SHA | 13/13 SHA-256 ассетов совпали |
 | PyPI `fedot==0.7.5` | site-packages | **без** `examples/real_cases/data` |
-| Python | 3.11.18 через `uv` | ок (`requires-python <3.12`) |
+| Python | 3.11.18 через `uv` | временный bootstrap этой сессии; целевой — env пользователя |
 | OpenML offline cache | только `tests/fixtures/openml/task_31.xml` | **не подготовлен** для 32 OpenML задач |
 | Teleport / ключи / платные API | не использовались | ок |
 
-Вывод фазы 1: репозиторий и pin FEDOT доступны; полный quality-эксперимент на registry **невозможен** без OpenML offline-кэша и без FEDOT API `timeout_policy=return_best`. Отчёт продолжен по плану.
+Вывод фазы 1: репозиторий и pin FEDOT доступны; полный quality-эксперимент на registry **невозможен** без готового Cloud Environment, OpenML offline-кэша и FEDOT API `timeout_policy=return_best`. Отчёт продолжен по плану.
 
 ## 2. Цикл агента (2 ч)
 
@@ -111,10 +123,11 @@ ModuleNotFoundError: fedot.core.optimisers.isolated_gp_optimizer
 
 **Не запускалась.** Недостающие ассеты/условия:
 
-1. OpenML offline cache для 32 задач registry
-2. Реализованный в FEDOT API `timeout_policy=return_best` (+ isolated optimizer, если dispatcher `isolated-candidate-process-v1`)
-3. Checkout FEDOT с `examples/real_cases/data` (не PyPI wheel) как `FEDOTLLM_REPO_PATH`
-4. Локальный commit `949f285` / пост-Task5/7 tip — отсутствует на remote
+1. Готовый Cloud Environment пользователя (этот run без `build`)
+2. OpenML offline cache для 32 задач registry
+3. Реализованный в FEDOT API `timeout_policy=return_best` (+ isolated optimizer, если dispatcher `isolated-candidate-process-v1`)
+4. Checkout FEDOT с `examples/real_cases/data` (не PyPI wheel) как `FEDOTLLM_REPO_PATH`
+5. Локальный commit `949f285` / пост-Task5/7 tip — отсутствует на remote
 
 **Вывода об улучшении качества нет.**
 
