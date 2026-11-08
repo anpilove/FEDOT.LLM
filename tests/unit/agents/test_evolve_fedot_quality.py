@@ -544,6 +544,21 @@ def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructur
     assert decision.unresolved_task_ids == ("fedot-ts-traffic",)
 
 
+def test_one_invalid_dataset_does_not_keep_the_proposal():
+    measured = _pair("openml-31-credit-g", 0.70, 0.90)
+    missing = _pair("openml-37-diabetes", 0.70, 0.90)
+    missing["patched_result"] = ScoreResult(
+        "openml-37-diabetes", "invalid", float("nan"),
+        metric_observations={"failure_kind": "memory_error", "metric_valid": False},
+    )
+
+    decision = decision_from_quality_jobs([measured, missing])
+
+    assert decision.keep is None
+    assert decision.quality_outcome == "not_evaluated"
+    assert "openml-37-diabetes" in decision.unresolved_task_ids
+
+
 def test_quality_keep_requires_gain_without_regression():
     rows = [
         _pair("openml-31-credit-g", 0.70, 0.82),

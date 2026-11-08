@@ -116,22 +116,25 @@ def compare_pack(
         if delta >= lift_need:
             lift_ok = True
     regressions: dict[str, float | None] = dict(lift_deltas)
-    if best is None:
-        broke = [
-            task_id for task_id in lift_ids
-            if patched_broke(stock[task_id], patched[task_id])
-        ]
-        if broke:
-            return Decision(
-                keep=False,
-                reason=f"regression {broke[0]} crashed after patch",
-                target_delta=None,
-                regression_deltas=regressions,
-            )
+    # GOLEM does not treat an invalid fitness as a successful individual.
+    # One lift dataset without a score blocks KEEP even if another dataset improved.
+    unevaluated = [task_id for task_id in lift_ids if lift_deltas.get(task_id) is None]
+    broke = [
+        task_id for task_id in unevaluated
+        if patched_broke(stock[task_id], patched[task_id])
+    ]
+    if broke:
+        return Decision(
+            keep=False,
+            reason=f"regression {broke[0]} crashed after patch",
+            target_delta=best,
+            regression_deltas=regressions,
+        )
+    if unevaluated:
         return Decision(
             keep=False,
             reason="timeout_or_invalid",
-            target_delta=None,
+            target_delta=best,
             regression_deltas=regressions,
             infrastructure_error=True,
         )

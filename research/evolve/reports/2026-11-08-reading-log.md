@@ -16,6 +16,7 @@ no quality KEEP, no OpenML registry run.
 - Linux reports memory pressure by delivering `SIGKILL`. Our own deadline and cancellation paths already record their outcomes before a missing result file is read, so a remaining `SIGKILL` is external. `SIGSEGV` stays a per-side fault.
 - `storage_guard.py` treats errno 28 and 122 as capacity failures. The worker previously recognized only errno 28, so a quota error during fit became `fedot_fit_error`.
 - `supervisor.py` returns immediately when the saved ledger is `storage_error`, and a child exit 75 also latches that state. `drain` itself was still willing to select `queued` and `running` jobs.
+- GOLEM fitness comparison: an invalid fitness is never better than a measured one, so a failed evaluation is not a successful individual. `compare_pack` previously skipped an invalid lift dataset and could still return `keep=True` from the other datasets.
 
 ## Found
 
@@ -42,4 +43,6 @@ no quality KEEP, no OpenML registry run.
 - [x] Errno 28 and 122 are `storage_error`. A decision that sees that kind pauses and does not call it a candidate failure. The parent still raises `StorageCapacityError`.
 - [x] A `StorageCapacityError` from measurement returns the proposal to `queued` with `keep` unset and reason `storage_capacity_exhausted`. It does not stay `running` and it is not a candidate verdict.
 - [x] The supervisor does not relaunch a latched `storage_error`. Drain now refuses too, before it selects `queued` or `running` jobs.
-- [ ] Read one GOLEM dispatcher note about a failed individual evaluation and check that a single dataset `invalid` does not mark the whole proposal `keep`.
+- [x] One invalid lift dataset blocks `compare_pack` KEEP. A candidate failure stays a broken patch. Any other missing score stays infrastructure and `keep=False`.
+- [x] Quality decision already returns `keep=None` when any dataset is unresolved. A test now locks one measured gain plus one `invalid` dataset.
+- [ ] Check `evidence_only` compare: a small positive signal must not become KEEP when another lift dataset is invalid.

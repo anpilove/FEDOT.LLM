@@ -60,6 +60,31 @@ def test_protect_invalid_fit_is_a_regression_not_infrastructure():
     assert decision.reason == "regression rf crashed after patch"
 
 
+def test_one_invalid_lift_does_not_keep_the_rest_of_the_pack():
+    stock = {
+        "catboost": _row("catboost", "ok", 0.80),
+        "rf": _row("rf", "ok", 0.70),
+    }
+    crashed = {
+        "catboost": _row("catboost", "ok", 0.90),
+        "rf": _row("rf", "invalid", float("nan"), "worker_error"),
+    }
+    unanswered = {
+        "catboost": _row("catboost", "ok", 0.90),
+        "rf": _row("rf", "invalid", float("nan"), "memory_error"),
+    }
+
+    crash = compare_pack(stock, crashed, lift_ids=("catboost", "rf"), protect_ids=("catboost",))
+    missing = compare_pack(stock, unanswered, lift_ids=("catboost", "rf"), protect_ids=("catboost",))
+
+    assert crash.keep is False
+    assert crash.infrastructure_error is False
+    assert "rf" in crash.reason
+    assert missing.keep is False
+    assert missing.infrastructure_error is True
+    assert missing.reason == "timeout_or_invalid"
+
+
 def test_affected_metric_treats_candidate_invalid_as_regressed():
     label, delta = _normalized_delta(
         "rf",
