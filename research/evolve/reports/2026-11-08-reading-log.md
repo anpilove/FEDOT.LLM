@@ -21,6 +21,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `STAGNATION_EVALUATION_PERCENTAGE` is 0.5. `population_evaluation_info` warns when `evaluated / pop_size <= 0.5`, including an empty population. Drain `stock_ok` previously treated every present `status=ok` stock row as a measured pack, and the stock-only CLI did the same without `metric_valid`.
 - GOLEM `evaluate_single` returns `None` when `timer.is_time_limit_reached()` before it builds a fitness. The worker previously kept a holdout number as `metric_valid=true` when fit returned after reporting `FedotBudgetExceeded` or `budget exhausted`.
 - GOLEM `apply_evaluation_results` keeps only evaluations that are not `None`. A worker that exits at the moment the parent deadline is already reached was recorded as a normal completion, so its result file could stand in for the timeout. Recovery already prefers a valid timeout manifest; that preference was not locked against a newer result file.
+- GOLEM `split_individuals_to_evaluate` skips an individual whose `fitness.valid` is already true. A `quality_task_worker_spawned` row for the same attempt used to erase a finished timeout and leave the side interrupted, so the next pair sent it through fit again.
 
 ## Found
 
@@ -53,4 +54,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A quality pack is measured only when every required dataset has `status=ok`, a finite score, and `metric_valid=true`. Half attested, or a bare `ok` score, leaves `stock_ok` false and the stock-only command exits infrastructure.
 - [x] A reported FEDOT budget timeout does not keep a later holdout number. The worker and the parent store `status=timeout`, `metric_valid=false`, and `discarded_holdout_score`.
 - [x] A completion observed at the deadline stays `task_timeout`. A newer result file next to a parent timeout manifest does not become the recovered metric.
-- [ ] Read GOLEM `split_individuals_to_evaluate`: an individual with `fitness.valid` is not evaluated again. Check that a recovered timeout is not sent back through fit on the same attempt.
+- [x] A finished timeout stays settled when a later spawn or start names the same attempt. That side is reused and is not sent through fit.
+- [ ] Read GOLEM `OptimisationTimer`: the next generation is skipped when the remaining time is shorter than the average generation. Check that a side already closed by timeout is not given another attempt of that length.

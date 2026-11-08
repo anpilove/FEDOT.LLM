@@ -433,6 +433,57 @@ def test_new_attempt_does_not_reuse_result_from_previous_attempt(tmp_path):
     assert results[("fedot-ts-beer", "stock")].status == "crash"
 
 
+def test_late_spawn_does_not_refit_a_settled_timeout(tmp_path, monkeypatch):
+    import fedotllm.agents.evolve.evaluation.fedot_quality as quality
+    from fedotllm.agents.evolve.evaluation.quality_registry import get_dataset
+    from fedotllm.agents.evolve.types import ScoreResult
+
+    path = tmp_path / "quality_jobs.jsonl"
+    common = dict(
+        candidate="a", task_id="fedot-ts-beer", side="stock",
+        registry_identity="v1", attempt=1,
+    )
+    storage.append_journal(path, {
+        **common,
+        "event": "quality_task_side_finished",
+        "result": {
+            "status": "timeout",
+            "detail": "task_timeout after 3600s",
+            "score": None,
+        },
+    })
+    storage.append_journal(path, {**common, "event": "quality_task_worker_spawned"})
+
+    results, attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    assert attempts[("fedot-ts-beer", "stock")] == 1
+    recovered = results[("fedot-ts-beer", "stock")]
+    assert recovered.status == "timeout"
+    assert math.isnan(recovered.score)
+
+    calls = []
+
+    def fake_side(_dataset, *, side, **_kwargs):
+        calls.append(side)
+        assert side == "patch"
+        return ScoreResult(task_id="fedot-ts-beer", status="ok", score=0.75,
+                           metric_observations={"metric_valid": True, "search_ran": True})
+
+    monkeypatch.setattr(quality, "run_quality_side", fake_side)
+    pair = quality.run_quality_pair(
+        get_dataset("fedot-ts-beer"),
+        stock_checkout=Path("/stock"),
+        patch_checkout=Path("/patch"),
+        prior_side_results=results,
+        prior_attempt_counts=attempts,
+    )
+
+    assert calls == ["patch"]
+    assert pair["stock_result"].status == "timeout"
+
+
 def test_unfinished_spawned_event_recovers_as_interrupted_attempt(tmp_path):
     path = tmp_path / "quality_jobs.jsonl"
     storage.append_journal(path, {

@@ -446,6 +446,11 @@ def _recover_side_state(
     results: dict[tuple[str, str], ScoreResult] = {}
     latest_phase: dict[tuple[str, str], str] = {}
     latest_event: dict[tuple[str, str], dict] = {}
+    # A terminal attempt is settled. A later start or spawn for that same
+    # attempt must not reopen it. GOLEM skips an individual whose fitness
+    # is already valid instead of evaluating it again.
+    settled_attempt: dict[tuple[str, str], int] = {}
+    open_attempt: dict[tuple[str, str], int] = {}
     if journal.exists() and not journal.is_char_device():
         tail_repair = repair_incomplete_jsonl_tail(journal)
         if tail_repair is not None and journal != Path("/dev/null"):
@@ -471,14 +476,24 @@ def _recover_side_state(
         phase = str(event.get("event") or "")
         attempt = int(event.get("attempt") or 0)
         attempts[key] = max(attempts.get(key, 0), attempt)
-        latest_event[key] = event
         is_active_attempt = phase in {
             "quality_task_side_started", "quality_task_worker_spawned",
             "quality_task_side_waiting_stock_cache",
         }
-        latest_phase[key] = "quality_task_side_started" if is_active_attempt else phase
         if is_active_attempt:
-            results.pop(key, None)
+            settled = settled_attempt.get(key)
+            if settled is not None and attempt <= settled:
+                continue
+            if attempt > open_attempt.get(key, -1):
+                results.pop(key, None)
+            open_attempt[key] = max(open_attempt.get(key, 0), attempt)
+            latest_phase[key] = "quality_task_side_started"
+            latest_event[key] = event
+            continue
+        if attempt < max(open_attempt.get(key, 0), settled_attempt.get(key, 0)):
+            continue
+        latest_event[key] = event
+        latest_phase[key] = phase
         if phase not in {
             "quality_task_side_finished", "quality_task_side_reused",
             "quality_task_side_interrupted",
@@ -514,6 +529,7 @@ def _recover_side_state(
                 if recorded_paths.get("worker_invocation_id"):
                     result.metric_observations["worker_invocation_id"] = recorded_paths["worker_invocation_id"]
         results[key] = result
+        settled_attempt[key] = attempt
 
     # A process can stop after the durable `started` event but before `finished`.
     # Preserve that attempt and allow exactly one recovery attempt under the normal
