@@ -18,6 +18,7 @@ no quality KEEP, no OpenML registry run.
 - `supervisor.py` returns immediately when the saved ledger is `storage_error`, and a child exit 75 also latches that state. `drain` itself was still willing to select `queued` and `running` jobs.
 - GOLEM fitness comparison: an invalid fitness is never better than a measured one, so a failed evaluation is not a successful individual. `compare_pack` previously skipped an invalid lift dataset and could still return `keep=True` from the other datasets.
 - GOLEM `EvaluationDispatcher.apply_evaluation_results` drops an individual whose evaluation returned nothing. `population_evaluation_info` warns when half or fewer of the population evaluated. `compare_pack` previously substituted the task sentinel for `status=crash`, so a crashed stock side became a numeric baseline. `confirm_dev` counted only `timeout` and `invalid`, so that crashed seed was skipped and the other seeds could still confirm a metric signal.
+- GOLEM `STAGNATION_EVALUATION_PERCENTAGE` is 0.5. `population_evaluation_info` warns when `evaluated / pop_size <= 0.5`, including an empty population. Drain `stock_ok` previously treated every present `status=ok` stock row as a measured pack, and the stock-only CLI did the same without `metric_valid`.
 
 ## Found
 
@@ -47,4 +48,5 @@ no quality KEEP, no OpenML registry run.
 - [x] One invalid lift dataset blocks `compare_pack` KEEP. A candidate failure stays a broken patch. Any other missing score stays infrastructure and `keep=False`.
 - [x] Quality decision already returns `keep=None` when any dataset is unresolved. A test now locks one measured gain plus one `invalid` dataset.
 - [x] `evidence_only` does not return `metric_signal` when another lift dataset is invalid. A stock `crash` is not a sentinel baseline. One crashed DEV seed counts as infrastructure and blocks confirmation.
-- [ ] Read the GOLEM dispatcher warning at 50% successful evaluations and check that a quality pack with half or fewer measured datasets cannot be summarized as measured.
+- [x] A quality pack is measured only when every required dataset has `status=ok`, a finite score, and `metric_valid=true`. Half attested, or a bare `ok` score, leaves `stock_ok` false and the stock-only command exits infrastructure.
+- [ ] Read GOLEM `evaluate_single`: a time-limit hit returns no result. Check that a FEDOT budget timeout which still printed a holdout number cannot be stored as `metric_valid=true`.

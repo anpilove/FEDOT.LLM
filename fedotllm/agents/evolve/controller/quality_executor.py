@@ -27,6 +27,8 @@ from fedotllm.agents.evolve.evaluation.fedot_quality import (
     create_worker_artifact_plan,
     decision_from_quality_jobs,
     run_quality_jobs,
+    side_is_measured,
+    stock_pack_measured,
     worker_artifact_paths,
 )
 from fedotllm.agents.evolve.evaluation.pair_scheduler import SharedPairScheduler
@@ -1686,15 +1688,17 @@ def _drain_quality_queue_locked(
         candidate_id = str(event.get("candidate") or "")
         result = event.get("result") or {}
         if task_id and isinstance(result, dict):
+            observations = result.get("metric_observations") or {}
             stock_rows[(candidate_id, task_id)] = {
                 "candidate_id": candidate_id,
                 "task_id": task_id,
                 "status": result.get("status"),
                 "score": result.get("score"),
-                "search_ran": bool((result.get("metric_observations") or {}).get("search_ran")),
-                "cache_hit": bool((result.get("metric_observations") or {}).get("cache_hit")),
+                "measured": side_is_measured(result),
+                "search_ran": bool(observations.get("search_ran")) if isinstance(observations, dict) else False,
+                "cache_hit": bool(observations.get("cache_hit")) if isinstance(observations, dict) else False,
                 "singleflight_shared": bool(
-                    (result.get("metric_observations") or {}).get("singleflight_shared")
+                    observations.get("singleflight_shared") if isinstance(observations, dict) else False
                 ),
             }
     stock_summary = list(stock_rows.values())
@@ -1705,7 +1709,7 @@ def _drain_quality_queue_locked(
         "mode": "drain",
         "registry_identity": registry.identity,
         "task_ids": list(dict.fromkeys(row["task_id"] for row in stock_summary)),
-        "stock_ok": bool(stock_summary) and all(row["status"] == "ok" for row in stock_summary),
+        "stock_ok": stock_pack_measured(stock_summary, results),
         "stock": stock_summary,
         "stock_cache_hits": [
             f"{row['candidate_id']}:{row['task_id']}"

@@ -1907,6 +1907,51 @@ def _host_killed(result: ScoreResult) -> bool:
     )
 
 
+def side_is_measured(result: dict) -> bool:
+    """A side is measured only with a finite attested score.
+
+    GOLEM's dispatcher warns when half or fewer of a population evaluated
+    successfully. Status ``ok`` alone is not that success.
+    """
+
+    observations = result.get("metric_observations")
+    observations = observations if isinstance(observations, dict) else {}
+    score = result.get("score")
+    return (
+        result.get("status") == "ok"
+        and isinstance(score, (int, float))
+        and not isinstance(score, bool)
+        and math.isfinite(float(score))
+        and observations.get("metric_valid") is True
+    )
+
+
+def stock_pack_measured(stock_rows: list[dict], jobs: list[dict]) -> bool:
+    """True only when every required dataset in the pack has an attested stock score.
+
+    A pack with half or fewer attested datasets is not a measured pack. Any
+    missing or unattested dataset fails the pack, including a 50/50 split.
+    """
+
+    if not stock_rows or not all(row.get("measured") is True for row in stock_rows):
+        return False
+    if not jobs:
+        return True
+    indexed = {
+        (str(row.get("candidate_id") or ""), str(row.get("task_id") or "")): row
+        for row in stock_rows
+    }
+    for job in jobs:
+        candidate = str(job.get("candidate_id") or "")
+        tasks = [str(task_id) for task_id in (job.get("task_ids") or ())]
+        unresolved = [str(task_id) for task_id in (job.get("unresolved_task_ids") or ())]
+        if not tasks or unresolved:
+            return False
+        if any(indexed.get((candidate, task_id), {}).get("measured") is not True for task_id in tasks):
+            return False
+    return True
+
+
 def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     skipped_rows = [
         row for row in rows

@@ -2972,9 +2972,13 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
     from argparse import Namespace
 
     from fedotllm.agents.evolve.__main__ import _cmd_quality_job
+    from fedotllm.agents.evolve.controller import quality_executor
     from fedotllm.agents.evolve.evaluation import fedot_quality, quality_registry
     from fedotllm.agents.evolve.execution import checkout
 
+    # Bind the executor's registry loader before this test replaces the module
+    # attribute. A later drain test must keep the real loader.
+    assert quality_executor.load_quality_registry is quality_registry.load_quality_registry
     monkeypatch.setattr(fedot_quality, "bind_stock_cache", lambda _path: tmp_path / "cache")
     monkeypatch.setattr(
         fedot_quality,
@@ -2983,7 +2987,11 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
             {
                 "spec": {"source_dataset": "fedot-ts-beer"},
                 "search_ran": True,
-                "stock": {"status": "ok", "score": 1.0},
+                "stock": {
+                    "status": "ok",
+                    "score": 1.0,
+                    "metric_observations": {"metric_valid": True},
+                },
             }
         ],
     )
@@ -3007,3 +3015,69 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
     assert _cmd_quality_job(args, parser=object()) == 0
     journal = (args.workspace / "quality_jobs.jsonl").read_text(encoding="utf-8")
     assert '"event": "fedot_quality_stock"' in journal
+
+
+def test_stock_pack_with_half_the_datasets_unattested_is_not_measured():
+    from fedotllm.agents.evolve.evaluation.fedot_quality import side_is_measured, stock_pack_measured
+
+    attested = {"status": "ok", "score": 0.8, "metric_observations": {"metric_valid": True}}
+    bare = {"status": "ok", "score": 0.9}
+    rows = [
+        {"candidate_id": "proposal", "task_id": "one", "measured": side_is_measured(attested)},
+        {"candidate_id": "proposal", "task_id": "two", "measured": side_is_measured(bare)},
+    ]
+    jobs = [{
+        "candidate_id": "proposal",
+        "task_ids": ["one", "two"],
+        "unresolved_task_ids": [],
+    }]
+
+    assert side_is_measured(bare) is False
+    assert stock_pack_measured(rows, jobs) is False
+    assert stock_pack_measured(rows[:1], [{
+        "candidate_id": "proposal",
+        "task_ids": ["one", "two"],
+        "unresolved_task_ids": ["two"],
+    }]) is False
+
+
+def test_stock_only_cli_rejects_a_half_attested_pack(tmp_path, monkeypatch):
+    from argparse import Namespace
+
+    from fedotllm.agents.evolve.__main__ import EXIT_INFRASTRUCTURE, _cmd_quality_job
+    from fedotllm.agents.evolve.controller import quality_executor
+    from fedotllm.agents.evolve.evaluation import fedot_quality, quality_registry
+    from fedotllm.agents.evolve.execution import checkout
+
+    assert quality_executor.load_quality_registry is quality_registry.load_quality_registry
+    monkeypatch.setattr(fedot_quality, "bind_stock_cache", lambda _path: tmp_path / "cache")
+    monkeypatch.setattr(
+        fedot_quality,
+        "run_quality_stock_jobs",
+        lambda **_kwargs: [
+            {
+                "spec": {"source_dataset": "one"},
+                "search_ran": True,
+                "stock": {"status": "ok", "score": 0.8, "metric_observations": {"metric_valid": True}},
+            },
+            {
+                "spec": {"source_dataset": "two"},
+                "search_ran": True,
+                "stock": {"status": "ok", "score": 0.9, "metric_observations": {"metric_valid": False}},
+            },
+        ],
+    )
+    monkeypatch.setattr(quality_registry, "load_quality_registry", lambda: object())
+    monkeypatch.setattr(quality_registry, "list_quality_task_ids", lambda _registry: ("one", "two"))
+    monkeypatch.setattr(checkout, "resolve_fedot_src", lambda: tmp_path / "FEDOT")
+    args = Namespace(
+        patch_checkout=None,
+        stock_only=True,
+        workspace=tmp_path / "quality-job",
+        stock_cache=None,
+        tasks="one,two",
+        n_jobs=4,
+        cpu_quota=28,
+    )
+
+    assert _cmd_quality_job(args, parser=object()) == EXIT_INFRASTRUCTURE
