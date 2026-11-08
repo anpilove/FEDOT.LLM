@@ -1263,6 +1263,29 @@ def test_queue_shuts_down_executors_if_initial_proposal_submit_fails(tmp_path, m
     assert shutdowns == {"proposal": 1, "pairs": 1}
 
 
+def test_latched_storage_error_is_not_relaunched(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError
+
+    source, workspace = _enqueue(tmp_path, 1)
+    status = workspace / "logs" / "service_status.json"
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps({"state": "storage_error", "completion": "incomplete"}))
+    measured = []
+    monkeypatch.setattr(
+        executor,
+        "measure_fedot_quality",
+        lambda *_args, **_kwargs: measured.append(True),
+    )
+
+    with pytest.raises(StorageCapacityError, match="latched"):
+        executor.drain_quality_queue(source, workspace, n_jobs=4, cpu_quota=4)
+
+    proposal = json.loads((workspace / "quality_queue/improvement-0.json").read_text())
+    assert measured == []
+    assert proposal["status"] == "queued"
+    assert proposal.get("keep") is None
+
+
 def test_storage_error_from_measurement_returns_proposal_to_queue(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError
 

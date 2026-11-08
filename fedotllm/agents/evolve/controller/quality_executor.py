@@ -1041,6 +1041,24 @@ def _job_quality_task_ids(
     return tuple(fallback) if fallback else all_ids
 
 
+def _latched_storage_status(workspace: Path) -> Path | None:
+    """A recorded storage stop must not start another drain."""
+
+    for path in (
+        workspace / "logs" / "service_status.json",
+        workspace / "service_status.json",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("state") == "storage_error":
+            return path
+    return None
+
+
 def _drain_quality_queue_locked(
     source: Path,
     workspace: Path,
@@ -1071,6 +1089,13 @@ def _drain_quality_queue_locked(
     registry = registry or load_quality_registry()
     pool = task_ids or list_quality_task_ids(registry)
     workspace = workspace.resolve()
+    latched = _latched_storage_status(workspace)
+    if latched is not None:
+        raise StorageCapacityError(
+            28,
+            "storage_error is latched; refusing to relaunch the quality queue",
+            str(latched),
+        )
     artifact_root = Path(artifact_root).expanduser().resolve() if artifact_root is not None else workspace / "worker_artifacts"
     stock_cache_root = Path(stock_cache_root or stock_cache).expanduser().resolve() if (stock_cache_root is not None or stock_cache is not None) else workspace / "stock_cache"
     workspace.mkdir(parents=True, exist_ok=True)

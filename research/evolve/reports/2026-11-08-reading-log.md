@@ -15,6 +15,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `Fitness` (golem/core/optimisers/fitness/fitness.py): an invalid fitness, including `None`, is never better than a measured fitness. A signaled evaluator leaves no fitness. The worker previously recorded that the same way as a normal nonzero exit.
 - Linux reports memory pressure by delivering `SIGKILL`. Our own deadline and cancellation paths already record their outcomes before a missing result file is read, so a remaining `SIGKILL` is external. `SIGSEGV` stays a per-side fault.
 - `storage_guard.py` treats errno 28 and 122 as capacity failures. The worker previously recognized only errno 28, so a quota error during fit became `fedot_fit_error`.
+- `supervisor.py` returns immediately when the saved ledger is `storage_error`, and a child exit 75 also latches that state. `drain` itself was still willing to select `queued` and `running` jobs.
 
 ## Found
 
@@ -40,4 +41,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A caught `MemoryError` is `memory_error`: per-side `invalid`, not `candidate_error`, and not the `SIGKILL` queue pause.
 - [x] Errno 28 and 122 are `storage_error`. A decision that sees that kind pauses and does not call it a candidate failure. The parent still raises `StorageCapacityError`.
 - [x] A `StorageCapacityError` from measurement returns the proposal to `queued` with `keep` unset and reason `storage_capacity_exhausted`. It does not stay `running` and it is not a candidate verdict.
-- [ ] Read `list_queued_jobs`: `running` is selected again on the next drain. Confirm a storage stop is not immediately relaunched by the supervisor while `state` is `storage_error`.
+- [x] The supervisor does not relaunch a latched `storage_error`. Drain now refuses too, before it selects `queued` or `running` jobs.
+- [ ] Read one GOLEM dispatcher note about a failed individual evaluation and check that a single dataset `invalid` does not mark the whole proposal `keep`.
