@@ -1015,6 +1015,10 @@ def _evaluate_worker_with_logging(
         from fedotllm.agents.evolve.evaluation.return_best_policy import ReturnBestIncompatible
         if isinstance(exc, ReturnBestIncompatible):
             failure_kind = "return_best_incompatible"
+        elif isinstance(exc, MemoryError):
+            # The interpreter caught this. It is not the kernel SIGKILL that
+            # pauses the queue, and it is not evidence the patch is wrong.
+            failure_kind = "memory_error"
         elif isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
             failure_kind = "storage_error"
         elif is_fedot_budget_timeout:

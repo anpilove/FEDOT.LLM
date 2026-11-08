@@ -484,6 +484,24 @@ def test_sigkill_pauses_as_host_pressure_and_sigsegv_stays_per_side():
     assert side.keep is None
 
 
+def test_caught_memory_error_does_not_pause_or_count_as_candidate_failure():
+    from fedotllm.agents.evolve.evaluation.compare import candidate_failed
+
+    row = _pair("openml-31-credit-g", 0.70, 0.80)
+    row["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "invalid", float("nan"),
+        detail="MemoryError: fixture allocator refused the fit",
+        metric_observations={"failure_kind": "memory_error", "metric_valid": False},
+    )
+
+    decision = decision_from_quality_jobs([row])
+
+    assert decision.keep is None
+    assert decision.infrastructure_error is False
+    assert decision.quality_failure == "evaluation_error"
+    assert candidate_failed(row["patched_result"]) is False
+
+
 def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructure():
     row = _pair("fedot-ts-traffic", 0.70, 0.80)
     row["patched_result"] = ScoreResult(

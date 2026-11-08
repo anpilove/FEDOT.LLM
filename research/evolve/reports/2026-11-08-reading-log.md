@@ -36,4 +36,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A parent cancellation stays `cancelled` when the guardian exits 124 while an escaped pipe is still draining. It is not also `watchdog_timeout`.
 - [x] A worker killed by a signal, with no result file, is `worker_signaled` plus the signal number. It is not `worker_exit` and not a candidate failure.
 - [x] A remaining `SIGKILL` sets `infrastructure_error` and pauses the queue. `SIGSEGV` stays `evaluation_error` for that side only.
-- [ ] Check a caught `MemoryError` inside the worker. It should stay a per-side invalid result, not the same host pause as `SIGKILL`.
+- [x] A caught `MemoryError` is `memory_error`: per-side `invalid`, not `candidate_error`, and not the `SIGKILL` queue pause.
+- [ ] Read the worker `storage_error` path and confirm a full disk still stops the campaign without being labeled a candidate failure.
