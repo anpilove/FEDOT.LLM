@@ -234,7 +234,11 @@ class Decision:
     infrastructure_error: bool = False
     metric_goal_keep: bool = False
     quality_failure: Literal[
-        "candidate_error", "evaluation_error", "fedot_budget_timeout", "unverified_metric"
+        "candidate_error",
+        "evaluation_error",
+        "fedot_budget_timeout",
+        "watchdog_timeout",
+        "unverified_metric",
     ] | None = None
     quality_outcome: Literal[
         "broad_positive",

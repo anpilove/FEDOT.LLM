@@ -273,6 +273,7 @@ def _recover_durable_worker_result(
                 "metric_outcome": "not_measured",
                 "metric_valid": False,
                 "timeout_kind": timeout_kind,
+                "watchdog_fired": timeout_kind == "watchdog_timeout",
                 "elapsed_seconds": side_elapsed,
                 "side_elapsed_seconds": side_elapsed,
                 "worker_elapsed_seconds": worker_elapsed,
@@ -291,7 +292,7 @@ def _recover_durable_worker_result(
                 protected = {
                     "task_id", "side", "attempt", "attempt_id", "proposal_id",
                     "registry_identity", "evaluation_identity", "failure_kind",
-                    "metric_outcome", "metric_valid", "timeout_kind", "elapsed_seconds",
+                    "metric_outcome", "metric_valid", "timeout_kind", "watchdog_fired", "elapsed_seconds",
                     "side_elapsed_seconds", "worker_elapsed_seconds", "timeout_manifest_path",
                     "worker_result_path", "stage_status_path", "worker_log_path",
                     "recovered_parent_timeout_manifest", "worker_invocation_id", "worker_paths",
@@ -1438,7 +1439,9 @@ def _drain_quality_queue_locked(
                         "toy_metric": job.get("toy_metric"),
                     }
                 )
-                if decision.infrastructure_error and not continue_on_error:
+                if not continue_on_error and (
+                    decision.infrastructure_error or decision.quality_failure == "watchdog_timeout"
+                ):
                     paused_for_retry.set()
             except (OSError, JournalCorruptionError) as exc:
                 # Storage/launch failures are systemic: starting the next
@@ -1559,7 +1562,7 @@ def _drain_quality_queue_locked(
                     processed.add(job_key)
                 if status == "partial":
                     processed.add(job_key)
-                if status == "infrastructure_error" and not continue_on_error:
+                if status in {"infrastructure_error", "watchdog_timeout"} and not continue_on_error:
                     paused_for_retry.set()
 
         def process_job(job, proposal_cpu_quota):

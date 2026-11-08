@@ -928,6 +928,7 @@ def run_quality_side(
             "metric_valid": False,
             "failure_kind": "timeout",
             "timeout_kind": timeout_kind,
+            "watchdog_fired": timeout_kind == "watchdog_timeout",
             "elapsed_seconds": side_elapsed,
             "side_elapsed_seconds": side_elapsed,
             "worker_elapsed_seconds": elapsed_seconds,
@@ -965,6 +966,7 @@ def run_quality_side(
             "metric_outcome": "not_measured",
             "metric_valid": False,
             "timeout_kind": timeout_kind,
+            "watchdog_fired": timeout_kind == "watchdog_timeout",
             "detail": (
                 f"{timeout_kind} after {side_elapsed:.3f}s "
                 f"(side limit {timeout_limit:g}s)"
@@ -1882,6 +1884,7 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     failure_reasons: list[str] = []
     failure_kind: str | None = None
     timed_out = False
+    watchdog_timed_out = False
     fedot_budget_exhausted = False
     retryable_failure = False
     for row in rows:
@@ -1898,11 +1901,23 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
                 result for result in timeout_results
                 if (result.metric_observations or {}).get("failure_kind") == "fedot_budget_timeout"
             ]
+            watchdog_results = [
+                result for result in timeout_results
+                if (result.metric_observations or {}).get("watchdog_fired") is True
+                or (result.metric_observations or {}).get("timeout_kind") == "watchdog_timeout"
+            ]
             if budget_timeout_results:
                 fedot_budget_exhausted = True
                 failure_kind = failure_kind or "fedot_budget_timeout"
                 failure_reasons.append(f"FEDOT fit budget exhausted for {task_id}; metric not measured")
-            else:
+            if watchdog_results:
+                watchdog_timed_out = True
+                failure_reasons.append(f"quality {task_id} watchdog timeout")
+            unlabeled = [
+                result for result in timeout_results
+                if result not in budget_timeout_results and result not in watchdog_results
+            ]
+            if unlabeled:
                 timed_out = True
                 failure_reasons.append(f"quality {task_id} worker deadline timeout")
             unresolved.append(task_id)
@@ -1963,6 +1978,7 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
             infrastructure_error=timed_out or retryable_failure,
             quality_failure=None
             if timed_out or retryable_failure
+            else "watchdog_timeout" if watchdog_timed_out
             else "fedot_budget_timeout" if fedot_budget_exhausted
             else failure_kind or "evaluation_error",
             quality_outcome="not_evaluated",

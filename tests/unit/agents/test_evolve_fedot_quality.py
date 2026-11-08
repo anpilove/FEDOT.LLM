@@ -435,6 +435,28 @@ def test_timeout_remains_infrastructure_error():
     assert "timeout" in decision.reason
 
 
+def test_watchdog_timeout_is_not_host_infrastructure():
+    row = _pair("openml-31-credit-g", 0.70, 0.80)
+    row["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "timeout", float("nan"),
+        detail="watchdog_timeout after 3900s",
+        metric_observations={
+            "failure_kind": "timeout",
+            "timeout_kind": "watchdog_timeout",
+            "watchdog_fired": True,
+            "metric_valid": False,
+            "metric_outcome": "not_measured",
+        },
+    )
+
+    decision = decision_from_quality_jobs([row])
+
+    assert decision.keep is None
+    assert decision.infrastructure_error is False
+    assert decision.quality_failure == "watchdog_timeout"
+    assert decision.quality_outcome == "not_evaluated"
+
+
 def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructure():
     row = _pair("fedot-ts-traffic", 0.70, 0.80)
     row["patched_result"] = ScoreResult(
