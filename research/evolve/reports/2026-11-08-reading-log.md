@@ -14,6 +14,7 @@ no quality KEEP, no OpenML registry run.
 - `execution/process.py` and `_worker_lifetime_guard.py`: the parent records `task_timeout`; the guardian exits 124 for its own cap. Diagnose labels `fit_without_optimizer_evidence` and does not stop the worker. `run_worker` documents that `cancellation_event` yields `cancelled`, not a timeout.
 - GOLEM `Fitness` (golem/core/optimisers/fitness/fitness.py): an invalid fitness, including `None`, is never better than a measured fitness. A signaled evaluator leaves no fitness. The worker previously recorded that the same way as a normal nonzero exit.
 - Linux reports memory pressure by delivering `SIGKILL`. Our own deadline and cancellation paths already record their outcomes before a missing result file is read, so a remaining `SIGKILL` is external. `SIGSEGV` stays a per-side fault.
+- `storage_guard.py` treats errno 28 and 122 as capacity failures. The worker previously recognized only errno 28, so a quota error during fit became `fedot_fit_error`.
 
 ## Found
 
@@ -37,4 +38,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A worker killed by a signal, with no result file, is `worker_signaled` plus the signal number. It is not `worker_exit` and not a candidate failure.
 - [x] A remaining `SIGKILL` sets `infrastructure_error` and pauses the queue. `SIGSEGV` stays `evaluation_error` for that side only.
 - [x] A caught `MemoryError` is `memory_error`: per-side `invalid`, not `candidate_error`, and not the `SIGKILL` queue pause.
-- [ ] Read the worker `storage_error` path and confirm a full disk still stops the campaign without being labeled a candidate failure.
+- [x] Errno 28 and 122 are `storage_error`. A decision that sees that kind pauses and does not call it a candidate failure. The parent still raises `StorageCapacityError`.
+- [ ] Check whether a worker `storage_error` that raises out of `measure_fedot_quality` leaves the proposal `running` until the finally block resets it to `queued`.

@@ -448,6 +448,8 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
                 raise ValueError("fixture fit failure")
             if fail_stage == "memory":
                 raise MemoryError("fixture allocator refused the fit")
+            if fail_stage == "quota":
+                raise OSError(122, "Quota")
             if fail_stage == "budget":
                 raise FedotBudgetExceeded("final refit reserve exhausted")
 
@@ -498,6 +500,34 @@ def test_caught_memory_error_stays_a_per_side_invalid_result(tmp_path, monkeypat
     assert payload["failure_kind"] == "memory_error"
     assert payload["metric_observations"]["metric_valid"] is False
     assert "signal" not in payload["metric_observations"]
+
+
+def test_disk_quota_is_storage_error_not_a_candidate_fit_failure(tmp_path, monkeypatch):
+    _install_fixture_dependencies(monkeypatch, fail_stage="quota", verbose_log=False)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "seed": 42, "n_jobs": 4, "max_pipeline_fit_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "proposal_id": "proposal-7", "attempt_id": "proposal-7:fixture:patch:1",
+        "side": "patch", "attempt": 1,
+    }))
+    out = tmp_path / "payload.json"
+    before_handlers = list(logging.getLogger().handlers)
+    before_level = logging.getLogger().level
+    logging.getLogger().handlers.clear()
+    try:
+        rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    finally:
+        logging.getLogger().handlers[:] = before_handlers
+        logging.getLogger().setLevel(before_level)
+    payload = json.loads(out.read_text())
+
+    assert rc == 2
+    assert payload["status"] == "invalid"
+    assert payload["failure_kind"] == "storage_error"
+    assert payload["failed_stage"] == "fit"
 
 
 @pytest.mark.parametrize("fail_fit", [False, True])

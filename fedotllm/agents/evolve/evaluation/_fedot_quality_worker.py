@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fedotllm.agents.evolve.storage.journal import write_json_atomic
 from fedotllm.agents.evolve.evaluation.quality_registry import TUNING_EVALUATION_POLICIES
+from fedotllm.agents.evolve.execution.storage_guard import storage_failure_text
 
 STACK_DUMP_INTERVAL_SECONDS = 60.0
 SUPPORTED_CANDIDATE_DISPATCHERS = {
@@ -1019,7 +1020,10 @@ def _evaluate_worker_with_logging(
             # The interpreter caught this. It is not the kernel SIGKILL that
             # pauses the queue, and it is not evidence the patch is wrong.
             failure_kind = "memory_error"
-        elif isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        elif isinstance(exc, OSError) and (
+            exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", 122)}
+            or storage_failure_text(f"{type(exc).__name__}: {exc}")
+        ):
             failure_kind = "storage_error"
         elif is_fedot_budget_timeout:
             failure_kind = "fedot_budget_timeout"

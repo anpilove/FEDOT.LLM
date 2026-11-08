@@ -1888,6 +1888,10 @@ def _run_over_tasks(
     return [by_id[task_id] for task_id in ids]
 
 
+def _storage_failed(result: ScoreResult) -> bool:
+    return (result.metric_observations or {}).get("failure_kind") == "storage_error"
+
+
 def _host_killed(result: ScoreResult) -> bool:
     """SIGKILL that was not our own deadline.
 
@@ -1939,6 +1943,7 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     watchdog_timed_out = False
     fedot_budget_exhausted = False
     host_killed = False
+    storage_failed = False
     retryable_failure = False
     for row in rows:
         task_id = row["spec"]["source_dataset"]
@@ -1949,6 +1954,9 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         if _host_killed(stock_result) or _host_killed(patched_result):
             host_killed = True
             failure_reasons.append(f"quality {task_id} worker received SIGKILL")
+        if _storage_failed(stock_result) or _storage_failed(patched_result):
+            storage_failed = True
+            failure_reasons.append(f"quality {task_id} storage capacity exhausted")
         timeout_results = [
             result for result in (stock_result, patched_result) if result.status == "timeout"
         ]
@@ -2031,9 +2039,9 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
             target_delta=None,
             regression_deltas=deltas,
             stage="quality",
-            infrastructure_error=timed_out or retryable_failure or host_killed,
+            infrastructure_error=timed_out or retryable_failure or host_killed or storage_failed,
             quality_failure=None
-            if timed_out or retryable_failure or host_killed
+            if timed_out or retryable_failure or host_killed or storage_failed
             else "watchdog_timeout" if watchdog_timed_out
             else "fedot_budget_timeout" if fedot_budget_exhausted
             else failure_kind or "evaluation_error",
