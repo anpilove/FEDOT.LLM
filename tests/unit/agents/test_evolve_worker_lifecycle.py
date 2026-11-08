@@ -788,6 +788,40 @@ def test_guardian_failure_keeps_original_error_when_cleanup_fails(tmp_path, monk
             proc.wait(timeout=3)
 
 
+def test_cancellation_is_not_relabeled_when_guardian_exits_during_cleanup(tmp_path):
+    """A guardian exit while draining an escaped pipe must not turn cancellation into a watchdog."""
+    (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
+    cancellation = threading.Event()
+
+    def cancel_when_ready():
+        deadline = time.monotonic() + 3
+        while not (tmp_path / "ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        cancellation.set()
+
+    setter = threading.Thread(target=cancel_when_ready)
+    setter.start()
+    try:
+        outcome = run_worker(
+            [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "escaped"],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=30,
+            watchdog_timeout=0.6,
+            cancellation_event=cancellation,
+        )
+        assert outcome.cancelled is True
+        assert outcome.timed_out is False
+        assert outcome.timeout_kind is None
+    finally:
+        cancellation.set()
+        setter.join(timeout=4)
+        for name in ("child.pid", "worker.pid"):
+            path = tmp_path / name
+            if path.exists():
+                _kill_known_group(int(path.read_text()))
+
+
 @pytest.mark.parametrize("timeout", [None, 30])
 @pytest.mark.parametrize("use_log", [False, True])
 def test_cancellation_event_stops_owned_group_without_reporting_timeout(tmp_path, timeout, use_log):

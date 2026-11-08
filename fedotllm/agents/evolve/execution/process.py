@@ -366,12 +366,14 @@ def run_worker(
                     task_deadline_fired = (
                         outcome is not None and outcome.timeout_kind == "task_timeout"
                     )
+                    cancelled = outcome is not None and outcome.cancelled
                     watchdog_was_first = watchdog_fired_at is not None and (
                         deadline is None or watchdog_fired_at < deadline
                     )
                     if (
                         guardian_status == _GUARDIAN_WATCHDOG_EXIT
                         and outcome is not None
+                        and not cancelled
                         and (not task_deadline_fired or watchdog_was_first)
                     ):
                         outcome = dataclasses.replace(
