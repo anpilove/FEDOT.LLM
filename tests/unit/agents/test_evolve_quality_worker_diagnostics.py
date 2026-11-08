@@ -854,6 +854,115 @@ def test_worker_payload_identifies_failure_stage_and_kind(
     assert payload["stage_timings"][expected_stage]["status"] == "failed"
 
 
+def test_worker_maps_return_best_keyerror_to_structured_pin_invalid(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve.evaluation import openml_fold, quality_registry
+    from fedotllm.agents.evolve.evaluation.fedot_pin_preflight import (
+        FAILURE_KIND_PIN_INCOMPATIBLE,
+    )
+
+    dataset = SimpleNamespace(task_id="fixture", problem="regression", metric="rmse", forecast_horizon=12)
+    fold = {"X_train": [1], "y_train": [1], "X_test": [1], "y_test": [1],
+            "n_train": 1, "n_test": 1, "loader": "fixture"}
+    monkeypatch.setattr(quality_registry, "get_dataset", lambda _: dataset)
+    monkeypatch.setattr(openml_fold, "load_registered_fold", lambda _: fold)
+
+    class StockFedot:
+        def __init__(self, **kwargs):
+            raise KeyError("Invalid key parameters {'timeout_policy', 'final_fit_reserve_seconds'}")
+
+    fixture_module = ModuleType("fedot.api.main")
+    fixture_module.Fedot = StockFedot
+    monkeypatch.setitem(sys.modules, "fedot.api.main", fixture_module)
+
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "fedot_timeout_policy": "return_best", "final_fit_reserve_seconds": 1500,
+        "seed": 42, "n_jobs": 4, "cv_folds": 5,
+        "max_pipeline_fit_time_seconds": 108,
+        "max_pipeline_evaluation_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "max_pipeline_evaluation_policy": "per-cv-candidate-v1",
+        "side": "stock", "attempt_id": "p:fixture:stock:1",
+    }))
+    out = tmp_path / "payload.json"
+
+    rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    payload = json.loads(out.read_text())
+
+    assert rc == 2
+    assert payload["status"] == "invalid"
+    assert payload["failure_kind"] == FAILURE_KIND_PIN_INCOMPATIBLE
+    assert payload["score"] is None
+    assert payload["metric_observations"]["metric_valid"] is False
+    assert payload["metric_observations"]["metric_outcome"] == "not_measured"
+    assert payload["metric_observations"]["failure_kind"] == FAILURE_KIND_PIN_INCOMPATIBLE
+    assert "return_best" in payload["detail"]
+
+
+def test_worker_maps_missing_isolated_optimizer_to_structured_pin_invalid(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve.evaluation import openml_fold, quality_registry
+    from fedotllm.agents.evolve.evaluation.fedot_pin_preflight import (
+        FAILURE_KIND_PIN_INCOMPATIBLE,
+    )
+
+    dataset = SimpleNamespace(task_id="fixture", problem="regression", metric="rmse", forecast_horizon=12)
+    fold = {"X_train": [1], "y_train": [1], "X_test": [1], "y_test": [1],
+            "n_train": 1, "n_test": 1, "loader": "fixture"}
+    monkeypatch.setattr(quality_registry, "get_dataset", lambda _: dataset)
+    monkeypatch.setattr(openml_fold, "load_registered_fold", lambda _: fold)
+
+    class AcceptingFedot:
+        def __init__(self, **kwargs):
+            raise AssertionError("Fedot must not be constructed without isolated optimizer")
+
+    fixture_module = ModuleType("fedot.api.main")
+    fixture_module.Fedot = AcceptingFedot
+    monkeypatch.setitem(sys.modules, "fedot.api.main", fixture_module)
+    # Ensure the isolated optimizer import fails even if a prior test stubbed it.
+    monkeypatch.setitem(
+        sys.modules,
+        "fedot.core.optimisers.isolated_gp_optimizer",
+        None,
+    )
+    real_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "fedot.core.optimisers.isolated_gp_optimizer" or name.endswith(
+            "isolated_gp_optimizer"
+        ):
+            raise ImportError("No module named 'fedot.core.optimisers.isolated_gp_optimizer'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "candidate_dispatcher": "isolated-candidate-process-v1",
+        "seed": 42, "n_jobs": 4, "cv_folds": 5,
+        "max_pipeline_fit_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "side": "stock", "attempt_id": "p:fixture:stock:1",
+    }))
+    out = tmp_path / "payload.json"
+
+    rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    payload = json.loads(out.read_text())
+
+    assert rc == 2
+    assert payload["status"] == "invalid"
+    assert payload["failure_kind"] == FAILURE_KIND_PIN_INCOMPATIBLE
+    assert payload["metric_observations"]["metric_valid"] is False
+    assert "IsolatedEvoGraphOptimizer" in payload["detail"]
+
+
 def test_interpreter_identity_runs_named_probe_with_safe_environment(tmp_path, monkeypatch):
     # A selected fixture interpreter accepts named scripts and rejects -c/-;
     # the old inline-code probe falls back to a file fingerprint instead of JSON.

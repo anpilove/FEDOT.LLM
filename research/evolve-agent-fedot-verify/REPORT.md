@@ -5,6 +5,18 @@
 Обновлено: 2026-11-08 15:39 Europe/Moscow  
 Ничего не слито автоматически.
 
+## Goal progress (plan `/goal`)
+
+Спека: `docs/superpowers/specs/2026-11-08-evolve-agent-8h-improve-goal.md`
+
+Закрыто в коде (с тестами):
+1. Doctor/preflight pin API (`fedot_pin_preflight.py` + `return_best_policy.py`)
+2. Worker: `KeyError`/missing isolated optimizer → `status=invalid`, `failure_kind=fedot_pin_incompatible`, `metric_valid=false`
+3. Microbenchmark: явный hint про missing `dask`
+4. Политика `refuse` (default) / `research_worktree` (offline only)
+
+Ещё не exit идеала: полный registry A/A на Cloud Environment пользователя; upstream FEDOT `return_best` в pin.
+
 ## 0. Окружение (обязательное)
 
 Пользователь готовит Cloud Environment. **Его и нужно использовать** для полного registry A/A / OpenML offline / quality-прогонов.

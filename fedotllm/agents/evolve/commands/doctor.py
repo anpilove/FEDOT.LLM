@@ -11,6 +11,7 @@ from fedotllm.agents.evolve.execution.checkout import (
 )
 from fedotllm.agents.evolve.evaluation.eval import run_stock
 from fedotllm.agents.evolve.evaluation.manifest import verify_manifest
+from fedotllm.agents.evolve.evaluation.return_best_policy import resolve_return_best_source
 from fedotllm.agents.evolve.execution.run_code import fedot_python, run_fedot_snippet
 
 
@@ -25,6 +26,29 @@ def run_doctor(
     workspace = workspace.resolve()
     before = source_fingerprint(source)
     checks: dict[str, dict] = {}
+
+    decision = resolve_return_best_source(source)
+    pin = decision.preflight
+    checks["fedot_pin"] = {
+        "ok": decision.ok,
+        "failure_kind": None if decision.ok else pin.failure_kind,
+        "summary": decision.detail,
+        "policy": decision.policy,
+        "resolved_source": str(decision.source),
+        "details": pin.checks,
+    }
+    if not decision.ok:
+        after = source_fingerprint(source)
+        checks["immutable_source"] = {"ok": before == after, "before": before, "after": after}
+        return {"ok": False, "checks": checks}
+    # Doctor continues against the stock checkout; a research worktree is only
+    # accepted as evidence that a compatible pin exists for offline experiments.
+    if decision.source != source:
+        checks["return_best_research_worktree"] = {
+            "ok": True,
+            "path": str(decision.source),
+            "note": "research worktree passes preflight; stock pin remains unchanged",
+        }
 
     try:
         manifest_errors = verify_manifest(source)

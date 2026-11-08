@@ -9,9 +9,11 @@ from fedotllm.agents.evolve.benchmark.micro import (
     MicroStageResult,
     micro_cases,
     model_facing_context,
+    parse_observation,
     run_stock_microbenchmark,
 )
 from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
+from fedotllm.agents.evolve.types import SnippetResult
 
 
 def test_micro_case_catalog_is_private_and_diverse():
@@ -79,6 +81,22 @@ def test_micro_stage_results_require_pipeline_order():
     row.add(MicroStageResult("localization", "passed"))
     row.add(MicroStageResult("verification", "failed", reason="not reproduced"))
     assert row.ok is False
+
+
+def test_parse_observation_surfaces_missing_dask_dependency_hint():
+    observation, error = parse_observation(
+        SnippetResult(
+            status="runtime_error",
+            code="probe",
+            stdout="",
+            stderr="ModuleNotFoundError: No module named 'dask'\n",
+            detail="process exited 1",
+            duration_s=0.1,
+        )
+    )
+    assert observation is None
+    assert "missing runtime dependency dask" in error
+    assert "doctor/microbenchmark" in error
 
 
 def test_stock_microbenchmark_reproduces_all_private_contracts():

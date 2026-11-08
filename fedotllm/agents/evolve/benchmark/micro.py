@@ -440,11 +440,30 @@ def model_facing_context(case: MicroCase) -> str:
     )
 
 
+def _probe_runtime_hint(result: SnippetResult) -> str:
+    """Surface actionable dependency/path gaps from a failed stock probe."""
+
+    text = "\n".join(part for part in (result.stderr, result.detail, result.stdout) if part)
+    lower = text.lower()
+    if "no module named 'dask'" in lower or "no module named \"dask\"" in lower:
+        return (
+            "missing runtime dependency dask required by this FEDOT pin "
+            "(install dask compatible with the pin, then re-run doctor/microbenchmark)"
+        )
+    if "modulenotfounderror" in lower:
+        for line in text.splitlines():
+            if "ModuleNotFoundError" in line or "No module named" in line:
+                return line.strip()
+    return ""
+
+
 def parse_observation(result: SnippetResult) -> tuple[dict[str, Any] | None, str]:
     """Parse exactly one JSON observation from a controller-owned probe."""
 
     if result.status != "ok":
-        return None, f"probe status is {result.status}: {result.detail}"
+        hint = _probe_runtime_hint(result)
+        base = f"probe status is {result.status}: {result.detail}"
+        return None, f"{base}; {hint}" if hint else base
     rows = [
         line[len(_OBSERVATION_PREFIX) :]
         for line in result.stdout.splitlines()
