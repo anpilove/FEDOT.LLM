@@ -39,4 +39,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A remaining `SIGKILL` sets `infrastructure_error` and pauses the queue. `SIGSEGV` stays `evaluation_error` for that side only.
 - [x] A caught `MemoryError` is `memory_error`: per-side `invalid`, not `candidate_error`, and not the `SIGKILL` queue pause.
 - [x] Errno 28 and 122 are `storage_error`. A decision that sees that kind pauses and does not call it a candidate failure. The parent still raises `StorageCapacityError`.
-- [ ] Check whether a worker `storage_error` that raises out of `measure_fedot_quality` leaves the proposal `running` until the finally block resets it to `queued`.
+- [x] A `StorageCapacityError` from measurement returns the proposal to `queued` with `keep` unset and reason `storage_capacity_exhausted`. It does not stay `running` and it is not a candidate verdict.
+- [ ] Read `list_queued_jobs`: `running` is selected again on the next drain. Confirm a storage stop is not immediately relaunched by the supervisor while `state` is `storage_error`.

@@ -1547,10 +1547,19 @@ def _drain_quality_queue_locked(
                     payload = {}
                 status = str(payload.get("status") or "")
                 if status == "running":
+                    reason = "executor_interrupted; resumable from quality journal"
+                    if original_error is not None and (
+                        isinstance(original_error, StorageCapacityError)
+                        or storage_failure_text(str(original_error))
+                    ):
+                        reason = (
+                            "storage_capacity_exhausted; proposal returned to queue "
+                            "without a verdict"
+                        )
                     try:
                         write_job_status(
                             job_path, "queued",
-                            {"reason": "executor_interrupted; resumable from quality journal", "keep": None},
+                            {"reason": reason, "keep": None},
                         )
                     except OSError as persist_error:
                         if original_error is None:

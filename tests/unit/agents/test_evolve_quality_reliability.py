@@ -1263,6 +1263,27 @@ def test_queue_shuts_down_executors_if_initial_proposal_submit_fails(tmp_path, m
     assert shutdowns == {"proposal": 1, "pairs": 1}
 
 
+def test_storage_error_from_measurement_returns_proposal_to_queue(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError
+
+    source, workspace = _enqueue(tmp_path, 2)
+
+    def measure(_source, _experiment, *, candidate, **_kwargs):
+        raise StorageCapacityError(28, "No space left on device", str(workspace))
+
+    monkeypatch.setattr(executor, "measure_fedot_quality", measure)
+    with pytest.raises(StorageCapacityError):
+        executor.drain_quality_queue(source, workspace, n_jobs=4, cpu_quota=4)
+
+    started = json.loads((workspace / "quality_queue/improvement-0.json").read_text())
+    waiting = json.loads((workspace / "quality_queue/improvement-1.json").read_text())
+    assert started["status"] == "queued"
+    assert started.get("keep") is None
+    assert "storage_capacity_exhausted" in started["reason"]
+    assert waiting["status"] == "queued"
+    assert waiting.get("keep") is None
+
+
 def test_unattended_queue_stops_when_results_cannot_be_saved(tmp_path, monkeypatch):
     source, workspace = _enqueue(tmp_path, 3)
     measured = []
