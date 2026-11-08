@@ -4,9 +4,15 @@ import sys
 import uuid
 from pathlib import Path
 
+from fedotllm.agents.evolve.commands.preflight import (
+    PREFLIGHT_SNIPPET,
+    dependency_checks,
+    parse_preflight_stdout,
+)
 from fedotllm.agents.evolve.execution.checkout import (
     create_experiment_checkout,
     discard_experiment_checkout,
+    source_commit,
     source_fingerprint,
 )
 from fedotllm.agents.evolve.evaluation.eval import run_stock
@@ -40,7 +46,11 @@ def run_doctor(
             run_id=f"doctor-{uuid.uuid4().hex[:8]}",
             candidate_id="smoke",
         )
-        disjoint = experiment != source and source not in experiment.parents and experiment not in source.parents
+        disjoint = (
+            experiment != source
+            and source not in experiment.parents
+            and experiment not in source.parents
+        )
         checks["checkout"] = {
             "ok": disjoint,
             "source": str(source),
@@ -54,7 +64,10 @@ def run_doctor(
                 "controller_python": sys.executable,
             }
         except OSError as exc:
-            checks["interpreter"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            checks["interpreter"] = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
         snippet = run_fedot_snippet(
             experiment,
@@ -67,7 +80,29 @@ def run_doctor(
             "status": snippet.status,
             "output": snippet.output[-1000:],
         }
-        if evaluator:
+        probe_error = ""
+        runtime = None
+        try:
+            probe = run_fedot_snippet(
+                experiment,
+                PREFLIGHT_SNIPPET,
+                trace_path=workspace / "trace.jsonl",
+                timeout_s=60,
+            )
+        except (OSError, ValueError) as exc:
+            probe_error = f"{type(exc).__name__}: {exc}"
+        else:
+            if probe.status != "ok":
+                probe_error = probe.detail or probe.output[-500:]
+            else:
+                runtime = parse_preflight_stdout(probe.stdout)
+                if runtime is None:
+                    probe_error = "preflight probe did not emit EVOLVE_PREFLIGHT"
+        checks.update(dependency_checks(experiment, runtime, probe_error=probe_error))
+        preflight_ok = all(
+            checks[name]["ok"] for name in ("return_best", "dask", "path")
+        )
+        if evaluator and preflight_ok:
             score = run_stock(
                 evaluator_task,
                 checkout=experiment,
@@ -82,13 +117,23 @@ def run_doctor(
                 "detail": score.detail,
                 "env_hash": score.env_hash,
             }
+        elif not preflight_ok:
+            checks["evaluator"] = {
+                "ok": True,
+                "skipped": True,
+                "reason": "preflight_failed",
+            }
         else:
             checks["evaluator"] = {"ok": True, "skipped": True}
     except Exception as exc:
         # Attribute the failure to the first check that has not reported yet
         # instead of overwriting an already successful checkout check.
         failed = next(
-            (name for name in ("checkout", "interpreter", "fedot_import", "evaluator") if name not in checks),
+            (
+                name
+                for name in ("checkout", "interpreter", "fedot_import", "evaluator")
+                if name not in checks
+            ),
             "doctor",
         )
         checks[failed] = {
@@ -98,7 +143,9 @@ def run_doctor(
     finally:
         if experiment is not None and experiment.exists():
             try:
-                discard_experiment_checkout(experiment, workspace=workspace, source=source)
+                discard_experiment_checkout(
+                    experiment, workspace=workspace, source=source
+                )
             except Exception as exc:
                 checks["cleanup"] = {
                     "ok": False,
@@ -106,6 +153,18 @@ def run_doctor(
                 }
 
     after = source_fingerprint(source)
-    checks["immutable_source"] = {"ok": before == after, "before": before, "after": after}
+    checks["immutable_source"] = {
+        "ok": before == after,
+        "before": before,
+        "after": after,
+    }
+    package = (source / "fedot").is_dir() and (
+        source / "fedot" / "__init__.py"
+    ).is_file()
+    checks["pin"] = {
+        "ok": before == after and package,
+        "source_hash": after,
+        "source_commit": source_commit(source),
+    }
     ok = all(bool(item.get("ok")) for item in checks.values())
     return {"ok": ok, "checks": checks}
