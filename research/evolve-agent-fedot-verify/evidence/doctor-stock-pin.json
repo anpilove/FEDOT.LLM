@@ -1,0 +1,8 @@
+{
+  "doctor_ok": false,
+  "doctor_failure_kind": "fedot_pin_incompatible",
+  "research_worktree_ok": true,
+  "research_detail": "using research return_best worktree at /tmp/fedot-verify/FEDOT-return-best",
+  "research_source": "/tmp/fedot-verify/FEDOT-return-best"
+}
+ASSERT_OK

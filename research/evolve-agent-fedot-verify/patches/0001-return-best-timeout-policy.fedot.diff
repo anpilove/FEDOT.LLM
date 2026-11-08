@@ -80,3 +80,22 @@ index 66fac7a1..b089ebd1 100644
  
      def have_time_for_composing(self, pop_size: int, n_jobs: int) -> bool:
          timeout_not_set = self.timedelta_composing is None
+diff --git a/fedot/core/optimisers/isolated_gp_optimizer.py b/fedot/core/optimisers/isolated_gp_optimizer.py
+new file mode 100644
+index 00000000..d8168e35
+--- /dev/null
++++ b/fedot/core/optimisers/isolated_gp_optimizer.py
+@@ -0,0 +1,13 @@
++"""Research-only stub expected by EvolveAgent candidate_dispatcher.
++
++Not a production GOLEM replacement. Exists so pin preflight and worker import
++succeed under EVOLVE_FEDOT_RETURN_BEST_POLICY=research_worktree.
++"""
++
++from golem.core.optimisers.genetic.gp_optimizer import EvoGraphOptimizer
++
++
++class IsolatedEvoGraphOptimizer(EvoGraphOptimizer):
++    """Placeholder subclass; real isolation belongs in an upstream FEDOT change."""
++
++    pass
