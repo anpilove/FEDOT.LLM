@@ -1,0 +1,32 @@
+2026-11-08 13:38:22,148 - TabPFN is required but not installed. Install with `pip install fedot[extra]` or `pip install tabpfn`.
+{
+  "task": "fedot-ts-temperature-smoke",
+  "claim": "no quality improvement claim; A/A measurability on local TS with return_best research worktree",
+  "scores_mae": [
+    0.6701032247775108,
+    0.6701032247775108
+  ],
+  "equal": true,
+  "both_finite": true,
+  "details": [
+    {
+      "side": "a",
+      "mae": 0.6701032247775108,
+      "finite": true,
+      "elapsed_s": 12.209,
+      "n_train": 188,
+      "horizon": 12,
+      "fedot_file": "/tmp/fedot-verify/FEDOT-return-best/fedot/__init__.py"
+    },
+    {
+      "side": "b",
+      "mae": 0.6701032247775108,
+      "finite": true,
+      "elapsed_s": 11.467,
+      "n_train": 188,
+      "horizon": 12,
+      "fedot_file": "/tmp/fedot-verify/FEDOT-return-best/fedot/__init__.py"
+    }
+  ]
+}
+ASSERT_OK

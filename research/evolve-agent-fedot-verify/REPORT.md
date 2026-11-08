@@ -15,7 +15,11 @@
 3. Microbenchmark: явный hint про missing `dask`
 4. Политика `refuse` (default) / `research_worktree` (offline only)
 
-Ещё не exit идеала: полный registry A/A на Cloud Environment пользователя; upstream FEDOT `return_best` в pin.
+Доказательства A/A measurability:
+- synthetic classification: `evidence/aa-smoke.json` (`[1.0, 1.0]`)
+- local TS temperature на research worktree: `evidence/aa-local-ts.json` (MAE `0.670…` равны)
+
+Ещё не exit идеала: полный registry A/A на Cloud Environment пользователя + OpenML offline cache; upstream FEDOT `return_best` в официальном pin (сейчас только research worktree / refuse).
 
 ## 0. Окружение (обязательное)
 
