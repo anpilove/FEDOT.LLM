@@ -28,6 +28,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `has_no_cycle` rejects a graph that points back into itself before evaluation. A finished journal event could still adopt a result whose `attempt_id` named a different attempt. A stock cache lookup also crashed when the path resolver returned no file, so a disabled cache stopped the pair before the side ran.
 - GOLEM `has_no_isolated_nodes` rejects a node with no edge into the rest of the graph, unless the graph is a single node. A finished side event with no `task_id` was stored under `str(None)`, so a queue task of `null` became a measured dataset and the event counted as task progress.
 - GOLEM `has_no_self_cycled_nodes` rejects a node that lists itself as an input. A finished side event could still adopt a score whose `worker_paths` resolved to the journal that stored the event.
+- GOLEM `has_no_isolated_components` rejects a graph that falls into disconnected pieces. `stock_pack_measured` returned true for attested stock rows when no job asked for those datasets, and an extra dataset beside a requested one still counted as a measured pack.
 
 ## Found
 
@@ -67,4 +68,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A finished journal event whose `attempt_id`, or the `attempt_id` inside its result, names a different attempt is not recovered as that side's metric. A cache hit may still keep the producer attempt identity. A missing stock-cache path is a miss, not a crash.
 - [x] A finished side event with no `task_id` is not task progress and does not make a null queue task measured.
 - [x] A finished side whose `worker_paths` resolve to the journal is not recovered as that side's metric.
-- [ ] Read GOLEM `has_no_isolated_components`: a graph with two disconnected pieces is rejected. Check that `stock_ok` stays false when the only measured stock rows name datasets that no job asked for.
+- [x] `stock_ok` stays false when a measured stock row names a dataset that no job asked for, including a pack with no jobs.
+- [ ] Read GOLEM `has_one_root`: a graph with more than one root is rejected. Check that two quality rows for the same dataset cannot collapse into one delta and hide a regression.

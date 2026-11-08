@@ -3219,6 +3219,19 @@ def test_stock_pack_with_half_the_datasets_unattested_is_not_measured():
     }]) is False
 
 
+def test_stock_pack_rejects_datasets_no_job_asked_for():
+    from fedotllm.agents.evolve.evaluation.fedot_quality import stock_pack_measured
+
+    other = {"candidate_id": "proposal", "task_id": "other", "measured": True}
+    asked = {"candidate_id": "proposal", "task_id": "one", "measured": True}
+    job = {"candidate_id": "proposal", "task_ids": ["one"], "unresolved_task_ids": []}
+
+    assert stock_pack_measured([other], []) is False
+    assert stock_pack_measured([other], [job]) is False
+    assert stock_pack_measured([asked, other], [job]) is False
+    assert stock_pack_measured([asked], [job]) is True
+
+
 def test_stock_only_cli_rejects_a_half_attested_pack(tmp_path, monkeypatch):
     from argparse import Namespace
 

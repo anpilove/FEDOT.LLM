@@ -2109,24 +2109,33 @@ def stock_pack_measured(stock_rows: list[dict], jobs: list[dict]) -> bool:
 
     A pack with half or fewer attested datasets is not a measured pack. Any
     missing or unattested dataset fails the pack, including a 50/50 split.
+    GOLEM ``has_no_isolated_components`` rejects a graph whose pieces do not
+    connect. A measured stock row for a dataset that no job asked for is that
+    extra piece, and an empty job list does not make the rows a pack.
     """
 
-    if not stock_rows or not all(row.get("measured") is True for row in stock_rows):
+    if not stock_rows or not jobs or not all(row.get("measured") is True for row in stock_rows):
         return False
-    if not jobs:
-        return True
     indexed = {
         (str(row.get("candidate_id") or ""), str(row.get("task_id") or "")): row
         for row in stock_rows
     }
+    requested: set[tuple[str, str]] = set()
     for job in jobs:
         candidate = str(job.get("candidate_id") or "")
-        tasks = [str(task_id) for task_id in (job.get("task_ids") or ())]
-        unresolved = [str(task_id) for task_id in (job.get("unresolved_task_ids") or ())]
+        tasks = [str(task_id) for task_id in (job.get("task_ids") or ()) if str(task_id)]
+        unresolved = [str(task_id) for task_id in (job.get("unresolved_task_ids") or ()) if str(task_id)]
         if not tasks or unresolved:
             return False
+        for task_id in tasks:
+            requested.add((candidate, task_id))
         if any(indexed.get((candidate, task_id), {}).get("measured") is not True for task_id in tasks):
             return False
+    if any(
+        (str(row.get("candidate_id") or ""), str(row.get("task_id") or "")) not in requested
+        for row in stock_rows
+    ):
+        return False
     return True
 
 
