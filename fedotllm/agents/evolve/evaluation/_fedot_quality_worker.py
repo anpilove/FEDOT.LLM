@@ -655,7 +655,9 @@ def main(argv: list[str] | None = None) -> int:
                 payload["metric_observations"]["python_line_trace_path"] = line_diagnostics.get("output_path")
                 with timings.measure("saved_payload"):
                     write_json_atomic(Path(args.out), payload)
-    return 0 if payload.get("status") != "crash" else 2
+    # ok and an internal budget timeout are completed outcomes. Any other
+    # published result, including a candidate-side exception, is invalid.
+    return 0 if payload.get("status") in {"ok", "timeout"} else 2
 
 
 @contextmanager
@@ -981,9 +983,11 @@ def _evaluate_worker_with_logging(
             failure_kind = "fedot_fit_error"
         else:
             failure_kind = "worker_error"
+        published_status = "timeout" if is_fedot_budget_timeout else "invalid"
         payload = {
             "task_id": spec.get("source_dataset", ""),
-            "status": "timeout" if is_fedot_budget_timeout else "crash",
+            "status": published_status,
+            "outcome": published_status,
             "failure_kind": failure_kind,
             "failed_stage": failed_stage,
             "last_stage": timings.last_stage,

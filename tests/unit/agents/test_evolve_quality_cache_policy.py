@@ -123,7 +123,9 @@ def test_disabled_policy_rejects_runtime_that_keeps_or_reenables_a_cache(tmp_pat
     # while retaining the storage growth that this protocol promises to avoid.
     rc, payload, _ = run_fixture(tmp_path, monkeypatch, enabled_at=enabled_at)
     assert rc == 2
-    assert payload["status"] == "crash"
+    assert payload["status"] == "invalid"
+    assert payload["outcome"] == "invalid"
+    assert payload["failure_kind"] == "fedot_fit_error"
     assert "cache policy" in payload["detail"].lower()
     assert "active" in payload["detail"].lower()
     assert ("before fit" if enabled_at == "constructor" else "after fit") in payload["detail"].lower()
