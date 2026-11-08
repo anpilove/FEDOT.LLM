@@ -34,6 +34,9 @@ def test_diagnostic_buffer_keeps_bounded_tail_and_early_search_evidence():
     assert buffer.composition_started is True
     buffer.write("timeout is too small for composing\n")
     assert buffer.composition_skipped is True
+    buffer.write("Early stopping criteria was satisfied after 10 minutes\n")
+    assert buffer.early_stopping_fired is True
+    assert buffer.early_stopping_kind == "early_stopping_timeout"
 
 
 def test_diagnostic_buffer_tracks_last_fedot_fit_phase_without_refreshing_it_on_other_logs(tmp_path):
@@ -67,6 +70,36 @@ def test_diagnostic_buffer_tracks_last_fedot_fit_phase_without_refreshing_it_on_
 
     buffer.write("Timeout is too small for composing; initial assumption is used\n")
     assert buffer.fedot_phase == "initial_assumption_fallback"
+
+
+def test_early_stopping_inside_the_budget_stays_a_completed_search():
+    class Composer:
+        was_optimised = True
+
+    class Model:
+        api_composer = Composer()
+        history = None
+
+    ran, detail = worker._search_ran(
+        Model(),
+        "Pipeline composition started\nEarly stopping criteria was satisfied after 10 minutes\n",
+        composition_started=True,
+    )
+
+    assert ran is True
+    assert detail == "early_stopping_timeout"
+
+    class Idle:
+        api_composer = SimpleNamespace(was_optimised=False)
+        history = None
+
+    ran, detail = worker._search_ran(
+        Idle(),
+        "Early stopping criteria was satisfied after 10 minutes\n",
+    )
+
+    assert ran is False
+    assert detail == "early_stopping_timeout"
 
 
 def test_stage_heartbeat_continues_during_long_fit(tmp_path):
@@ -383,6 +416,7 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
             if max_pipeline_evaluation_time is not None:
                 kwargs["max_pipeline_evaluation_time"] = max_pipeline_evaluation_time
             assert kwargs["timeout"] == 45
+            assert kwargs["early_stopping_timeout"] == 45
             assert kwargs["n_jobs"] == 4
             expected_fit = expected_max_pipeline_fit_minutes
             if expected_fit is None:

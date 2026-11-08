@@ -10,6 +10,7 @@ no quality KEEP, no OpenML registry run.
 - `fedotllm/agents/evolve/README.md` through the controller split
 - `fedotllm/agents/evolve/controller/README.md` through the module map
 - FEDOT paper, arXiv:2106.15397: workflow design is bounded by a time limit tau_g. Current FEDOT docs also default `early_stopping_timeout` to 10 minutes, separate from the hour-long side budget.
+- `controller/README.md` failure section: a finished watchdog is not retried. `Fedot.timeout` and the side deadline are different budgets. The README does not mention the 10-minute GOLEM stagnation default.
 
 ## Found
 
@@ -28,4 +29,6 @@ no quality KEEP, no OpenML registry run.
 - [x] Record `watchdog_fired` and classify that timeout as `watchdog_timeout`, not infrastructure. Pause the queue on it.
 - [ ] Read the rest of `controller/README.md` and check diagnose/heartbeat against the code.
 - [ ] Read `execution/process.py` watchdog versus task timeout and add a missing distinction if the tests do not already lock it.
-- [ ] Check whether GOLEM `early_stopping_timeout` (docs default 10 minutes) can stop composition inside the hour budget and get recorded as `search_ran=false` infrastructure. One code or test change, no prompt edits.
+- [x] Pass `early_stopping_timeout` equal to the declared FEDOT minute budget and record `early_stopping_timeout` separately from `composing_did_not_start`. A valid metric stays `ok`.
+- [ ] Read `execution/process.py` watchdog versus task timeout and add a missing distinction if the tests do not already lock it.
+- [ ] Compare diagnose heartbeat staleness with the README claim that a missing optimizer marker is not a deadlock.

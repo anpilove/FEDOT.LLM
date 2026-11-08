@@ -39,6 +39,8 @@ class _BoundedLogBuffer:
         self._size = 0
         self.composition_started = False
         self.composition_skipped = False
+        self.early_stopping_fired = False
+        self.early_stopping_kind = ""
         self.last_log_line = ""
         self.last_log_at = ""
         self.fedot_phase = ""
@@ -49,6 +51,11 @@ class _BoundedLogBuffer:
         lower = text.lower()
         self.composition_started |= "pipeline composition started" in lower
         self.composition_skipped |= "timeout is too small for composing" in lower
+        if "early stopping" in lower:
+            self.early_stopping_fired = True
+            self.early_stopping_kind = (
+                "early_stopping_iterations" if "iteration" in lower else "early_stopping_timeout"
+            )
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if lines:
             self.last_log_line = lines[-1][-500:]
@@ -432,17 +439,36 @@ def _history_generations(history) -> int:
     return 1
 
 
+def _early_stopping_kind(log_text: str) -> str:
+    lower = log_text.lower()
+    if "early stopping" not in lower:
+        return ""
+    if "iteration" in lower:
+        return "early_stopping_iterations"
+    return "early_stopping_timeout"
+
+
 def _search_ran(model, log_text: str, *, composition_started: bool = False,
                 composition_skipped: bool = False) -> tuple[bool, str]:
     composer = getattr(model, "api_composer", None)
     was_optimised = bool(getattr(composer, "was_optimised", False))
     generations = _history_generations(getattr(model, "history", None))
     skipped = composition_skipped or "timeout is too small for composing" in log_text.lower()
+    early = _early_stopping_kind(log_text)
+    started = (
+        composition_started
+        or generations > 0
+        or "pipeline composition started" in log_text.lower()
+    )
     if skipped or not was_optimised:
+        if early and started and not skipped:
+            return True, early
+        if early and not skipped:
+            return False, early
         return False, "composing_did_not_start"
-    if generations <= 0 and not composition_started and "pipeline composition started" not in log_text.lower():
-        return False, "composing_did_not_start"
-    return True, "composing_started"
+    if generations <= 0 and not started:
+        return False, early or "composing_did_not_start"
+    return True, early or "composing_started"
 
 
 def _positive_class_scores(prediction) -> "object":
@@ -849,6 +875,9 @@ def _evaluate_worker_with_logging(
             cache_dir = out_path.with_suffix(".fedot-cache")
             cache_dir.mkdir(exist_ok=False)
             timeout_minutes = float(spec["timeout_minutes"])
+            # GOLEM's default stagnation stop is 10 minutes. The side budget is
+            # the declared stop; a shorter hidden timer must not end the search.
+            early_stopping_timeout_minutes = max(1, math.ceil(timeout_minutes))
             ts = dataset.problem == "ts_forecasting"
             extra = {}
             if ts:
@@ -869,6 +898,7 @@ def _evaluate_worker_with_logging(
             model = Fedot(
                 problem=dataset.problem,
                 timeout=timeout_minutes,
+                early_stopping_timeout=early_stopping_timeout_minutes,
                 seed=int(spec["seed"]),
                 n_jobs=int(spec["n_jobs"]),
                 preset=str(spec["preset"]),
@@ -958,6 +988,9 @@ def _evaluate_worker_with_logging(
                 "final_fit_reserve_seconds": final_fit_reserve_seconds,
                 "fedot_fit_budget_outcome": getattr(model, "fit_budget_outcome", None),
                 "timeout_minutes": spec["timeout_minutes"],
+                "early_stopping_timeout_minutes": early_stopping_timeout_minutes,
+                "early_stopping_fired": bool(log_stream.early_stopping_fired),
+                "early_stopping_kind": log_stream.early_stopping_kind or None,
                 "cv_folds": cv_folds,
                 "max_pipeline_fit_time_seconds": max_pipeline_fit_time_seconds,
                 "max_pipeline_fit_policy": fit_policy,
