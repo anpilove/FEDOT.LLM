@@ -421,6 +421,22 @@ def test_normal_completion_preserves_stdout_stderr_and_returncode(tmp_path, canc
     assert outcome.cancelled is False
 
 
+def test_completion_observed_at_the_deadline_stays_a_timeout(tmp_path):
+    script = tmp_path / "done.py"
+    script.write_text("print('done')\n", encoding="utf-8")
+
+    outcome = run_worker(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        timeout=0,
+    )
+
+    assert outcome.timed_out is True
+    assert outcome.timeout_kind == "task_timeout"
+    assert outcome.returncode is None
+
+
 def test_parent_monitored_task_timeout_is_distinct_and_kills_same_session_child(tmp_path):
     """The task deadline must fire before, and independently of, its guardian cap."""
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)

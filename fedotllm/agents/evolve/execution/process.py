@@ -341,7 +341,17 @@ def run_worker(
             # remain alive. Clear those owned descendants before disarming.
             if outcome is None:
                 completed = _kill_worker_group(proc)
-                outcome = WorkerOutcome(proc.returncode, out or "", err or "")
+                # GOLEM apply_evaluation_results drops a None evaluation instead
+                # of merging it. A completion observed at or after the deadline
+                # is that case: the result file must not replace the timeout.
+                late = deadline is not None and time.monotonic() >= deadline
+                outcome = WorkerOutcome(
+                    None if late else proc.returncode,
+                    out or "",
+                    err or "",
+                    timed_out=late,
+                    timeout_kind="task_timeout" if late else None,
+                )
         except BaseException as original:
             # Cleanup must also cover guardian startup failure and interrupts.
             # Preserve the original exception even when cleanup itself fails.

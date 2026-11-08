@@ -715,6 +715,100 @@ def test_recovers_parent_timeout_manifest_without_inventing_a_metric(tmp_path):
     assert storage.read_jsonl(journal, strict=True)
 
 
+def test_result_file_written_after_the_deadline_does_not_replace_timeout_manifest(tmp_path):
+    from fedotllm.agents.evolve.evaluation.fedot_quality import worker_artifact_paths
+
+    journal = tmp_path / "quality_jobs.jsonl"
+    paths = worker_artifact_paths("fedot-ts-beer", "patch", "proposal-r3", 2, root=tmp_path)
+    evaluation_identity = {"n_jobs": 4, "source_sha256": "source-v11"}
+    identity = {
+        "candidate": "proposal-r3",
+        "task_id": "fedot-ts-beer",
+        "side": "patch",
+        "attempt": 2,
+        "attempt_id": "proposal-r3:fedot-ts-beer:patch:2",
+        "registry_identity": "registry-v11",
+        "evaluation_identity": evaluation_identity,
+    }
+    common = {
+        **identity,
+        "candidate_revision_id": "proposal-r3",
+        "proposal_id": "proposal-r3",
+        "spec": {"n_jobs": 4, "timeout_seconds": 5400, "fedot_search_budget_seconds": 4500},
+        "worker_paths": paths,
+        "worker_result_path": paths["worker_result_path"],
+        "stage_status_path": paths["stage_status_path"],
+        "worker_log_path": paths["worker_log_path"],
+    }
+    storage.append_journal(journal, {**common, "event": "quality_task_side_started"})
+    timeout_path = Path(paths["timeout_manifest_path"])
+    timeout_path.write_text(json.dumps({
+        "schema_version": 1,
+        "event": "quality_worker_parent_timeout",
+        **{key: identity[key] for key in (
+            "task_id", "side", "attempt", "attempt_id", "registry_identity", "evaluation_identity"
+        )},
+        "source_dataset": "fedot-ts-beer",
+        "proposal_id": "proposal-r3",
+        "status": "timeout",
+        "failure_kind": "timeout",
+        "metric_outcome": "not_measured",
+        "metric_valid": False,
+        "timeout_kind": "task_timeout",
+        "detail": "task_timeout after 5400s",
+        "side_elapsed_seconds": 5400.0,
+        "worker_elapsed_seconds": 5350.0,
+        "worker_result_path": paths["worker_result_path"],
+        "worker_log_path": paths["worker_log_path"],
+        "stage_status_path": paths["stage_status_path"],
+    }))
+    result_path = Path(paths["worker_result_path"])
+    stage_path = Path(paths["stage_status_path"])
+    result_path.write_text(json.dumps({
+        "task_id": "fedot-ts-beer",
+        "status": "ok",
+        "score": 0.99,
+        "duration_s": 5401.0,
+        "metric_observations": {"metric_valid": True, "search_ran": True},
+        "proposal_id": "proposal-r3",
+        "attempt_id": identity["attempt_id"],
+        "source_dataset": "fedot-ts-beer",
+        "side": "patch",
+        "attempt": 2,
+        "registry_identity": "registry-v11",
+        "evaluation_identity": evaluation_identity,
+    }))
+    stage_path.write_text(json.dumps({
+        "proposal_id": "proposal-r3",
+        "attempt_id": identity["attempt_id"],
+        "task_id": "fedot-ts-beer",
+        "source_dataset": "fedot-ts-beer",
+        "side": "patch",
+        "attempt": 2,
+        "registry_identity": "registry-v11",
+        "evaluation_identity": evaluation_identity,
+        "n_jobs": 4,
+        "timeout_seconds": 5400,
+        "fedot_search_budget_seconds": 4500,
+        "event": "worker_finished",
+    }))
+    os.utime(result_path, (timeout_path.stat().st_mtime + 5, timeout_path.stat().st_mtime + 5))
+
+    results, _attempts = executor._recover_side_state(
+        journal,
+        candidate_id="proposal-r3",
+        task_ids=("fedot-ts-beer",),
+        registry_identity="registry-v11",
+        evaluation_identity=evaluation_identity,
+    )
+
+    recovered = results[("fedot-ts-beer", "patch")]
+    assert recovered.status == "timeout"
+    assert math.isnan(recovered.score)
+    assert recovered.metric_observations["metric_valid"] is False
+    assert recovered.metric_observations["recovered_parent_timeout_manifest"] is True
+
+
 @pytest.mark.parametrize("field,value", [
     ("schema_version", True),
     ("side_elapsed_seconds", None),
