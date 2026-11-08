@@ -442,7 +442,10 @@ def test_unfinished_spawned_event_recovers_as_interrupted_attempt(tmp_path):
     interrupted = [row for row in events if row.get("event") == "quality_task_side_interrupted"]
     assert len(interrupted) == 1
     assert interrupted[0]["attempt_id"] == "a:fedot-ts-beer:stock:1"
+    assert interrupted[0]["result"]["status"] == "crash"
+    assert interrupted[0]["result"]["outcome"] == "interrupted"
     assert interrupted[0]["result"]["metric_observations"]["failure_kind"] == "controller_interrupted"
+    assert interrupted[0]["result"]["metric_observations"]["outcome"] == "interrupted"
     assert storage.read_jsonl(path, strict=True)
     quarantine_files = list(tmp_path.glob("quality_jobs.jsonl.incomplete-tail.*.bin"))
     assert len(quarantine_files) == 1

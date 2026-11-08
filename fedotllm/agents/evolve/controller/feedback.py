@@ -7,6 +7,7 @@ import json
 import re
 from pathlib import Path
 
+from fedotllm.agents.evolve.evaluation.compare import candidate_failed
 from fedotllm.agents.evolve.types import (
     Decision,
     PatchCandidate,
@@ -149,7 +150,9 @@ def _dev_feedback(
         task_id
         for task_id, result in patched.items()
         if task_id in stock
-        and result.status == stock[task_id].status == "crash"
+        and candidate_failed(result)
+        and candidate_failed(stock[task_id])
+        and result.status == stock[task_id].status
         and (result.detail, _failure_path(result))
         != (stock[task_id].detail, _failure_path(stock[task_id]))
     }
@@ -404,4 +407,4 @@ def _blocking_lift_crash_ids(
     available = [stock[task_id] for task_id in lift_ids if task_id in stock]
     if any(result.status == "ok" for result in available):
         return ()
-    return tuple(result.task_id for result in available if result.status == "crash")
+    return tuple(result.task_id for result in available if candidate_failed(result))

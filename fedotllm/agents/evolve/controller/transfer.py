@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 
 from fedotllm.agents.evolve.evaluation.affected_eval import _line_reached
+from fedotllm.agents.evolve.evaluation.compare import candidate_failed
 from fedotllm.agents.evolve.evaluation.eval import run_stock, run_patched
 from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL
 from fedotllm.agents.evolve.evaluation.tasks import all_tasks, load_task
@@ -113,7 +114,7 @@ def preregister_transfer(source, target, lead, params, *, screen_sources: int = 
             for task in dataset_tasks(target):
                 baseline = run_stock(task, checkout=source, split="dev", seed=42,
                                      collect_coverage=True, task_override=_override(scenario, params))
-                failure_at_lead = baseline.status == "crash" and _crash_at_lead(baseline, lead)
+                failure_at_lead = candidate_failed(baseline) and _crash_at_lead(baseline, lead)
                 config_reached = bool(configuration_operation) and any(
                     flow.get("operation") == configuration_operation
                     for flow in baseline.dataflow
@@ -155,10 +156,11 @@ def validate_transfer(plan):
             return "transfer_baseline_incomplete"
         if status == "ok":
             continue
-        # A stock crash is admissible only when its traceback names the planned
-        # source line. Other crashes remain infrastructure/incomplete evidence.
-        if status != "crash" or not row.get("baseline_failure_at_lead"):
-            return "transfer_baseline_incomplete"
+        # A stock candidate failure is admissible only when its traceback names
+        # the planned source line. Timeouts and other failures stay incomplete.
+        if status in {"crash", "invalid"} and row.get("baseline_failure_at_lead"):
+            continue
+        return "transfer_baseline_incomplete"
     affected = {row["data_hash"] for row in rows if row["affected"]}
     if len(affected) < 2:
         return "transfer_insufficient_affected_datasets"
@@ -214,11 +216,13 @@ def evaluate_transfer(source, experiment, plan, *, params=None, split, fold=None
             if budget is not None:
                 budget.finish(started)
         recovered_crash = (
-            before.status == "crash" and after.status == "ok"
+            candidate_failed(before) and after.status == "ok"
             and row.get("baseline_failure_at_lead") and _crash_at_lead(before, lead)
         )
         unchanged_crash = (
-            before.status == after.status == "crash" and before.detail == after.detail
+            candidate_failed(before) and candidate_failed(after)
+            and before.status == after.status
+            and before.detail == after.detail
             and row.get("baseline_failure_at_lead") and _crash_at_lead(before, lead)
         )
         if recovered_crash:

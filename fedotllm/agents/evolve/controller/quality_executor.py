@@ -574,6 +574,7 @@ def _recover_side_state(
             detail=detail,
             metric_observations={
                 "failure_kind": "controller_interrupted",
+                "outcome": "interrupted",
                 "interrupted_after_event": latest_event[key].get("event"),
             },
         )
@@ -598,11 +599,13 @@ def _recover_side_state(
                 "interrupted_after_event": previous.get("event"),
                 "result": {
                     "status": "crash",
+                    "outcome": "interrupted",
                     "score": None,
                     "detail": detail,
                     "duration_s": 0.0,
                     "metric_observations": {
                         "failure_kind": "controller_interrupted",
+                        "outcome": "interrupted",
                         "interrupted_after_event": previous.get("event"),
                     },
                 },

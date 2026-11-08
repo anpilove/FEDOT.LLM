@@ -136,6 +136,15 @@ def test_crashed_baseline_is_incomplete_not_excluded(world):
     assert transfer.validate_transfer(plan) == "transfer_baseline_incomplete"
 
 
+def test_traced_invalid_baseline_stays_in_the_transfer_plan(world):
+    plan, _, _ = world
+    plan["datasets"][0]["baseline_status"] = "invalid"
+    plan["datasets"][0]["baseline_failure_at_lead"] = True
+    assert transfer.validate_transfer(plan) is None
+    plan["datasets"][0]["baseline_failure_at_lead"] = False
+    assert transfer.validate_transfer(plan) == "transfer_baseline_incomplete"
+
+
 def test_changed_dataset_inventory_invalidates_plan(world):
     plan, _, _ = world
     plan["datasets"].pop()

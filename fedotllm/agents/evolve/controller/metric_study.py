@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fedotllm.agents.evolve.evaluation.affected_eval import _line_reached
+from fedotllm.agents.evolve.evaluation.compare import candidate_failed, patched_broke
 from fedotllm.agents.evolve.evaluation.eval import run_stock, run_patched
 from fedotllm.agents.evolve.evaluation.independent_data import PROTOCOL, FOLDS
 from fedotllm.agents.evolve.evaluation.tasks import load_task
@@ -97,11 +98,17 @@ def judge_pair(before, after, target, *, practical=True):
         left, right = a.data_evidence, b.data_evidence
         if not left or left != right or left.get("protocol") != PROTOCOL:
             return False, {"reason": f"data_pair_mismatch:{task}", "deltas": deltas}
-        if a.status == b.status == "crash" and a.detail == b.detail and task != target:
+        if (
+            task != target
+            and candidate_failed(a)
+            and candidate_failed(b)
+            and a.status == b.status
+            and a.detail == b.detail
+        ):
             baseline_crashes.append(task)
             deltas[task] = None
             continue
-        if a.status == "ok" and b.status == "crash":
+        if patched_broke(a, b):
             return False, {"reason": f"regression:{task}:crash", "deltas": deltas}
         if a.status != "ok" or b.status != "ok":
             return False, {"reason": f"unmeasured:{task}", "deltas": deltas}

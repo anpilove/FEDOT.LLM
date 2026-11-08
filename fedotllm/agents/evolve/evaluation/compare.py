@@ -28,14 +28,18 @@ def _numeric(result: ScoreResult, sentinel: float) -> float | None:
     return result.score
 
 
+def candidate_failed(result: ScoreResult) -> bool:
+    """A candidate-owned failure. Pin mismatches and timeouts are not included."""
+
+    if result.status == "crash":
+        return True
+    return result.status == "invalid" and _failure_kind(result) in CANDIDATE_FAILURES
+
+
 def patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
     """Stock measured a score and the patch failed as a candidate."""
 
-    if stock.status != "ok":
-        return False
-    if patched.status == "crash":
-        return True
-    return patched.status == "invalid" and _failure_kind(patched) in CANDIDATE_FAILURES
+    return stock.status == "ok" and candidate_failed(patched)
 
 
 def _spec(

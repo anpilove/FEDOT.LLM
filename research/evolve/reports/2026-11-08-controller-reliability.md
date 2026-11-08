@@ -19,13 +19,17 @@ Smoke A/A and the microbenchmark workspace path run in an experiment checkout. R
 
 return_best requires explicit Fedot.__init__ parameters. Installed pin compatible=False missing=['timeout_policy', 'final_fit_reserve_seconds', 'cv_folds', 'max_pipeline_fit_time', 'max_pipeline_evaluation_time']. The worker publishes return_best_incompatible and does not call Fedot(). legacy keeps the current kwargs and does not claim return_best.
 
-## DEV != FINAL, budget, recovery
+## Candidate invalid
 
-tests/unit/agents/test_evolve_mvp.py::test_dev_final_indices_are_disjoint_and_repeatable passed. SHADOW, DEV and FINAL index sets are disjoint.
+`fedot_import_error`, `fedot_fit_error`, `scoring_error`, and `worker_error` are a broken patch in compare, affected-metric, metric_study, transfer, feedback, and confirmation. `return_best_incompatible` and timeout stay infrastructure. A traced invalid baseline stays in a transfer plan. An untraced invalid baseline stays incomplete.
 
-Worker tests reject a search budget that consumes the whole side deadline and keep fedot_budget_timeout as timeout, not invalid. test_evolve_budget_retry_review_fixes.py passed.
+## DEV and FINAL
 
-test_evolve_quality_reliability.py passed. An unfinished started side is still recovered as status=crash. That journal status is not the worker exception payload.
+`frozen_split_outcomes` on 80 alternating labels, problem classification: disjoint=True, keep=None, quality_claim=False. DEV outcome=reserved count=16. FINAL outcome=reserved count=16. No model was fit.
+
+## Interrupted recovery
+
+An unfinished started side stays status=crash. The journal result now also has outcome=interrupted and failure_kind=controller_interrupted.
 
 ## Smoke A/A
 
@@ -35,15 +39,16 @@ values: [16, 16]
 abs_delta: 0
 identical: True
 
+The control arm of the fixture smoke records control_score_pairs=3 and control_score_abs_delta=0.
+
 ## Not claimed
 
-Full OpenML registry KEEP was not run. Identical smoke repeats are
-measurement noise only.
+Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only.
 
 ## Regression command
 
 ```
-uv run pytest -q tests/unit/agents/test_evolve_runtime_contract.py tests/unit/agents/test_evolve_return_best_policy.py tests/unit/agents/test_evolve_worker_invocation_protocol.py tests/unit/agents/test_evolve_quality_worker_diagnostics.py tests/unit/agents/test_evolve_controller_smoke.py tests/unit/agents/test_evolve_doctor_preflight.py tests/unit/agents/test_evolve_quality_cache_policy.py tests/unit/agents/test_evolve_mvp.py::test_dev_final_indices_are_disjoint_and_repeatable tests/unit/agents/test_evolve_quality_reliability.py tests/unit/agents/test_evolve_budget_retry_review_fixes.py
+uv run pytest -q tests/unit/agents/test_evolve_runtime_contract.py tests/unit/agents/test_evolve_return_best_policy.py tests/unit/agents/test_evolve_worker_invocation_protocol.py tests/unit/agents/test_evolve_quality_worker_diagnostics.py tests/unit/agents/test_evolve_controller_smoke.py tests/unit/agents/test_evolve_doctor_preflight.py tests/unit/agents/test_evolve_quality_cache_policy.py tests/unit/agents/test_evolve_mvp.py::test_dev_final_indices_are_disjoint_and_repeatable tests/unit/agents/test_evolve_quality_reliability.py tests/unit/agents/test_evolve_budget_retry_review_fixes.py tests/unit/agents/test_evolve_invalid_alignment.py tests/unit/agents/test_evolve_compare_invalid.py tests/unit/agents/test_evolve_transfer.py
 ```
 
-Result: 197 passed in 11.12s.
+Result: 235 passed in 11.74s.

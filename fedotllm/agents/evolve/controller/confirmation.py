@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+from fedotllm.agents.evolve.evaluation.compare import patched_broke
 from fedotllm.agents.evolve.types import Decision, ScoreResult
 
 ScoreRunner = Callable[..., dict[str, ScoreResult]]
@@ -50,7 +51,7 @@ def _deterministic_patch_failure(
         after = patched[task_id]
         if before.status != "ok":
             continue
-        if after.status == "crash":
+        if patched_broke(before, after):
             return f"regression {task_id} crashed after patch", False
         if after.status in {"timeout", "invalid"}:
             return f"regression {task_id} timeout_or_invalid", True
