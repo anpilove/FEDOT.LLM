@@ -4,6 +4,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import threading
 from pathlib import Path
 import sys
@@ -346,6 +347,26 @@ def test_nonzero_worker_exit_cannot_return_a_successful_metric(tmp_path, monkeyp
     result = quality.run_quality_side("fedot-ts-beer", checkout=tmp_path, side="patch")
     assert result.status != "ok"
     assert "7" in result.detail
+    assert result.metric_observations["failure_kind"] == "worker_exit"
+
+
+def test_signaled_worker_is_not_a_measured_exit(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.evaluation import fedot_quality as quality
+    from fedotllm.agents.evolve.evaluation.compare import candidate_failed
+    from fedotllm.agents.evolve.execution.process import WorkerOutcome
+
+    def killed_worker(_command, **_kwargs):
+        return WorkerOutcome(-signal.SIGKILL, "Killed", "")
+
+    monkeypatch.setenv("EVOLVE_AGENT_TMP", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(quality, "run_worker", killed_worker)
+    result = quality.run_quality_side("fedot-ts-beer", checkout=tmp_path, side="patch")
+
+    assert result.status == "invalid"
+    assert result.metric_observations["failure_kind"] == "worker_signaled"
+    assert result.metric_observations["signal"] == signal.SIGKILL
+    assert "SIGKILL" in result.detail
+    assert candidate_failed(result) is False
 
 
 def _enqueue(tmp_path, count=1):

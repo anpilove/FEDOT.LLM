@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import signal
 import fcntl
 import os
 import platform
@@ -584,6 +585,24 @@ def _stage_status_observations(path: Path) -> dict:
     return observations
 
 
+def _terminated_worker(returncode: int | None) -> tuple[str, str, int | None]:
+    """Separate a signal death from a normal nonzero exit.
+
+    GOLEM treats a missing fitness as invalid and never better than a measured
+    fitness. A negative return code is that case: the process was signaled and
+    published no score. A positive exit is the worker's own status.
+    """
+
+    if isinstance(returncode, int) and not isinstance(returncode, bool) and returncode < 0:
+        number = -returncode
+        try:
+            name = signal.Signals(number).name
+        except ValueError:
+            name = str(number)
+        return f"worker signaled {name} ({number})", "worker_signaled", number
+    return f"worker exit {returncode}", "worker_exit", None
+
+
 def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str) -> ScoreResult:
     if not isinstance(payload, dict):
         raise ValueError("worker result must be a JSON object")
@@ -1013,28 +1032,32 @@ def run_quality_side(
             metric_observations=timeout_observations,
         )
     if not out_path.is_file():
+        detail, failure_kind, signal_number = _terminated_worker(proc.returncode)
+        missing_observations = {
+            **physical_observations,
+            "search_ran": False,
+            "worker_log_path": str(log_path),
+            "worker_result_path": str(out_path),
+            "stack_trace_path": paths["stack_trace_path"],
+            "failure_kind": failure_kind,
+            "elapsed_seconds": elapsed_seconds,
+            "worker_return_code": proc.returncode,
+            **_stage_status_observations(out_path.with_suffix(".stages.json")),
+        }
+        if signal_number is not None:
+            missing_observations["signal"] = signal_number
         return ScoreResult(
             task_id=dataset.task_id,
             status="invalid",
             score=float("nan"),
             duration_s=elapsed_seconds,
             traceback=log_text[-4000:],
-            detail=f"worker exit {proc.returncode}",
+            detail=detail,
             env_hash=env_hash,
             cmd=" ".join(cmd),
             log_tail=log_text[-4000:],
             seed=registry.seed,
-            metric_observations={
-                **physical_observations,
-                "search_ran": False,
-                "worker_log_path": str(log_path),
-                "worker_result_path": str(out_path),
-                "stack_trace_path": paths["stack_trace_path"],
-                "failure_kind": "worker_exit",
-                "elapsed_seconds": elapsed_seconds,
-                "worker_return_code": proc.returncode,
-                **_stage_status_observations(out_path.with_suffix(".stages.json")),
-            },
+            metric_observations=missing_observations,
         )
     try:
         payload = json.loads(out_path.read_text(encoding="utf-8"))
@@ -1080,7 +1103,21 @@ def run_quality_side(
         if proc.returncode != 0 and payload.get("status") == "ok":
             # A worker that failed its process lifecycle cannot publish a
             # trusted metric, even if it wrote a plausible result first.
-            payload.update(status="invalid", score=None, detail=f"worker exit {proc.returncode}")
+            detail, failure_kind, signal_number = _terminated_worker(proc.returncode)
+            observations = payload.get("metric_observations")
+            observations = dict(observations) if isinstance(observations, dict) else {}
+            observations["metric_valid"] = False
+            observations["failure_kind"] = failure_kind
+            if signal_number is not None:
+                observations["signal"] = signal_number
+            payload = dict(
+                payload,
+                status="invalid",
+                score=None,
+                detail=detail,
+                failure_kind=failure_kind,
+                metric_observations=observations,
+            )
         payload["log_tail"] = (str(payload.get("log_tail") or "") + "\n" + log_text)[-2000:]
         result = _score_from_payload(dataset.task_id, payload, env_hash=env_hash, cmd=" ".join(cmd))
         # Keep the structured outcome until the parent has durably recorded

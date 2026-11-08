@@ -12,6 +12,7 @@ no quality KEEP, no OpenML registry run.
 - FEDOT paper, arXiv:2106.15397: workflow design is bounded by a time limit tau_g. Current FEDOT docs also default `early_stopping_timeout` to 10 minutes, separate from the hour-long side budget.
 - `controller/README.md` failure section: a finished watchdog is not retried. `Fedot.timeout` and the side deadline are different budgets. The README does not mention the 10-minute GOLEM stagnation default.
 - `execution/process.py` and `_worker_lifetime_guard.py`: the parent records `task_timeout`; the guardian exits 124 for its own cap. Diagnose labels `fit_without_optimizer_evidence` and does not stop the worker. `run_worker` documents that `cancellation_event` yields `cancelled`, not a timeout.
+- GOLEM `Fitness` (golem/core/optimisers/fitness/fitness.py): an invalid fitness, including `None`, is never better than a measured fitness. A signaled evaluator leaves no fitness. The worker previously recorded that the same way as a normal nonzero exit.
 
 ## Found
 
@@ -32,4 +33,5 @@ no quality KEEP, no OpenML registry run.
 - [x] Keep a parent `task_timeout` when the guardian's monotonic fire time is at or after the task deadline. An earlier guardian fire still stays `watchdog_timeout`.
 - [x] Pass `early_stopping_timeout` equal to the declared FEDOT minute budget and record `early_stopping_timeout` separately from `composing_did_not_start`. A valid metric stays `ok`.
 - [x] A parent cancellation stays `cancelled` when the guardian exits 124 while an escaped pipe is still draining. It is not also `watchdog_timeout`.
-- [ ] Read one FEDOT or GOLEM failure-mode note that is not already in this log and check it against the worker outcome fields.
+- [x] A worker killed by a signal, with no result file, is `worker_signaled` plus the signal number. It is not `worker_exit` and not a candidate failure.
+- [ ] Check whether a signaled worker with `SIGKILL` should pause the queue as host memory pressure, or stay a per-side invalid result.
