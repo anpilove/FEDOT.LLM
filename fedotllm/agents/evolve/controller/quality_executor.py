@@ -175,6 +175,45 @@ def _journal_result_matches_attempt(
     return True
 
 
+def _path_is_journal(value: object, journal: Path) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        return Path(value).expanduser().resolve() == journal.resolve()
+    except OSError:
+        return False
+
+
+def _result_points_at_journal(event: dict, payload: dict, journal: Path) -> bool:
+    """A side cannot use the journal event as its own worker artifact.
+
+    GOLEM ``has_no_self_cycled_nodes`` rejects a node that lists itself as an
+    input. ``worker_paths`` that resolve to this journal are that edge.
+    """
+
+    sources: list[dict] = [event, payload]
+    observations = payload.get("metric_observations")
+    if isinstance(observations, dict):
+        sources.append(observations)
+    for source in sources:
+        for key in (
+            "worker_result_path",
+            "worker_log_path",
+            "stage_status_path",
+            "worker_spec_path",
+            "timeout_manifest_path",
+        ):
+            if _path_is_journal(source.get(key), journal):
+                return True
+        for name in ("worker_paths", "shared_worker_paths"):
+            paths = source.get(name)
+            if not isinstance(paths, dict):
+                continue
+            if any(_path_is_journal(item, journal) for item in paths.values()):
+                return True
+    return False
+
+
 def _recover_durable_worker_result(
     event: dict,
     *,
@@ -551,6 +590,8 @@ def _recover_side_state(
             attempt=attempt,
             expected_attempt_id=expected_attempt_id,
         ):
+            continue
+        if _result_points_at_journal(event, payload, journal):
             continue
         try:
             result = _score_from_payload(

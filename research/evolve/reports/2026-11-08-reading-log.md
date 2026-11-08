@@ -27,6 +27,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `GraphVerifier` returns false, or raises, when a graph fails a rule, and that graph is not evaluated. A stock cache entry whose worker attempt identity named another side or task was still reused as a stock hit.
 - GOLEM `has_no_cycle` rejects a graph that points back into itself before evaluation. A finished journal event could still adopt a result whose `attempt_id` named a different attempt. A stock cache lookup also crashed when the path resolver returned no file, so a disabled cache stopped the pair before the side ran.
 - GOLEM `has_no_isolated_nodes` rejects a node with no edge into the rest of the graph, unless the graph is a single node. A finished side event with no `task_id` was stored under `str(None)`, so a queue task of `null` became a measured dataset and the event counted as task progress.
+- GOLEM `has_no_self_cycled_nodes` rejects a node that lists itself as an input. A finished side event could still adopt a score whose `worker_paths` resolved to the journal that stored the event.
 
 ## Found
 
@@ -65,4 +66,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A stock cache entry whose attempt identity names another side, task, or attempt is not loaded and is not stored.
 - [x] A finished journal event whose `attempt_id`, or the `attempt_id` inside its result, names a different attempt is not recovered as that side's metric. A cache hit may still keep the producer attempt identity. A missing stock-cache path is a miss, not a crash.
 - [x] A finished side event with no `task_id` is not task progress and does not make a null queue task measured.
-- [ ] Read GOLEM `has_no_self_cycled_nodes`: a node that lists itself as an input is rejected. Check that a finished side cannot adopt a result whose `worker_paths` name that same side event as its own artifact.
+- [x] A finished side whose `worker_paths` resolve to the journal is not recovered as that side's metric.
+- [ ] Read GOLEM `has_no_isolated_components`: a graph with two disconnected pieces is rejected. Check that `stock_ok` stays false when the only measured stock rows name datasets that no job asked for.

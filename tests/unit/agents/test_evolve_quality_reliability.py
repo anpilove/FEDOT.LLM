@@ -460,6 +460,41 @@ def test_recovered_side_does_not_adopt_another_attempts_result(tmp_path):
     assert attempts[("fedot-ts-beer", "patch")] == 1
 
 
+def test_recovered_side_does_not_adopt_a_result_that_points_at_the_journal(tmp_path):
+    path = tmp_path / "quality_jobs.jsonl"
+    storage.append_journal(path, {
+        "event": "quality_task_side_finished",
+        "candidate": "a",
+        "task_id": "fedot-ts-beer",
+        "side": "stock",
+        "attempt": 1,
+        "attempt_id": "a:fedot-ts-beer:stock:1",
+        "registry_identity": "v1",
+        "worker_result_path": str(path),
+        "worker_paths": {
+            "worker_result_path": str(path),
+            "worker_log_path": str(tmp_path / "worker.log"),
+            "stage_status_path": str(tmp_path / "stage.json"),
+        },
+        "result": {
+            "status": "ok",
+            "score": 0.91,
+            "duration_s": 1.0,
+            "metric_observations": {
+                "metric_valid": True,
+                "worker_paths": {"worker_result_path": str(path)},
+            },
+        },
+    })
+
+    results, attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    assert ("fedot-ts-beer", "stock") not in results
+    assert attempts[("fedot-ts-beer", "stock")] == 1
+
+
 def test_recovered_cache_hit_keeps_the_producer_attempt_identity(tmp_path):
     path = tmp_path / "quality_jobs.jsonl"
     storage.append_journal(path, {
