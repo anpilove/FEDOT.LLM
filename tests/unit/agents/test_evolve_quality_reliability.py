@@ -418,6 +418,81 @@ def test_corrupt_quality_journal_blocks_recovery_with_exact_line(tmp_path):
         )
 
 
+def test_recovered_side_does_not_adopt_another_attempts_result(tmp_path):
+    path = tmp_path / "quality_jobs.jsonl"
+    common = dict(candidate="a", task_id="fedot-ts-beer", registry_identity="v1", attempt=1)
+    storage.append_journal(path, {
+        **common,
+        "event": "quality_task_side_finished",
+        "side": "stock",
+        "attempt_id": "a:fedot-ts-beer:stock:1",
+        "result": {
+            "status": "ok",
+            "score": 0.91,
+            "duration_s": 1.0,
+            "metric_observations": {
+                "metric_valid": True,
+                "attempt_id": "a:fedot-ts-beer:stock:2",
+                "attempt": 2,
+            },
+        },
+    })
+    storage.append_journal(path, {
+        **common,
+        "event": "quality_task_side_finished",
+        "side": "patch",
+        "attempt_id": "a:fedot-ts-beer:patch:2",
+        "result": {
+            "status": "ok",
+            "score": 0.92,
+            "duration_s": 1.0,
+            "metric_observations": {"metric_valid": True},
+        },
+    })
+
+    results, attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    assert ("fedot-ts-beer", "stock") not in results
+    assert ("fedot-ts-beer", "patch") not in results
+    assert attempts[("fedot-ts-beer", "stock")] == 1
+    assert attempts[("fedot-ts-beer", "patch")] == 1
+
+
+def test_recovered_cache_hit_keeps_the_producer_attempt_identity(tmp_path):
+    path = tmp_path / "quality_jobs.jsonl"
+    storage.append_journal(path, {
+        "event": "quality_task_side_finished",
+        "candidate": "a",
+        "task_id": "fedot-ts-beer",
+        "side": "stock",
+        "attempt": 1,
+        "attempt_id": "a:fedot-ts-beer:stock:1",
+        "registry_identity": "v1",
+        "result": {
+            "status": "ok",
+            "score": 0.9,
+            "duration_s": 1.0,
+            "metric_observations": {
+                "metric_valid": True,
+                "cache_hit": True,
+                "attempt_id": "owner:fedot-ts-beer:stock:4",
+                "attempt": 4,
+            },
+        },
+    })
+
+    results, _attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    recovered = results[("fedot-ts-beer", "stock")]
+    assert recovered.status == "ok"
+    assert recovered.score == 0.9
+    assert recovered.metric_observations["cache_hit"] is True
+
+
 def test_new_attempt_does_not_reuse_result_from_previous_attempt(tmp_path):
     path = tmp_path / "quality_jobs.jsonl"
     common = dict(candidate="a", task_id="fedot-ts-beer", side="stock", registry_identity="v1")

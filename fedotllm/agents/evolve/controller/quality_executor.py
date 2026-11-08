@@ -137,6 +137,44 @@ def _controller_stack_trace(workspace: Path):
         _CONTROLLER_TRACE_RESERVATION.release()
 
 
+def _journal_result_matches_attempt(
+    payload: dict,
+    *,
+    task_id: str,
+    side: str,
+    attempt: int,
+    expected_attempt_id: str,
+) -> bool:
+    """A recovered side cannot adopt a worker result from another attempt.
+
+    GOLEM ``has_no_cycle`` rejects a graph that points back into itself. The
+    same rule applies here: the journal attempt and any attempt identity inside
+    its result must name this side, not a different one.
+    """
+
+    observations = payload.get("metric_observations")
+    observations = observations if isinstance(observations, dict) else {}
+    # A cache hit keeps the attempt identity of the worker that produced it.
+    shared = observations.get("cache_hit") is True or observations.get("singleflight_shared") is True
+    for source in (payload, observations):
+        if not shared:
+            recorded_attempt_id = source.get("attempt_id")
+            if recorded_attempt_id not in (None, "") and recorded_attempt_id != expected_attempt_id:
+                return False
+            if "attempt" in source and source.get("attempt") != attempt:
+                return False
+        recorded_side = source.get("side")
+        if recorded_side not in (None, "") and recorded_side != side:
+            return False
+        recorded_task = source.get("task_id")
+        if recorded_task not in (None, "") and recorded_task != task_id:
+            return False
+        recorded_source = source.get("source_dataset")
+        if recorded_source not in (None, "") and recorded_source != task_id:
+            return False
+    return True
+
+
 def _recover_durable_worker_result(
     event: dict,
     *,
@@ -501,6 +539,18 @@ def _recover_side_state(
             continue
         payload = event.get("result") or {}
         if not isinstance(payload, dict):
+            continue
+        expected_attempt_id = f"{candidate_id}:{task_id}:{side}:{attempt}"
+        recorded_attempt_id = event.get("attempt_id")
+        if recorded_attempt_id not in (None, "") and recorded_attempt_id != expected_attempt_id:
+            continue
+        if not _journal_result_matches_attempt(
+            payload,
+            task_id=task_id,
+            side=side,
+            attempt=attempt,
+            expected_attempt_id=expected_attempt_id,
+        ):
             continue
         try:
             result = _score_from_payload(

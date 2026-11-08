@@ -25,6 +25,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM `OptimisationTimer` starts another generation only when the timeout is strictly longer than the time already spent plus the average generation. A transient failure that had already used the whole side budget still started a second attempt with a fresh full timeout.
 - GOLEM elitism copies the best individuals into the next population and does not evaluate them again. A warm stock cache still opened a new stock attempt before the cache was read, so recovery could send that identity through fit.
 - GOLEM `GraphVerifier` returns false, or raises, when a graph fails a rule, and that graph is not evaluated. A stock cache entry whose worker attempt identity named another side or task was still reused as a stock hit.
+- GOLEM `has_no_cycle` rejects a graph that points back into itself before evaluation. A finished journal event could still adopt a result whose `attempt_id` named a different attempt. A stock cache lookup also crashed when the path resolver returned no file, so a disabled cache stopped the pair before the side ran.
 
 ## Found
 
@@ -61,4 +62,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A failure that already used the side timeout does not start another attempt of that length. A short transient failure can still use the one allowed retry.
 - [x] A stock cache hit is returned before a worker plan is created. The pair does not launch a stock worker and does not record `started` or `spawned` for that identity.
 - [x] A stock cache entry whose attempt identity names another side, task, or attempt is not loaded and is not stored.
-- [ ] Read GOLEM `has_no_cycle`: a cyclic graph is rejected before evaluation. Check that a recovered side cannot adopt a worker result whose `attempt_id` belongs to a different attempt.
+- [x] A finished journal event whose `attempt_id`, or the `attempt_id` inside its result, names a different attempt is not recovered as that side's metric. A cache hit may still keep the producer attempt identity. A missing stock-cache path is a miss, not a crash.
+- [ ] Read GOLEM `has_no_isolated_nodes`: a node with no connection to the graph is rejected. Check that a finished side event with no `task_id` cannot become a measured dataset.
