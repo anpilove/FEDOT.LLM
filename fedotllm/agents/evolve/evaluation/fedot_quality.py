@@ -484,7 +484,8 @@ def _iter_stock_cache_paths(
     """Return only cache entries from the exact per-task compute profile."""
 
     exact = _stock_cache_path(dataset, registry, n_jobs, stock_cache_root=stock_cache_root)
-    return [exact] if exact.is_file() else []
+    # Callers disable the cache by resolving no path. A missing path is a miss.
+    return [exact] if exact is not None and exact.is_file() else []
 
 
 def _cached_worker_attempt_ok(payload: dict, *, task_id: str) -> bool:
