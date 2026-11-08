@@ -346,6 +346,8 @@ def test_smoke_advances_after_failed_proposal_and_recovers_without_refitting(tmp
     assert report["aa"]["abs_delta"] == 0
     assert report["aa"]["identical"] is True
     assert report["aa"]["quality_claim"] is False
+    assert report["aa"]["control_score_pairs"] == 3
+    assert report["aa"]["control_score_abs_delta"] == 0
     assert report["failed_proposal_did_not_block"]
     assert report["recovery_without_refitting"]
     assert report["worker_artifacts_complete"]

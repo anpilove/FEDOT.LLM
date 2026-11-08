@@ -5,6 +5,20 @@ import math
 from fedotllm.agents.evolve.evaluation.tasks import load_task
 from fedotllm.agents.evolve.types import Decision, ScoreResult, TaskSpec
 
+# Worker exceptions that belong to the candidate. A pin mismatch or a
+# budget timeout is not one of these: those stay unresolved infrastructure.
+CANDIDATE_FAILURES = frozenset({
+    "fedot_import_error",
+    "fedot_fit_error",
+    "scoring_error",
+    "worker_error",
+})
+
+
+def _failure_kind(result: ScoreResult) -> str | None:
+    kind = (result.metric_observations or {}).get("failure_kind")
+    return kind if isinstance(kind, str) else None
+
 
 def _numeric(result: ScoreResult, sentinel: float) -> float | None:
     if result.status == "crash":
@@ -14,8 +28,14 @@ def _numeric(result: ScoreResult, sentinel: float) -> float | None:
     return result.score
 
 
-def _patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
-    return stock.status == "ok" and patched.status == "crash"
+def patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
+    """Stock measured a score and the patch failed as a candidate."""
+
+    if stock.status != "ok":
+        return False
+    if patched.status == "crash":
+        return True
+    return patched.status == "invalid" and _failure_kind(patched) in CANDIDATE_FAILURES
 
 
 def _spec(
@@ -76,7 +96,7 @@ def compare_pack(
         hib, floor, sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
-        if _patched_broke(stock[task_id], patched[task_id]):
+        if patched_broke(stock[task_id], patched[task_id]):
             lift_deltas[task_id] = None
             continue
         a = _numeric(stock[task_id], sent)
@@ -93,6 +113,17 @@ def compare_pack(
             lift_ok = True
     regressions: dict[str, float | None] = dict(lift_deltas)
     if best is None:
+        broke = [
+            task_id for task_id in lift_ids
+            if patched_broke(stock[task_id], patched[task_id])
+        ]
+        if broke:
+            return Decision(
+                keep=False,
+                reason=f"regression {broke[0]} crashed after patch",
+                target_delta=None,
+                regression_deltas=regressions,
+            )
         return Decision(
             keep=False,
             reason="timeout_or_invalid",
@@ -104,7 +135,7 @@ def compare_pack(
         hib, floor, sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
-        if _patched_broke(stock[task_id], patched[task_id]):
+        if patched_broke(stock[task_id], patched[task_id]):
             regressions[task_id] = None
             return Decision(
                 keep=False,

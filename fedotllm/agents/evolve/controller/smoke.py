@@ -314,6 +314,19 @@ def run_smoke(source: Path, workspace: Path) -> dict:
             for row in side_outcomes
         )
         aa_ok = bool(report.get("aa", {}).get("identical")) and report["aa"].get("abs_delta") == 0
+        score_deltas = []
+        for row in metrics:
+            if row.get("stock_status") != "ok" or row.get("patched_status") != "ok":
+                continue
+            stock_score, patched_score = row.get("stock_score"), row.get("patched_score")
+            if isinstance(stock_score, bool) or isinstance(patched_score, bool):
+                continue
+            if isinstance(stock_score, (int, float)) and isinstance(patched_score, (int, float)):
+                if math.isfinite(stock_score) and math.isfinite(patched_score):
+                    score_deltas.append(abs(float(patched_score) - float(stock_score)))
+        if isinstance(report.get("aa"), dict):
+            report["aa"]["control_score_abs_delta"] = max(score_deltas) if score_deltas else None
+            report["aa"]["control_score_pairs"] = len(score_deltas)
         report.update(
             stage="finished", metrics=metrics, queue_counts=queue_counts,
             failed_proposal_did_not_block=failure_handled and control_measured,

@@ -15,6 +15,7 @@ import ast
 import copy
 from pathlib import Path
 
+from fedotllm.agents.evolve.evaluation.compare import patched_broke
 from fedotllm.agents.evolve.evaluation.eval import run_patched, run_stock
 from fedotllm.agents.evolve.evaluation.tasks import all_tasks, load_task
 from fedotllm.agents.evolve.types import MatchSite, VerificationResult
@@ -92,7 +93,7 @@ def _task_override(spec, operation: str, params: dict) -> dict:
 
 def _normalized_delta(task_id: str, stock, patched) -> tuple[str, float | None]:
     spec = load_task(task_id)
-    if stock.status == "ok" and patched.status == "crash":
+    if patched_broke(stock, patched):
         return "regressed", None
     if stock.status == "crash" and patched.status == "ok":
         return "improved", None
