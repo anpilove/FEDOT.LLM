@@ -581,6 +581,22 @@ def test_one_invalid_dataset_does_not_keep_the_proposal():
     assert "openml-37-diabetes" in decision.unresolved_task_ids
 
 
+def test_duplicate_dataset_rows_do_not_hide_a_regression():
+    rows = [
+        _pair("openml-31-credit-g", 0.80, 0.70),
+        _pair("openml-31-credit-g", 0.70, 0.90),
+    ]
+
+    decision = decision_from_quality_jobs(rows)
+
+    assert decision.keep is None
+    assert decision.quality_outcome == "not_evaluated"
+    assert decision.quality_failure == "duplicate_dataset"
+    assert decision.reason == "duplicate_dataset:openml-31-credit-g"
+    assert decision.regression_deltas["openml-31-credit-g"] < 0
+    assert decision.unresolved_task_ids == ("openml-31-credit-g",)
+
+
 def test_quality_keep_requires_gain_without_regression():
     rows = [
         _pair("openml-31-credit-g", 0.70, 0.82),

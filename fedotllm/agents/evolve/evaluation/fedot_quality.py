@@ -2169,6 +2169,8 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         )
     deltas: dict[str, float | None] = {}
     unresolved: list[str] = []
+    seen_tasks: set[str] = set()
+    duplicate_tasks: list[str] = []
     failure_reasons: list[str] = []
     failure_kind: str | None = None
     timed_out = False
@@ -2179,6 +2181,12 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     retryable_failure = False
     for row in rows:
         task_id = row["spec"]["source_dataset"]
+        # GOLEM has_one_root rejects a graph with two roots. A second row for
+        # the same dataset must not replace the first delta.
+        if task_id in seen_tasks:
+            duplicate_tasks.append(task_id)
+        else:
+            seen_tasks.add(task_id)
         stock_result = row["stock_result"]
         patched_result = row["patched_result"]
         retryable_failure = retryable_failure or _retryable_quality_failure(stock_result)
@@ -2262,7 +2270,27 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         delta = after - before if spec["higher_is_better"] else before - after
         if spec.get("delta_mode", "absolute") == "relative":
             delta /= max(abs(before), 1e-12)
-        deltas[task_id] = delta
+        previous = deltas.get(task_id)
+        deltas[task_id] = delta if previous is None else min(previous, delta)
+
+    if duplicate_tasks:
+        names = tuple(dict.fromkeys(duplicate_tasks))
+        return Decision(
+            keep=None,
+            reason="duplicate_dataset:" + ",".join(names),
+            target_delta=None,
+            regression_deltas=deltas,
+            stage="quality",
+            infrastructure_error=timed_out or retryable_failure or host_killed or storage_failed,
+            quality_failure=None
+            if timed_out or retryable_failure or host_killed or storage_failed
+            else "duplicate_dataset",
+            quality_outcome="not_evaluated",
+            regressed_task_count=sum(
+                1 for delta in deltas.values() if delta is not None and delta < -1e-12
+            ),
+            unresolved_task_ids=tuple(dict.fromkeys((*names, *unresolved))),
+        )
 
     if unresolved:
         return Decision(
