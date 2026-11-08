@@ -78,7 +78,9 @@ def main() -> int:
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
             readable, _, _ = select.select([args.parent_fd], [], [], remaining)
             if not readable:
+                fired_at = time.monotonic()
                 cleanup_status = terminate_owned_worker_group(args.worker_pgid)
+                print(f"watchdog_fired monotonic={fired_at:.6f}", file=sys.stderr, flush=True)
                 return 124 if cleanup_status == 0 else cleanup_status
             chunk = os.read(args.parent_fd, 64)
             if not chunk:

@@ -532,6 +532,24 @@ def test_repeated_blocked_resource_checks_do_not_create_unbounded_threads(tmp_pa
         release_check.set()
 
 
+def test_earlier_task_timeout_survives_guardian_exit_during_pipe_cleanup(tmp_path):
+    """Cleanup after the task deadline must not be relabeled as the later watchdog."""
+    controller = _start_controller(
+        tmp_path,
+        mode="escaped",
+        timeout=0.25,
+        watchdog_timeout=0.5,
+    )
+    try:
+        _wait_file(tmp_path / "ready", controller)
+        controller.communicate(timeout=8)
+        outcome = json.loads((tmp_path / "outcome.json").read_text())
+        assert outcome["timed_out"] is True
+        assert outcome["timeout_kind"] == "task_timeout"
+    finally:
+        _cleanup_fixture(tmp_path, controller, escaped=True)
+
+
 def test_earlier_guardian_watchdog_is_reported_when_escaped_child_holds_pipe(tmp_path):
     """Report the deadline that fired first even if task cleanup finishes later."""
     controller = _start_controller(

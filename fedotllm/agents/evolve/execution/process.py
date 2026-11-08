@@ -194,9 +194,20 @@ def _start_lifetime_guard(
                 os.close(descriptor)
 
 
+def _watchdog_fired_at(stderr: str) -> float | None:
+    for line in stderr.splitlines():
+        if not line.startswith("watchdog_fired monotonic="):
+            continue
+        try:
+            return float(line.split("=", 1)[1])
+        except ValueError:
+            return None
+    return None
+
+
 def _finish_lifetime_guard(
     guardian: subprocess.Popen, parent_write: int | None, *, completed: bool,
-) -> int | None:
+) -> tuple[int | None, float | None]:
     """Disarm on normal completion; otherwise EOF requests group termination."""
     if parent_write is not None:
         try:
@@ -224,7 +235,7 @@ def _finish_lifetime_guard(
             f"{guardian.returncode} while cleaning process group"
             + (f": {stderr}" if stderr else "")
         )
-    return guardian.returncode
+    return guardian.returncode, _watchdog_fired_at(stderr)
 
 
 def run_worker(
@@ -349,10 +360,20 @@ def run_worker(
             if guardian is not None:
                 original = sys.exc_info()[1]
                 try:
-                    guardian_status = _finish_lifetime_guard(
+                    guardian_status, watchdog_fired_at = _finish_lifetime_guard(
                         guardian, parent_write, completed=completed,
                     )
-                    if guardian_status == _GUARDIAN_WATCHDOG_EXIT and outcome is not None:
+                    task_deadline_fired = (
+                        outcome is not None and outcome.timeout_kind == "task_timeout"
+                    )
+                    watchdog_was_first = watchdog_fired_at is not None and (
+                        deadline is None or watchdog_fired_at < deadline
+                    )
+                    if (
+                        guardian_status == _GUARDIAN_WATCHDOG_EXIT
+                        and outcome is not None
+                        and (not task_deadline_fired or watchdog_was_first)
+                    ):
                         outcome = dataclasses.replace(
                             outcome,
                             returncode=None,
