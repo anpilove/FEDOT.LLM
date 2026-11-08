@@ -26,6 +26,7 @@ no quality KEEP, no OpenML registry run.
 - GOLEM elitism copies the best individuals into the next population and does not evaluate them again. A warm stock cache still opened a new stock attempt before the cache was read, so recovery could send that identity through fit.
 - GOLEM `GraphVerifier` returns false, or raises, when a graph fails a rule, and that graph is not evaluated. A stock cache entry whose worker attempt identity named another side or task was still reused as a stock hit.
 - GOLEM `has_no_cycle` rejects a graph that points back into itself before evaluation. A finished journal event could still adopt a result whose `attempt_id` named a different attempt. A stock cache lookup also crashed when the path resolver returned no file, so a disabled cache stopped the pair before the side ran.
+- GOLEM `has_no_isolated_nodes` rejects a node with no edge into the rest of the graph, unless the graph is a single node. A finished side event with no `task_id` was stored under `str(None)`, so a queue task of `null` became a measured dataset and the event counted as task progress.
 
 ## Found
 
@@ -63,4 +64,5 @@ no quality KEEP, no OpenML registry run.
 - [x] A stock cache hit is returned before a worker plan is created. The pair does not launch a stock worker and does not record `started` or `spawned` for that identity.
 - [x] A stock cache entry whose attempt identity names another side, task, or attempt is not loaded and is not stored.
 - [x] A finished journal event whose `attempt_id`, or the `attempt_id` inside its result, names a different attempt is not recovered as that side's metric. A cache hit may still keep the producer attempt identity. A missing stock-cache path is a miss, not a crash.
-- [ ] Read GOLEM `has_no_isolated_nodes`: a node with no connection to the graph is rejected. Check that a finished side event with no `task_id` cannot become a measured dataset.
+- [x] A finished side event with no `task_id` is not task progress and does not make a null queue task measured.
+- [ ] Read GOLEM `has_no_self_cycled_nodes`: a node that lists itself as an input is rejected. Check that a finished side cannot adopt a result whose `worker_paths` name that same side event as its own artifact.

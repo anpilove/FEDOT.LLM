@@ -174,17 +174,18 @@ def _progress(workspace: Path, *, child_running: bool = False):
     journal_bytes = journal.stat().st_size if journal.exists() else 0
     events = {}
     for row in rows:
-        if row.get("event") in {
+        if row.get("event") not in {
             "quality_task_side_finished",
             "quality_task_side_reused",
         }:
-            events[
-                (
-                    str(row.get("candidate")),
-                    str(row.get("task_id")),
-                    str(row.get("side")),
-                )
-            ] = row.get("result") or {}
+            continue
+        # GOLEM rejects a node with no edge into the graph. A finished side
+        # with no dataset is that node: str(None) must not bind it to a task.
+        task_id = row.get("task_id")
+        side = row.get("side")
+        if not isinstance(task_id, str) or not task_id or side not in {"stock", "patch"}:
+            continue
+        events[(str(row.get("candidate")), task_id, side)] = row.get("result") or {}
     groups = defaultdict(list)
     counts = Counter()
     pending = []
@@ -200,11 +201,19 @@ def _progress(workspace: Path, *, child_running: bool = False):
         counts[status] += 1
         if status in _PENDING:
             pending.append(candidate)
-        tasks = item.get("required_task_ids") or item.get("task_ids") or []
-        measured = status in {"keep", "drop"} and bool(tasks)
-        for task in tasks:
+        raw_tasks = item.get("required_task_ids") or item.get("task_ids") or []
+        tasks = list(raw_tasks) if isinstance(raw_tasks, (list, tuple)) else []
+        bound_tasks = [task for task in tasks if isinstance(task, str) and task]
+        # A null task is not a dataset. It must not count as measured just
+        # because the list is non-empty.
+        measured = (
+            status in {"keep", "drop"}
+            and bool(bound_tasks)
+            and len(bound_tasks) == len(tasks)
+        )
+        for task in bound_tasks:
             for side in ("stock", "patch"):
-                result = events.get((candidate, str(task), side), {})
+                result = events.get((candidate, task, side), {})
                 score = result.get("score")
                 measured = (
                     measured
@@ -223,11 +232,18 @@ def _progress(workspace: Path, *, child_running: bool = False):
     )
     finishes = {}
     for row in rows:
-        if row.get("event") == "quality_task_side_finished":
+        task_id = row.get("task_id")
+        side = row.get("side")
+        if (
+            row.get("event") == "quality_task_side_finished"
+            and isinstance(task_id, str)
+            and task_id
+            and side in {"stock", "patch"}
+        ):
             identity = (
                 row.get("candidate"),
-                row.get("task_id"),
-                row.get("side"),
+                task_id,
+                side,
                 row.get("attempt_id") or row.get("attempt", 1),
             )
             finishes[identity] = row
