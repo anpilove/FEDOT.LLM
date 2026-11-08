@@ -1,122 +1,72 @@
-# Отчёт: независимая проверка EvolveAgent × FEDOT
+# Отчёт кампании: EvolveAgent → pilot ideal
 
 Ветка: `cursor/evolve-agent-fedot-verify-01e8`  
-База: `origin/research/evolve-agent-setup` @ `467957bd10a150559f8a79a204a100fd90fac6b5`  
-Обновлено: 2026-11-08 15:39 Europe/Moscow  
-Ничего не слито автоматически.
+База: `origin/research/evolve-agent-setup`  
+Обновлено: 2026-11-08 16:45 Europe/Moscow  
+Спека цели: `docs/superpowers/specs/2026-11-08-evolve-agent-8h-improve-goal.md`  
+Версии: `evidence/versions.txt`  
+Ничего не слито автоматически. FINAL-метрики модели не передавались.
 
-## Goal progress (plan `/goal`)
+## Журнал incompleteness
 
-Спека: `docs/superpowers/specs/2026-11-08-evolve-agent-8h-improve-goal.md`
-
-Закрыто в коде (с тестами):
-1. Doctor/preflight pin API (`fedot_pin_preflight.py` + `return_best_policy.py`)
-2. Worker: `KeyError`/missing isolated optimizer → `status=invalid`, `failure_kind=fedot_pin_incompatible`, `metric_valid=false`
-3. Microbenchmark: явный hint про missing `dask`
-4. Политика `refuse` (default) / `research_worktree` (offline only)
-
-Доказательства A/A measurability:
-- synthetic classification: `evidence/aa-smoke.json` (`[1.0, 1.0]`)
-- local TS temperature на research worktree: `evidence/aa-local-ts.json` (MAE `0.670…` равны)
-
-Ещё не exit идеала: полный registry A/A на Cloud Environment пользователя + OpenML offline cache; upstream FEDOT `return_best` в официальном pin (сейчас только research worktree / refuse).
-
-## 0. Окружение (обязательное)
-
-Пользователь готовит Cloud Environment. **Его и нужно использовать** для полного registry A/A / OpenML offline / quality-прогонов.
-
-Состояние этого run:
-- Environment id: `498342df-a151-11f1-b532-320a589b8025`
-- Агент загружен **без** build (`build: null`)
-- Последний SUCCEEDED build — системный recurring snapshot без кастомного Evolve/FEDOT/OpenML install
-- В репо нет `environment.json`
-
-В этой сессии сделан временный bootstrap (uv/Python 3.11, dask для import pin FEDOT) только чтобы не простаивать 8-часовой план. Целевой стек — env пользователя.
-
-## 1. Исходная точка
-
-| Артефакт | Значение | Статус |
+| Причина | Статус | Где |
 |---|---|---|
-| Рабочая ветка | `cursor/evolve-agent-fedot-verify-01e8` | создана, запушена |
-| Task 6 `949f285` | нет на remote | блокер «чистой точки после Task 5/6/7» |
-| FEDOT pin | `8990f28b0664c99f7eb2fddcee3931151fe16e79` | доступен |
-| Manifest CSV | 13/13 SHA-256 на git-checkout | ok |
-| PyPI `fedot==0.7.5` | без `real_cases` data | gap |
-| OpenML offline | нет кэша на 32 задачи | gap |
-| `FEDOTLLM_REPO_PATH` | `/tmp/fedot-verify/FEDOT` (+ symlink `.repo_cache/FEDOT`) | выставлен для тестов |
+| Stock FEDOT pin без `return_best` / isolated optimizer | **отказано doctor/worker** | `evidence/doctor-stock-pin.json` |
+| OpenML offline cache на 32 задачи | отсутствует | блокирует registry A/A |
+| Cloud Environment build | `null` в этом run | ждать env пользователя |
+| Task 6 `949f285` | нет на remote | база = setup tip |
+| Unrelated: real tuner isolation [regression] | fail на PyPI FEDOT env (pre-existing) | вне goal subset; зафиксировано в `evidence/all-evolve-unit.txt` |
+| Quality KEEP на registry | не запускался | нет claim |
 
-## 2. Цикл агента
+## Требования цели (evidence)
 
-| Набор | Результат |
-|---|---|
-| transfer/budget/isolation/recovery/review | **198 passed** |
-| весь `tests/unit/agents/ -k evolve` | **1060 passed**, 3 fail без FEDOT path |
-| после `FEDOTLLM_REPO_PATH` + `dask` | metric_study resume **passed**; microbenchmark stock contracts **passed**; `does_not_write_fedot` **passed** |
-| focused DEV/FINAL/transfer/parallel/recover | **6 passed** |
+### 1. Явный исход стороны
+- Worker: `KeyError` на `return_best` → `status=invalid`, `failure_kind=fedot_pin_incompatible`, `metric_valid=false`
+- Missing `IsolatedEvoGraphOptimizer` → тот же контракт
+- Код: `evaluation/_fedot_quality_worker.py`, `evaluation/fedot_pin_preflight.py`
+- Тесты: `test_evolve_quality_worker_diagnostics.py` (pin invalid mapping)
 
-Ключевые выводы (файл → сценарий → тест):
+### 2. Doctor/preflight early fail
+- Pin API (`timeout_policy`/`final_fit_reserve`/`max_pipeline_evaluation_time`), isolated optimizer, dask import site
+- **FEDOT path** (`FEDOTLLM_REPO_PATH` / cache)
+- **Checksum assets** (`benchmark_manifest` real_cases)
+- **Runtime dask**
+- Все early gates собираются вместе (pin fail не скрывает assets)
+- Код: `commands/doctor.py`, `fedot_pin_preflight.py`, `return_best_policy.py`
+- Тесты: `test_evolve_fedot_pin_preflight.py`, `test_evolve_return_best_policy.py`
+- Live: `evidence/doctor-stock-pin.json` (path/assets/dask ok, pin refuse)
 
-| Вывод | Файл | Тест |
-|---|---|---|
-| DEV ≠ FINAL acceptance | `test_evolve_review_regressions.py` | `test_dev_success_is_not_final_acceptance…` |
-| DEV/FINAL/SHADOW дизъюнктны | `test_evolve_mvp.py` + `scorer.py` | `test_dev_final_indices_are_disjoint_and_repeatable` |
-| FINAL без transfer не accept | `test_evolve_transfer.py` | `test_ordinary_final_without_transfer…` |
-| FINAL reserve только FINAL | `test_evolve_transfer.py` | `test_final_reserve_is_available_only_to_final_stage` |
-| Параллелизм ≤ 7 | `test_evolve_quality_cancellation.py` | `test_dataset_parallelism_never_exceeds_seven…` |
-| Interrupt → recovery без метрики | `test_evolve_quality_reliability.py` | `test_unfinished_spawned_event_recovers…` |
-| FINAL не в LLM memory | `storage/replay.py` | source-only hypotheses |
+### 3. DEV≠FINAL / budget / parallel / recovery
+- Регрессия: `evidence/goal-regression.txt` → **59 passed**
+- Включает disjoint DEV/FINAL, transfer, budget, parallelism≤7, interrupt recovery
 
-Microbenchmark blocker без env: pin FEDOT требует `dask` (`ModuleNotFoundError`) при import checkout. После установки dask + pin `scikit-learn<1.7` — green.
+### 4. Измеримый smoke A/A + путь к registry
+- Synthetic: `evidence/aa-smoke.json`
+- Local TS temperature: `evidence/aa-local-ts.json` (равный finite MAE)
+- Документированный registry path: `REGISTRY_AA_PATH.md` (**без KEEP claim**)
 
-## 3. Benchmark-манифесты
+### 5. Воспроизводимый отчёт
+- Этот файл + `evidence/versions.txt` + incompleteness table + команды ниже
 
-Аудит: `evidence/manifest-audit.json`
-
-- 40 задач: 24 classification / 8 regression / 8 ts_forecasting
-- sources: 32 openml_task + 3 public_ts + 5 local_ts
-- starter ↔ datasets: полное совпадение; selection ↔ openml_task: полное совпадение
-- manifest hashes: 13 ok / 0 bad / 0 missing (на git FEDOT)
-- registry не содержит FINAL-метрик; prompt-scan `keep_final`/`final_score` → 0 hits
-- budgets: side 5400 / search 4500 / reserve 1500 / watchdog 10800; policy `return_best`; cache `disabled-sqlite-v1`
-
-## 4. Улучшение качества в AutoML-поиске FEDOT
-
-### Гипотеза
-Worker EvolveAgent передаёт `timeout_policy='return_best'`, `final_fit_reserve_seconds`, `max_pipeline_evaluation_time`. Stock FEDOT @ pin отвечает `KeyError`. Без API search может съесть весь budget → нет scorable incumbent → нет честного A/A.
-
-### Прототип (research only)
-1. Budget arithmetic: `prototype/return_best_budget.py` (+ 4 unit)
-2. Патч на worktree `/tmp/fedot-verify/FEDOT-return-best`:
-   - diff: `patches/0001-return-best-timeout-policy.fedot.diff`
-   - принимает worker kwargs
-   - `ApiTime` вычитает `final_fit_reserve` из composing/tuning окна при `return_best`
-   - `Fedot.fit_budget_outcome` атрибут-заглушка
-3. Интеграционные тесты: `prototype/test_patched_fedot_return_best.py` → **3 passed**
-4. Ограниченный A/A smoke (synthetic classification, timeout 0.15 min): scores `[1.0, 1.0]`, equal — см. `evidence/aa-smoke.json`
-
-**Вывода об улучшении качества AutoML на registry нет.** A/A smoke проверяет только принимаемость API и измеримость при коротком бюджете. Полный registry A/A ждёт Cloud Environment + OpenML offline cache.
-
-### Недостающие ассеты для полного эксперимента
-1. Готовый Cloud Environment пользователя
-2. OpenML offline cache (32 задачи)
-3. Upstream/mergeable FEDOT `return_best` (+ optional `IsolatedEvoGraphOptimizer`)
-4. Remote tip после локальных Task 5/6/7 (`949f285` отсутствует)
-
-## 5. Команды
+## Команды
 
 ```bash
-export FEDOTLLM_REPO_PATH=/tmp/fedot-verify/FEDOT
+export FEDOTLLM_REPO_PATH=/path/to/FEDOT@8990f28b
 uv sync --python 3.11 --group dev
-uv pip install --python .venv/bin/python 'dask<2026' 'dask-ml<2026' 'scikit-learn>=1.0,<1.7'
-.venv/bin/python -m pytest tests/unit/agents/ -k evolve -q
-.venv/bin/python -m pytest research/evolve-agent-fedot-verify/prototype -v
+uv pip install --python .venv/bin/python 'dask<2026' 'scikit-learn>=1.0,<1.7'
+.venv/bin/python -m fedotllm.agents.evolve doctor --source "$FEDOTLLM_REPO_PATH" --workspace /tmp/evolve-doctor
+.venv/bin/python -m pytest tests/unit/agents/test_evolve_fedot_pin_preflight.py \
+  tests/unit/agents/test_evolve_return_best_policy.py \
+  tests/unit/agents/test_evolve_quality_worker_diagnostics.py -q
 ```
 
-## 6. Изменённые файлы (только research)
+## Изменённые prod-пути EvolveAgent
 
-- `research/evolve-agent-fedot-verify/REPORT.md`
-- `research/evolve-agent-fedot-verify/prototype/*`
-- `research/evolve-agent-fedot-verify/patches/*`
-- `research/evolve-agent-fedot-verify/evidence/*`
+- `fedotllm/agents/evolve/evaluation/fedot_pin_preflight.py`
+- `fedotllm/agents/evolve/evaluation/return_best_policy.py`
+- `fedotllm/agents/evolve/evaluation/_fedot_quality_worker.py`
+- `fedotllm/agents/evolve/commands/doctor.py`
+- `fedotllm/agents/evolve/benchmark/micro.py`
+- соответствующие unit-тесты
 
-Production EvolveAgent / контроллер / `main` не менялись. Merge не выполнялся.
+Research-only: `research/evolve-agent-fedot-verify/**` (не prod entrypoint).

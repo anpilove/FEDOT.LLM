@@ -6,8 +6,13 @@ from pathlib import Path
 
 from fedotllm.agents.evolve.commands.doctor import run_doctor
 from fedotllm.agents.evolve.evaluation.fedot_pin_preflight import (
+    FAILURE_KIND_ASSETS_MISSING,
+    FAILURE_KIND_PATH_UNRESOLVED,
     FAILURE_KIND_PIN_INCOMPATIBLE,
+    FedotPinPreflight,
+    check_fedot_assets,
     check_fedot_pin_preflight,
+    resolve_fedot_repo_path_check,
 )
 
 
@@ -84,16 +89,46 @@ def test_compatible_pin_passes_static_preflight(tmp_path):
     assert result.checks["dask_import_site"]["ok"] is True
 
 
+def test_repo_path_check_fails_when_env_and_cache_missing(tmp_path):
+    result = resolve_fedot_repo_path_check(
+        environ={},
+        repo_root=tmp_path / "missing-root",
+    )
+    assert result.ok is False
+    assert result.failure_kind == FAILURE_KIND_PATH_UNRESOLVED
+    assert "FEDOTLLM_REPO_PATH" in result.summary
+
+
+def test_repo_path_check_accepts_explicit_directory(tmp_path):
+    source = tmp_path / "FEDOT"
+    source.mkdir()
+    result = resolve_fedot_repo_path_check(explicit=source)
+    assert result.ok is True
+    assert result.failure_kind is None
+
+
+def test_assets_check_reports_missing_real_cases(tmp_path):
+    source = _compatible_pin(tmp_path)
+    result = check_fedot_assets(source)
+    assert result.ok is False
+    assert result.failure_kind == FAILURE_KIND_ASSETS_MISSING
+    assert "dataset missing" in result.summary or "commit mismatch" in result.summary
+
+
 def test_doctor_includes_pin_preflight_and_fails_closed(tmp_path, monkeypatch):
     source = _stock_pin(tmp_path)
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
-    # Avoid expensive checkout/evaluator path: stub the remaining doctor stages
-    # after pin preflight so the unit stays focused on fail-closed preflight.
+    # Avoid expensive checkout/evaluator path: stub remaining doctor stages and
+    # isolate the pin failure from asset/path noise in this unit.
     monkeypatch.setattr(
-        "fedotllm.agents.evolve.commands.doctor.verify_manifest",
-        lambda _source: [],
+        "fedotllm.agents.evolve.commands.doctor.check_fedot_assets",
+        lambda _source: FedotPinPreflight(ok=True, checks={"manifest_assets": {"ok": True, "errors": []}}, summary="ok"),
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.check_runtime_dask",
+        lambda: FedotPinPreflight(ok=True, checks={"runtime_dask": {"ok": True}}, summary="ok"),
     )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.commands.doctor.create_experiment_checkout",
@@ -105,3 +140,25 @@ def test_doctor_includes_pin_preflight_and_fails_closed(tmp_path, monkeypatch):
     pin = report["checks"]["fedot_pin"]
     assert pin["ok"] is False
     assert pin["failure_kind"] == FAILURE_KIND_PIN_INCOMPATIBLE
+    assert report["checks"]["fedot_repo_path"]["ok"] is True
+    assert report["checks"]["manifest"]["ok"] is True
+
+
+def test_doctor_reports_missing_assets_even_when_pin_also_fails(tmp_path, monkeypatch):
+    source = _stock_pin(tmp_path)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.check_runtime_dask",
+        lambda: FedotPinPreflight(ok=True, checks={"runtime_dask": {"ok": True}}, summary="ok"),
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.create_experiment_checkout",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no checkout on early fail")),
+    )
+
+    report = run_doctor(source, workspace, evaluator=False)
+    assert report["ok"] is False
+    assert report["checks"]["fedot_pin"]["ok"] is False
+    assert report["checks"]["manifest"]["ok"] is False
+    assert report["checks"]["manifest"]["failure_kind"] == FAILURE_KIND_ASSETS_MISSING

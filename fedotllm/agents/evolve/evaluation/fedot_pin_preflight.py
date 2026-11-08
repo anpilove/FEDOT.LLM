@@ -1,17 +1,22 @@
 """Static preflight for a FEDOT checkout used by EvolveAgent quality workers.
 
 Fails closed when the pin cannot accept the worker contract
-(``timeout_policy=return_best``, optional isolated optimizer, dask import site).
-Does not invent metrics and does not mutate the checkout.
+(``timeout_policy=return_best``, optional isolated optimizer, dask import site),
+when ``FEDOTLLM_REPO_PATH``/cache cannot resolve, or when checksum-pinned
+``examples/real_cases`` assets are missing. Does not invent metrics and does
+not mutate the checkout.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 FAILURE_KIND_PIN_INCOMPATIBLE = "fedot_pin_incompatible"
+FAILURE_KIND_ASSETS_MISSING = "fedot_assets_missing"
+FAILURE_KIND_PATH_UNRESOLVED = "fedot_repo_path_unresolved"
 
 
 class FedotPinIncompatibleError(RuntimeError):
@@ -64,6 +69,115 @@ def _file_text(root: Path, rel: Path) -> str | None:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+
+
+def resolve_fedot_repo_path_check(
+    *,
+    explicit: Path | None = None,
+    environ: dict[str, str] | None = None,
+    repo_root: Path | None = None,
+) -> FedotPinPreflight:
+    """Fail early when neither FEDOTLLM_REPO_PATH nor the cache checkout exists."""
+
+    env = environ if environ is not None else os.environ
+    checks: dict[str, dict[str, Any]] = {}
+    if explicit is not None:
+        path = explicit.resolve()
+        checks["FEDOTLLM_REPO_PATH"] = {
+            "ok": path.is_dir(),
+            "path": str(path),
+            "source": "argument",
+        }
+        if path.is_dir():
+            return FedotPinPreflight(
+                ok=True,
+                checks=checks,
+                failure_kind=None,
+                summary=f"FEDOT path resolved from argument: {path}",
+            )
+        return FedotPinPreflight(
+            ok=False,
+            checks=checks,
+            failure_kind=FAILURE_KIND_PATH_UNRESOLVED,
+            summary=f"FEDOT path argument is not a directory: {path}",
+        )
+
+    local = (env.get("FEDOTLLM_REPO_PATH") or "").strip()
+    checks["FEDOTLLM_REPO_PATH"] = {
+        "ok": bool(local) and Path(local).is_dir(),
+        "path": local or None,
+        "set": bool(local),
+    }
+    if local and Path(local).is_dir():
+        return FedotPinPreflight(
+            ok=True,
+            checks=checks,
+            failure_kind=None,
+            summary=f"FEDOT path resolved from FEDOTLLM_REPO_PATH: {Path(local).resolve()}",
+        )
+
+    root = repo_root or Path.cwd()
+    cache_default = root / ".repo_cache" / "FEDOT"
+    cache = Path(env.get("FEDOTLLM_REPO_CACHE") or str(cache_default))
+    checks["FEDOTLLM_REPO_CACHE"] = {
+        "ok": cache.is_dir(),
+        "path": str(cache),
+    }
+    if cache.is_dir():
+        return FedotPinPreflight(
+            ok=True,
+            checks=checks,
+            failure_kind=None,
+            summary=f"FEDOT path resolved from cache: {cache.resolve()}",
+        )
+    return FedotPinPreflight(
+        ok=False,
+        checks=checks,
+        failure_kind=FAILURE_KIND_PATH_UNRESOLVED,
+        summary=(
+            "FEDOT checkout unresolved: set FEDOTLLM_REPO_PATH to a FEDOT git "
+            "checkout (stock pin) or populate FEDOTLLM_REPO_CACHE/.repo_cache/FEDOT"
+        ),
+    )
+
+
+def check_fedot_assets(source: Path) -> FedotPinPreflight:
+    """Checksum-pinned real_cases assets from benchmark_manifest.json."""
+
+    from fedotllm.agents.evolve.evaluation.manifest import verify_manifest
+
+    source = source.resolve()
+    try:
+        errors = verify_manifest(source)
+    except (OSError, ValueError) as exc:
+        errors = [f"{type(exc).__name__}: {exc}"]
+    ok = not errors
+    return FedotPinPreflight(
+        ok=ok,
+        checks={"manifest_assets": {"ok": ok, "errors": errors, "source": str(source)}},
+        failure_kind=None if ok else FAILURE_KIND_ASSETS_MISSING,
+        summary="benchmark assets ok" if ok else f"benchmark assets missing/mismatched: {'; '.join(errors[:5])}",
+    )
+
+
+def check_runtime_dask() -> FedotPinPreflight:
+    """Runtime must import dask when the pin references it."""
+
+    try:
+        import dask  # noqa: F401
+    except ImportError as exc:
+        return FedotPinPreflight(
+            ok=False,
+            checks={"runtime_dask": {"ok": False, "error": f"{type(exc).__name__}: {exc}"}},
+            failure_kind=FAILURE_KIND_PIN_INCOMPATIBLE,
+            summary="runtime missing dask required by FEDOT pin import graph",
+        )
+    return FedotPinPreflight(
+        ok=True,
+        checks={"runtime_dask": {"ok": True}},
+        failure_kind=None,
+        summary="runtime dask import ok",
+    )
 
 
 def check_fedot_pin_preflight(

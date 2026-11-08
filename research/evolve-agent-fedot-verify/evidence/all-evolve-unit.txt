@@ -1,24 +1,4 @@
-........................................................................ [  6%]
-........................................................................ [ 13%]
-........................................................................ [ 20%]
-........................................................................ [ 27%]
-........................................................................ [ 33%]
-..........................F........FF................................... [ 40%]
-........................................................................ [ 47%]
-........................................................................ [ 54%]
-........................................................................ [ 60%]
-........................................................................ [ 67%]
-........................................................................ [ 74%]
-........................................................................ [ 81%]
-........................................................................ [ 88%]
-........................................................................ [ 94%]
-.......................................................                  [100%]
-=================================== FAILURES ===================================
-/workspace/fedotllm/agents/evolve/execution/checkout.py:22: FileNotFoundError: Set FEDOTLLM_REPO_PATH to a FEDOT checkout (stock 0.7.5).
-/workspace/fedotllm/agents/evolve/execution/checkout.py:22: FileNotFoundError: Set FEDOTLLM_REPO_PATH to a FEDOT checkout (stock 0.7.5).
-/workspace/fedotllm/agents/evolve/execution/checkout.py:22: FileNotFoundError: Set FEDOTLLM_REPO_PATH to a FEDOT checkout (stock 0.7.5).
-=========================== short test summary info ============================
-FAILED tests/unit/agents/test_evolve_metric_study.py::test_cli_resumes_existing_final_without_model
-FAILED tests/unit/agents/test_evolve_microbenchmark.py::test_stock_microbenchmark_reproduces_all_private_contracts
-FAILED tests/unit/agents/test_evolve_microbenchmark.py::test_stock_microbenchmark_does_not_write_fedot
-3 failed, 1060 passed, 81 deselected in 150.55s (0:02:30)
+1076 passed, 1 failed, 81 deselected
+FAILED tests/unit/agents/test_evolve_tuning_isolation.py::test_real_fedot_tuner_uses_isolated_objective[regression]
+Note: failure reproduces on HEAD without this PR diff (PyPI FEDOT/sklearn env);
+out of goal scope (goal subset: pin/preflight/worker/transfer/budget/parallel/recovery).

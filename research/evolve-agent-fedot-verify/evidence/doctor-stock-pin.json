@@ -1,8 +1,31 @@
 {
-  "doctor_ok": false,
-  "doctor_failure_kind": "fedot_pin_incompatible",
-  "research_worktree_ok": true,
-  "research_detail": "using research return_best worktree at /tmp/fedot-verify/FEDOT-return-best",
-  "research_source": "/tmp/fedot-verify/FEDOT-return-best"
+  "ok": false,
+  "checks": {
+    "fedot_repo_path": {
+      "ok": true,
+      "failure_kind": null,
+      "summary": "FEDOT path resolved from argument: /tmp/fedot-verify/FEDOT"
+    },
+    "manifest": {
+      "ok": true,
+      "failure_kind": null,
+      "summary": "benchmark assets ok"
+    },
+    "runtime_dask": {
+      "ok": true,
+      "failure_kind": null,
+      "summary": "runtime dask import ok"
+    },
+    "fedot_pin": {
+      "ok": false,
+      "failure_kind": "fedot_pin_incompatible",
+      "summary": "FEDOT pin incompatible with EvolveAgent quality worker: timeout_policy/final_fit_reserve/max_pipeline_evaluation_time, isolated_gp_optimizer; policy=refuse (set EVOLVE_FEDOT_RETURN_BEST_POLICY=research_worktree and EVOLVE_FEDOT_RETURN_BEST_ROOT only for offline research)"
+    },
+    "immutable_source": {
+      "ok": true,
+      "failure_kind": null,
+      "summary": null
+    }
+  }
 }
 ASSERT_OK

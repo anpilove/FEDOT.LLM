@@ -10,7 +10,11 @@ from fedotllm.agents.evolve.execution.checkout import (
     source_fingerprint,
 )
 from fedotllm.agents.evolve.evaluation.eval import run_stock
-from fedotllm.agents.evolve.evaluation.manifest import verify_manifest
+from fedotllm.agents.evolve.evaluation.fedot_pin_preflight import (
+    check_fedot_assets,
+    check_runtime_dask,
+    resolve_fedot_repo_path_check,
+)
 from fedotllm.agents.evolve.evaluation.return_best_policy import resolve_return_best_source
 from fedotllm.agents.evolve.execution.run_code import fedot_python, run_fedot_snippet
 
@@ -27,6 +31,32 @@ def run_doctor(
     before = source_fingerprint(source)
     checks: dict[str, dict] = {}
 
+    # Early gates always run together so a pin failure cannot hide missing
+    # FEDOTLLM_REPO_PATH / checksum assets / runtime dask.
+    path_check = resolve_fedot_repo_path_check(explicit=source)
+    checks["fedot_repo_path"] = {
+        "ok": path_check.ok,
+        "failure_kind": path_check.failure_kind,
+        "summary": path_check.summary,
+        "details": path_check.checks,
+    }
+
+    assets = check_fedot_assets(source)
+    checks["manifest"] = {
+        "ok": assets.ok,
+        "failure_kind": assets.failure_kind,
+        "summary": assets.summary,
+        **assets.checks.get("manifest_assets", {}),
+    }
+
+    runtime_dask = check_runtime_dask()
+    checks["runtime_dask"] = {
+        "ok": runtime_dask.ok,
+        "failure_kind": runtime_dask.failure_kind,
+        "summary": runtime_dask.summary,
+        "details": runtime_dask.checks,
+    }
+
     decision = resolve_return_best_source(source)
     pin = decision.preflight
     checks["fedot_pin"] = {
@@ -37,24 +67,21 @@ def run_doctor(
         "resolved_source": str(decision.source),
         "details": pin.checks,
     }
-    if not decision.ok:
-        after = source_fingerprint(source)
-        checks["immutable_source"] = {"ok": before == after, "before": before, "after": after}
-        return {"ok": False, "checks": checks}
-    # Doctor continues against the stock checkout; a research worktree is only
-    # accepted as evidence that a compatible pin exists for offline experiments.
-    if decision.source != source:
+    if decision.source != source and decision.ok:
         checks["return_best_research_worktree"] = {
             "ok": True,
             "path": str(decision.source),
             "note": "research worktree passes preflight; stock pin remains unchanged",
         }
 
-    try:
-        manifest_errors = verify_manifest(source)
-    except (OSError, ValueError) as exc:
-        manifest_errors = [f"{type(exc).__name__}: {exc}"]
-    checks["manifest"] = {"ok": not manifest_errors, "errors": manifest_errors}
+    early_ok = all(
+        bool(checks[name].get("ok"))
+        for name in ("fedot_repo_path", "manifest", "runtime_dask", "fedot_pin")
+    )
+    if not early_ok:
+        after = source_fingerprint(source)
+        checks["immutable_source"] = {"ok": before == after, "before": before, "after": after}
+        return {"ok": False, "checks": checks}
 
     experiment = None
     try:
