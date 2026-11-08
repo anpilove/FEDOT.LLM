@@ -1888,6 +1888,21 @@ def _run_over_tasks(
     return [by_id[task_id] for task_id in ids]
 
 
+def _host_killed(result: ScoreResult) -> bool:
+    """SIGKILL that was not our own deadline.
+
+    The timeout and cancellation paths record their own outcomes before a
+    missing result file is inspected. A remaining SIGKILL is the kernel,
+    which is how Linux reports memory pressure. Other signals stay per-side.
+    """
+
+    observations = result.metric_observations or {}
+    return (
+        observations.get("failure_kind") == "worker_signaled"
+        and observations.get("signal") == signal.SIGKILL
+    )
+
+
 def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     skipped_rows = [
         row for row in rows
@@ -1923,6 +1938,7 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     timed_out = False
     watchdog_timed_out = False
     fedot_budget_exhausted = False
+    host_killed = False
     retryable_failure = False
     for row in rows:
         task_id = row["spec"]["source_dataset"]
@@ -1930,6 +1946,9 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         patched_result = row["patched_result"]
         retryable_failure = retryable_failure or _retryable_quality_failure(stock_result)
         retryable_failure = retryable_failure or _retryable_quality_failure(patched_result)
+        if _host_killed(stock_result) or _host_killed(patched_result):
+            host_killed = True
+            failure_reasons.append(f"quality {task_id} worker received SIGKILL")
         timeout_results = [
             result for result in (stock_result, patched_result) if result.status == "timeout"
         ]
@@ -2012,9 +2031,9 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
             target_delta=None,
             regression_deltas=deltas,
             stage="quality",
-            infrastructure_error=timed_out or retryable_failure,
+            infrastructure_error=timed_out or retryable_failure or host_killed,
             quality_failure=None
-            if timed_out or retryable_failure
+            if timed_out or retryable_failure or host_killed
             else "watchdog_timeout" if watchdog_timed_out
             else "fedot_budget_timeout" if fedot_budget_exhausted
             else failure_kind or "evaluation_error",

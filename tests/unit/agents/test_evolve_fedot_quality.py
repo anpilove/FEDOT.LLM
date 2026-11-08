@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import signal
 from dataclasses import asdict
 from pathlib import Path
 import sys
@@ -455,6 +456,32 @@ def test_watchdog_timeout_is_not_host_infrastructure():
     assert decision.infrastructure_error is False
     assert decision.quality_failure == "watchdog_timeout"
     assert decision.quality_outcome == "not_evaluated"
+
+
+def test_sigkill_pauses_as_host_pressure_and_sigsegv_stays_per_side():
+    killed = _pair("openml-31-credit-g", 0.70, 0.80)
+    killed["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "invalid", float("nan"),
+        detail="worker signaled SIGKILL (9)",
+        metric_observations={"failure_kind": "worker_signaled", "signal": signal.SIGKILL},
+    )
+    fault = _pair("openml-37-diabetes", 0.70, 0.80)
+    fault["patched_result"] = ScoreResult(
+        "openml-37-diabetes", "invalid", float("nan"),
+        detail="worker signaled SIGSEGV (11)",
+        metric_observations={"failure_kind": "worker_signaled", "signal": signal.SIGSEGV},
+    )
+
+    host = decision_from_quality_jobs([killed])
+    side = decision_from_quality_jobs([fault])
+
+    assert host.keep is None
+    assert host.infrastructure_error is True
+    assert host.quality_failure is None
+    assert "SIGKILL" in host.reason
+    assert side.infrastructure_error is False
+    assert side.quality_failure == "evaluation_error"
+    assert side.keep is None
 
 
 def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructure():

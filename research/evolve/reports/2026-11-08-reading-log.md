@@ -13,6 +13,7 @@ no quality KEEP, no OpenML registry run.
 - `controller/README.md` failure section: a finished watchdog is not retried. `Fedot.timeout` and the side deadline are different budgets. The README does not mention the 10-minute GOLEM stagnation default.
 - `execution/process.py` and `_worker_lifetime_guard.py`: the parent records `task_timeout`; the guardian exits 124 for its own cap. Diagnose labels `fit_without_optimizer_evidence` and does not stop the worker. `run_worker` documents that `cancellation_event` yields `cancelled`, not a timeout.
 - GOLEM `Fitness` (golem/core/optimisers/fitness/fitness.py): an invalid fitness, including `None`, is never better than a measured fitness. A signaled evaluator leaves no fitness. The worker previously recorded that the same way as a normal nonzero exit.
+- Linux reports memory pressure by delivering `SIGKILL`. Our own deadline and cancellation paths already record their outcomes before a missing result file is read, so a remaining `SIGKILL` is external. `SIGSEGV` stays a per-side fault.
 
 ## Found
 
@@ -34,4 +35,5 @@ no quality KEEP, no OpenML registry run.
 - [x] Pass `early_stopping_timeout` equal to the declared FEDOT minute budget and record `early_stopping_timeout` separately from `composing_did_not_start`. A valid metric stays `ok`.
 - [x] A parent cancellation stays `cancelled` when the guardian exits 124 while an escaped pipe is still draining. It is not also `watchdog_timeout`.
 - [x] A worker killed by a signal, with no result file, is `worker_signaled` plus the signal number. It is not `worker_exit` and not a candidate failure.
-- [ ] Check whether a signaled worker with `SIGKILL` should pause the queue as host memory pressure, or stay a per-side invalid result.
+- [x] A remaining `SIGKILL` sets `infrastructure_error` and pauses the queue. `SIGSEGV` stays `evaluation_error` for that side only.
+- [ ] Check a caught `MemoryError` inside the worker. It should stay a per-side invalid result, not the same host pause as `SIGKILL`.
