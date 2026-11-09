@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+from fedotllm.agents.evolve.evaluation.compare import patched_broke
 from fedotllm.agents.evolve.types import Decision, ScoreResult
 
 ScoreRunner = Callable[..., dict[str, ScoreResult]]
@@ -50,7 +51,7 @@ def _deterministic_patch_failure(
         after = patched[task_id]
         if before.status != "ok":
             continue
-        if after.status == "crash":
+        if patched_broke(before, after):
             return f"regression {task_id} crashed after patch", False
         if after.status in {"timeout", "invalid"}:
             return f"regression {task_id} timeout_or_invalid", True
@@ -160,7 +161,7 @@ def confirm_dev(
             protect_ids=protect_ids,
             evidence_only=evidence_only,
         )
-        if invalid:
+        if invalid or decision.infrastructure_error:
             infrastructure += 1
         elif decision.reason.startswith("regression"):
             regressed += 1
@@ -195,12 +196,12 @@ def confirm_dev(
             protect_ids=protect_ids,
             evidence_only=evidence_only,
         )
-        if shadow_invalid:
+        if shadow_invalid or shadow_decision.infrastructure_error:
             infrastructure += 1
         shadow_row = {
             "evaluated": True,
             "seed": shadow_seed,
-            "keep": shadow_decision.keep and not shadow_invalid,
+            "keep": shadow_decision.keep and not shadow_invalid and not shadow_decision.infrastructure_error,
             "reason": shadow_decision.reason,
             "target_delta": shadow_decision.target_delta,
         }

@@ -64,7 +64,10 @@ def test_failed_worker_echoes_physical_invocation_in_payload_and_stage(tmp_path)
 
     payload, _ = worker._evaluate_worker(spec, out)
 
-    assert payload["status"] == "crash"
+    assert payload["status"] == "invalid"
+    assert payload["outcome"] == "invalid"
+    assert payload["failure_kind"] == "worker_error"
+    assert payload["score"] is None
     assert payload["failed_stage"] == "validate_spec"
     assert payload.get("worker_invocation_id") == invocation
     stage = json.loads(out.with_suffix(".stages.json").read_text())
@@ -82,7 +85,10 @@ def test_worker_rejects_unknown_tuning_policy_before_runtime_configuration(tmp_p
         tmp_path / "result.json",
     )
 
-    assert payload["status"] == "crash"
+    assert payload["status"] == "invalid"
+    assert payload["outcome"] == "invalid"
+    assert payload["failure_kind"] == "worker_error"
+    assert payload["score"] is None
     assert payload["failed_stage"] == "validate_spec"
     assert "tuning" in payload["detail"]
 
@@ -108,7 +114,15 @@ def test_worker_owns_tuning_guard_for_fit_and_preserves_its_diagnostics(
                     "cleanup_verified": state["cleaned"], "evaluations": 2}
 
     class Model:
-        def __init__(self, **kwargs):
+        def __init__(
+            self, timeout_policy, final_fit_reserve_seconds, cv_folds,
+            max_pipeline_fit_time, max_pipeline_evaluation_time, **kwargs,
+        ):
+            assert timeout_policy == "return_best"
+            assert final_fit_reserve_seconds == 300
+            assert max_pipeline_fit_time > 0
+            assert max_pipeline_evaluation_time > 0
+            assert cv_folds > 0
             self.api_composer = SimpleNamespace(was_optimised=True, was_tuned=True)
             self.history = None
 
@@ -143,7 +157,11 @@ def test_worker_owns_tuning_guard_for_fit_and_preserves_its_diagnostics(
 
     payload, _ = worker._evaluate_worker(spec, tmp_path / "result.json")
 
-    assert payload["status"] == ("crash" if fail_fit else "ok"), payload.get("detail")
+    assert payload["status"] == ("invalid" if fail_fit else "ok"), payload.get("detail")
+    if fail_fit:
+        assert payload["outcome"] == "invalid"
+        assert payload["failure_kind"] == "fedot_fit_error"
+        assert payload["score"] is None
     diagnostics = payload["metric_observations"].get("tuning_isolation", {})
     assert diagnostics.get("policy") == "isolated-objective-process-v1"
     assert diagnostics.get("cleanup_verified") is True

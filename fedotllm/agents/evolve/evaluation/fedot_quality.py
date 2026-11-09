@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import signal
 import fcntl
 import os
 import platform
@@ -36,6 +37,7 @@ from fedotllm.agents.evolve.evaluation.quality_registry import (
     load_quality_registry,
 )
 from fedotllm.agents.evolve.evaluation.pair_scheduler import SharedPairScheduler
+from fedotllm.agents.evolve.evaluation.return_best_policy import budget_timeout_reported
 from fedotllm.agents.evolve.evaluation.stock_flights import StockFlightRegistry
 from fedotllm.agents.evolve.execution.guard import repo_root
 from fedotllm.agents.evolve.execution.process import (
@@ -188,6 +190,41 @@ def _retryable_quality_failure(result: ScoreResult) -> bool:
         "status code 504",
     )
     return any(marker in text for marker in transient_markers)
+
+
+def _attempt_elapsed_seconds(result: ScoreResult) -> float:
+    observations = result.metric_observations or {}
+    for key in ("side_elapsed_seconds", "elapsed_seconds"):
+        value = observations.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(value) and value >= 0:
+            return float(value)
+    duration = result.duration_s
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        return 0.0
+    if not math.isfinite(duration) or duration < 0:
+        return 0.0
+    return float(duration)
+
+
+def _next_attempt_fits(result: ScoreResult, *, completed_attempts: int, side_timeout: float) -> bool:
+    """GOLEM skips a generation that is longer than the time still left.
+
+    The next attempt fits only when the side timeout is strictly longer than
+    the time already spent plus the average length of the completed attempts.
+    A timeout, or a failure that already used the whole side budget, does not
+    receive another attempt of that length.
+    """
+
+    if not _retryable_quality_failure(result):
+        return False
+    if not math.isfinite(side_timeout) or side_timeout <= 0:
+        return False
+    completed = max(1, completed_attempts)
+    elapsed = _attempt_elapsed_seconds(result)
+    average = elapsed / completed
+    return side_timeout > elapsed + average
 
 
 def _async_stock_flight_key(
@@ -447,7 +484,62 @@ def _iter_stock_cache_paths(
     """Return only cache entries from the exact per-task compute profile."""
 
     exact = _stock_cache_path(dataset, registry, n_jobs, stock_cache_root=stock_cache_root)
-    return [exact] if exact.is_file() else []
+    # Callers disable the cache by resolving no path. A missing path is a miss.
+    return [exact] if exact is not None and exact.is_file() else []
+
+
+def _cached_worker_attempt_ok(payload: dict, *, task_id: str) -> bool:
+    """Reject a cached worker result whose attempt identity contradicts this stock task.
+
+    GOLEM ``GraphVerifier`` drops an invalid graph before evaluation. A stock
+    cache entry may omit attempt fields, but a present field that names another
+    task, side, or attempt is not a reusable measurement.
+    """
+
+    observations = payload.get("metric_observations")
+    observations = observations if isinstance(observations, dict) else {}
+
+    def field(name: str):
+        if name in observations:
+            return observations.get(name)
+        return payload.get(name)
+
+    recorded_task = field("task_id")
+    if recorded_task not in (None, "", task_id):
+        return False
+    source_dataset = field("source_dataset")
+    if source_dataset not in (None, "", task_id):
+        return False
+    side = field("side")
+    if side not in (None, "", "stock"):
+        return False
+    attempt = field("attempt")
+    if attempt is not None and (
+        isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1
+    ):
+        return False
+    attempt_id = field("attempt_id")
+    if attempt_id in (None, ""):
+        return True
+    if not isinstance(attempt_id, str):
+        return False
+    proposal, recorded_task_id, recorded_side, recorded_attempt = (
+        (*attempt_id.rsplit(":", 3), "", "", "", "")[:4]
+    )
+    if (
+        not proposal
+        or recorded_task_id != task_id
+        or recorded_side != "stock"
+        or not recorded_attempt.isdigit()
+        or int(recorded_attempt) < 1
+    ):
+        return False
+    if attempt is not None and int(recorded_attempt) != attempt:
+        return False
+    proposal_id = field("proposal_id")
+    if isinstance(proposal_id, str) and proposal_id and proposal_id != proposal:
+        return False
+    return True
 
 
 def _identity_matches(payload: dict, expected: dict) -> bool:
@@ -457,6 +549,30 @@ def _identity_matches(payload: dict, expected: dict) -> bool:
     if not identity:
         return False
     return all(blob.get(key) == value for key, value in expected.items())
+
+
+def _stock_cache_hit(
+    dataset: QualityDataset,
+    registry: QualityRegistry,
+    checkout: Path,
+    *,
+    n_jobs: int,
+    python: str,
+    stock_cache_root: Path | str | None,
+    env_hash: str,
+) -> ScoreResult | None:
+    """Return a measured stock identity. GOLEM elitism does not evaluate it again."""
+
+    return _load_stock_cache(
+        dataset,
+        registry,
+        n_jobs,
+        env_hash=env_hash,
+        fedot_commit=_fedot_commit(checkout),
+        source_sha256=_source_sha256(str(checkout.resolve())),
+        worker_runtime=interpreter_identity(checkout, executable=python),
+        stock_cache_root=stock_cache_root,
+    )
 
 
 def _load_stock_cache(
@@ -488,6 +604,8 @@ def _load_stock_cache(
         if payload.get("status") != "ok":
             continue
         if not _identity_matches(payload, expected):
+            continue
+        if not _cached_worker_attempt_ok(payload, task_id=dataset.task_id):
             continue
         try:
             result = _score_from_payload(
@@ -521,6 +639,11 @@ def _store_stock_cache(
 ) -> None:
     if (result.status != "ok" or not math.isfinite(float(result.score))
             or (result.metric_observations or {}).get("metric_valid") is not True):
+        return
+    if not _cached_worker_attempt_ok(
+        {"task_id": result.task_id, "metric_observations": result.metric_observations},
+        task_id=dataset.task_id,
+    ):
         return
     root = _stock_cache_root(stock_cache_root)
     root.mkdir(parents=True, exist_ok=True)
@@ -584,6 +707,24 @@ def _stage_status_observations(path: Path) -> dict:
     return observations
 
 
+def _terminated_worker(returncode: int | None) -> tuple[str, str, int | None]:
+    """Separate a signal death from a normal nonzero exit.
+
+    GOLEM treats a missing fitness as invalid and never better than a measured
+    fitness. A negative return code is that case: the process was signaled and
+    published no score. A positive exit is the worker's own status.
+    """
+
+    if isinstance(returncode, int) and not isinstance(returncode, bool) and returncode < 0:
+        number = -returncode
+        try:
+            name = signal.Signals(number).name
+        except ValueError:
+            name = str(number)
+        return f"worker signaled {name} ({number})", "worker_signaled", number
+    return f"worker exit {returncode}", "worker_exit", None
+
+
 def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str) -> ScoreResult:
     if not isinstance(payload, dict):
         raise ValueError("worker result must be a JSON object")
@@ -593,7 +734,7 @@ def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str)
     if not isinstance(observations, dict):
         raise ValueError("metric_observations must be a JSON object")
     observations = dict(observations)
-    for key in ("failure_kind", "failed_stage", "last_stage", "stage_timings", "stage_status_path"):
+    for key in ("outcome", "failure_kind", "failed_stage", "last_stage", "stage_timings", "stage_status_path"):
         if key in payload:
             observations[key] = payload[key]
     status = payload.get("status")
@@ -603,6 +744,17 @@ def _score_from_payload(task_id: str, payload: dict, *, env_hash: str, cmd: str)
     if not math.isfinite(duration) or duration < 0:
         raise ValueError("duration_s must be finite and nonnegative")
     raw_score = payload.get("score")
+    if status == "ok" and budget_timeout_reported(
+        observations.get("fedot_fit_budget_outcome"),
+        str(payload.get("log_tail") or ""),
+    ):
+        # A parent must not store a holdout number from a reported budget stop.
+        observations["discarded_holdout_score"] = raw_score
+        observations["metric_valid"] = False
+        observations["metric_outcome"] = "not_measured"
+        observations["failure_kind"] = "fedot_budget_timeout"
+        status = "timeout"
+        raw_score = None
     if status == "ok":
         if observations.get("metric_valid") is not True:
             raise ValueError(
@@ -748,15 +900,14 @@ def run_quality_side(
                 error=exc,
             )
     if side == "stock":
-        cached = _load_stock_cache(
+        cached = _stock_cache_hit(
             dataset,
             registry,
-            spec["n_jobs"],
-            env_hash=env_hash,
-            fedot_commit=fedot_commit,
-            source_sha256=source_sha256,
-            worker_runtime=worker_runtime,
+            checkout,
+            n_jobs=spec["n_jobs"],
+            python=python,
             stock_cache_root=stock_cache_root,
+            env_hash=env_hash,
         )
         if cached is not None:
             hit_path = (cached.metric_observations or {}).get("cache_path") or cache_path
@@ -928,6 +1079,7 @@ def run_quality_side(
             "metric_valid": False,
             "failure_kind": "timeout",
             "timeout_kind": timeout_kind,
+            "watchdog_fired": timeout_kind == "watchdog_timeout",
             "elapsed_seconds": side_elapsed,
             "side_elapsed_seconds": side_elapsed,
             "worker_elapsed_seconds": elapsed_seconds,
@@ -965,6 +1117,7 @@ def run_quality_side(
             "metric_outcome": "not_measured",
             "metric_valid": False,
             "timeout_kind": timeout_kind,
+            "watchdog_fired": timeout_kind == "watchdog_timeout",
             "detail": (
                 f"{timeout_kind} after {side_elapsed:.3f}s "
                 f"(side limit {timeout_limit:g}s)"
@@ -1011,28 +1164,32 @@ def run_quality_side(
             metric_observations=timeout_observations,
         )
     if not out_path.is_file():
+        detail, failure_kind, signal_number = _terminated_worker(proc.returncode)
+        missing_observations = {
+            **physical_observations,
+            "search_ran": False,
+            "worker_log_path": str(log_path),
+            "worker_result_path": str(out_path),
+            "stack_trace_path": paths["stack_trace_path"],
+            "failure_kind": failure_kind,
+            "elapsed_seconds": elapsed_seconds,
+            "worker_return_code": proc.returncode,
+            **_stage_status_observations(out_path.with_suffix(".stages.json")),
+        }
+        if signal_number is not None:
+            missing_observations["signal"] = signal_number
         return ScoreResult(
             task_id=dataset.task_id,
             status="invalid",
             score=float("nan"),
             duration_s=elapsed_seconds,
             traceback=log_text[-4000:],
-            detail=f"worker exit {proc.returncode}",
+            detail=detail,
             env_hash=env_hash,
             cmd=" ".join(cmd),
             log_tail=log_text[-4000:],
             seed=registry.seed,
-            metric_observations={
-                **physical_observations,
-                "search_ran": False,
-                "worker_log_path": str(log_path),
-                "worker_result_path": str(out_path),
-                "stack_trace_path": paths["stack_trace_path"],
-                "failure_kind": "worker_exit",
-                "elapsed_seconds": elapsed_seconds,
-                "worker_return_code": proc.returncode,
-                **_stage_status_observations(out_path.with_suffix(".stages.json")),
-            },
+            metric_observations=missing_observations,
         )
     try:
         payload = json.loads(out_path.read_text(encoding="utf-8"))
@@ -1078,7 +1235,21 @@ def run_quality_side(
         if proc.returncode != 0 and payload.get("status") == "ok":
             # A worker that failed its process lifecycle cannot publish a
             # trusted metric, even if it wrote a plausible result first.
-            payload.update(status="invalid", score=None, detail=f"worker exit {proc.returncode}")
+            detail, failure_kind, signal_number = _terminated_worker(proc.returncode)
+            observations = payload.get("metric_observations")
+            observations = dict(observations) if isinstance(observations, dict) else {}
+            observations["metric_valid"] = False
+            observations["failure_kind"] = failure_kind
+            if signal_number is not None:
+                observations["signal"] = signal_number
+            payload = dict(
+                payload,
+                status="invalid",
+                score=None,
+                detail=detail,
+                failure_kind=failure_kind,
+                metric_observations=observations,
+            )
         payload["log_tail"] = (str(payload.get("log_tail") or "") + "\n" + log_text)[-2000:]
         result = _score_from_payload(dataset.task_id, payload, env_hash=env_hash, cmd=" ".join(cmd))
         # Keep the structured outcome until the parent has durably recorded
@@ -1166,7 +1337,9 @@ def run_quality_pair(
         previous = prior_side_results.get(key)
         attempt_count = int(prior_attempt_counts.get(key, 0))
         if previous is not None and (
-            not _retryable_quality_failure(previous) or attempt_count >= 2
+            attempt_count >= 2 or not _next_attempt_fits(
+                previous, completed_attempts=attempt_count, side_timeout=float(registry.timeout_seconds),
+            )
         ):
             original_paths = (previous.metric_observations or {}).get("worker_paths")
             if isinstance(original_paths, dict):
@@ -1174,6 +1347,23 @@ def run_quality_pair(
             if on_side_event is not None:
                 on_side_event(side_spec, side, "reused", previous, attempt_count or 1)
             return previous
+        if side == "stock":
+            cached = _stock_cache_hit(
+                dataset,
+                registry,
+                checkout,
+                n_jobs=spec["n_jobs"],
+                python=python,
+                stock_cache_root=stock_cache_root,
+                env_hash=f"{registry.identity}|{dataset.task_id}|stock|{spec['n_jobs']}",
+            )
+            if cached is not None:
+                owner_paths = (cached.metric_observations or {}).get("worker_paths")
+                if isinstance(owner_paths, dict):
+                    side_spec["worker_paths"] = dict(owner_paths)
+                if on_side_event is not None:
+                    on_side_event(side_spec, side, "finished", cached, attempt_count or 1)
+                return cached
         attempt = attempt_count + 1
         while True:
             _check_cancellation(cancellation_event)
@@ -1206,7 +1396,9 @@ def run_quality_pair(
             )
             if on_side_event is not None:
                 on_side_event(side_spec, side, "finished", result, attempt)
-            if attempt >= 2 or not _retryable_quality_failure(result):
+            if attempt >= 2 or not _next_attempt_fits(
+                result, completed_attempts=attempt, side_timeout=float(registry.timeout_seconds),
+            ):
                 return result
             _check_cancellation(cancellation_event)
             attempt += 1
@@ -1291,7 +1483,9 @@ def _run_quality_pair_async(
         attempt_count = int(attempt_counts.get(key, 0))
         prior = previous_results.get(key)
         if prior is not None and (
-            not _retryable_quality_failure(prior) or attempt_count >= 2
+            attempt_count >= 2 or not _next_attempt_fits(
+                prior, completed_attempts=attempt_count, side_timeout=float(registry.timeout_seconds),
+            )
         ):
             original_paths = (prior.metric_observations or {}).get("worker_paths")
             if isinstance(original_paths, dict):
@@ -1301,6 +1495,25 @@ def _run_quality_pair_async(
             reused: Future[ScoreResult] = Future()
             reused.set_result(prior)
             return reused
+        if side == "stock":
+            cached = _stock_cache_hit(
+                dataset,
+                registry,
+                checkout,
+                n_jobs=spec["n_jobs"],
+                python=python,
+                stock_cache_root=stock_cache_root,
+                env_hash=f"{registry.identity}|{dataset.task_id}|stock|{spec['n_jobs']}",
+            )
+            if cached is not None:
+                owner_paths = (cached.metric_observations or {}).get("worker_paths")
+                if isinstance(owner_paths, dict):
+                    side_spec["worker_paths"] = dict(owner_paths)
+                if on_side_event is not None:
+                    on_side_event(side_spec, side, "finished", cached, attempt_count or 1)
+                reused_cache: Future[ScoreResult] = Future()
+                reused_cache.set_result(cached)
+                return reused_cache
 
         current_attempt = attempt_count + attempt + 1
         side_spec["worker_paths"] = create_worker_artifact_plan(
@@ -1566,7 +1779,11 @@ def _run_quality_pair_async(
                 retried.set_exception(exc)
                 return
             current_attempt = int(attempt_counts.get((dataset.task_id, side), 0)) + retry + 1
-            if current_attempt < 2 and _retryable_quality_failure(side_result):
+            if current_attempt < 2 and _next_attempt_fits(
+                side_result,
+                completed_attempts=current_attempt,
+                side_timeout=float(registry.timeout_seconds),
+            ):
                 try:
                     _check_cancellation(cancellation_event)
                     next_future = retrying_side(side, checkout, retry + 1)
@@ -1849,6 +2066,79 @@ def _run_over_tasks(
     return [by_id[task_id] for task_id in ids]
 
 
+def _storage_failed(result: ScoreResult) -> bool:
+    return (result.metric_observations or {}).get("failure_kind") == "storage_error"
+
+
+def _host_killed(result: ScoreResult) -> bool:
+    """SIGKILL that was not our own deadline.
+
+    The timeout and cancellation paths record their own outcomes before a
+    missing result file is inspected. A remaining SIGKILL is the kernel,
+    which is how Linux reports memory pressure. Other signals stay per-side.
+    """
+
+    observations = result.metric_observations or {}
+    return (
+        observations.get("failure_kind") == "worker_signaled"
+        and observations.get("signal") == signal.SIGKILL
+    )
+
+
+def side_is_measured(result: dict) -> bool:
+    """A side is measured only with a finite attested score.
+
+    GOLEM's dispatcher warns when half or fewer of a population evaluated
+    successfully. Status ``ok`` alone is not that success.
+    """
+
+    observations = result.get("metric_observations")
+    observations = observations if isinstance(observations, dict) else {}
+    score = result.get("score")
+    return (
+        result.get("status") == "ok"
+        and isinstance(score, (int, float))
+        and not isinstance(score, bool)
+        and math.isfinite(float(score))
+        and observations.get("metric_valid") is True
+    )
+
+
+def stock_pack_measured(stock_rows: list[dict], jobs: list[dict]) -> bool:
+    """True only when every required dataset in the pack has an attested stock score.
+
+    A pack with half or fewer attested datasets is not a measured pack. Any
+    missing or unattested dataset fails the pack, including a 50/50 split.
+    GOLEM ``has_no_isolated_components`` rejects a graph whose pieces do not
+    connect. A measured stock row for a dataset that no job asked for is that
+    extra piece, and an empty job list does not make the rows a pack.
+    """
+
+    if not stock_rows or not jobs or not all(row.get("measured") is True for row in stock_rows):
+        return False
+    indexed = {
+        (str(row.get("candidate_id") or ""), str(row.get("task_id") or "")): row
+        for row in stock_rows
+    }
+    requested: set[tuple[str, str]] = set()
+    for job in jobs:
+        candidate = str(job.get("candidate_id") or "")
+        tasks = [str(task_id) for task_id in (job.get("task_ids") or ()) if str(task_id)]
+        unresolved = [str(task_id) for task_id in (job.get("unresolved_task_ids") or ()) if str(task_id)]
+        if not tasks or unresolved:
+            return False
+        for task_id in tasks:
+            requested.add((candidate, task_id))
+        if any(indexed.get((candidate, task_id), {}).get("measured") is not True for task_id in tasks):
+            return False
+    if any(
+        (str(row.get("candidate_id") or ""), str(row.get("task_id") or "")) not in requested
+        for row in stock_rows
+    ):
+        return False
+    return True
+
+
 def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     skipped_rows = [
         row for row in rows
@@ -1879,17 +2169,43 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         )
     deltas: dict[str, float | None] = {}
     unresolved: list[str] = []
+    seen_tasks: set[str] = set()
+    duplicate_tasks: list[str] = []
     failure_reasons: list[str] = []
     failure_kind: str | None = None
     timed_out = False
+    watchdog_timed_out = False
     fedot_budget_exhausted = False
+    host_killed = False
+    storage_failed = False
     retryable_failure = False
     for row in rows:
-        task_id = row["spec"]["source_dataset"]
+        spec = row.get("spec")
+        spec = spec if isinstance(spec, dict) else {}
+        task_id = spec.get("source_dataset")
+        # GOLEM has_root rejects a graph with no root. A row that names no
+        # dataset cannot become the KEEP root.
+        if not isinstance(task_id, str) or not task_id:
+            unresolved.append("unknown_dataset")
+            failure_kind = failure_kind or "missing_dataset"
+            failure_reasons.append("quality_row_missing_source_dataset")
+            continue
+        # GOLEM has_one_root rejects a graph with two roots. A second row for
+        # the same dataset must not replace the first delta.
+        if task_id in seen_tasks:
+            duplicate_tasks.append(task_id)
+        else:
+            seen_tasks.add(task_id)
         stock_result = row["stock_result"]
         patched_result = row["patched_result"]
         retryable_failure = retryable_failure or _retryable_quality_failure(stock_result)
         retryable_failure = retryable_failure or _retryable_quality_failure(patched_result)
+        if _host_killed(stock_result) or _host_killed(patched_result):
+            host_killed = True
+            failure_reasons.append(f"quality {task_id} worker received SIGKILL")
+        if _storage_failed(stock_result) or _storage_failed(patched_result):
+            storage_failed = True
+            failure_reasons.append(f"quality {task_id} storage capacity exhausted")
         timeout_results = [
             result for result in (stock_result, patched_result) if result.status == "timeout"
         ]
@@ -1898,11 +2214,23 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
                 result for result in timeout_results
                 if (result.metric_observations or {}).get("failure_kind") == "fedot_budget_timeout"
             ]
+            watchdog_results = [
+                result for result in timeout_results
+                if (result.metric_observations or {}).get("watchdog_fired") is True
+                or (result.metric_observations or {}).get("timeout_kind") == "watchdog_timeout"
+            ]
             if budget_timeout_results:
                 fedot_budget_exhausted = True
                 failure_kind = failure_kind or "fedot_budget_timeout"
                 failure_reasons.append(f"FEDOT fit budget exhausted for {task_id}; metric not measured")
-            else:
+            if watchdog_results:
+                watchdog_timed_out = True
+                failure_reasons.append(f"quality {task_id} watchdog timeout")
+            unlabeled = [
+                result for result in timeout_results
+                if result not in budget_timeout_results and result not in watchdog_results
+            ]
+            if unlabeled:
                 timed_out = True
                 failure_reasons.append(f"quality {task_id} worker deadline timeout")
             unresolved.append(task_id)
@@ -1951,28 +2279,54 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         delta = after - before if spec["higher_is_better"] else before - after
         if spec.get("delta_mode", "absolute") == "relative":
             delta /= max(abs(before), 1e-12)
-        deltas[task_id] = delta
+        previous = deltas.get(task_id)
+        deltas[task_id] = delta if previous is None else min(previous, delta)
+
+    if duplicate_tasks:
+        names = tuple(dict.fromkeys(duplicate_tasks))
+        return Decision(
+            keep=None,
+            reason="duplicate_dataset:" + ",".join(names),
+            target_delta=None,
+            regression_deltas=deltas,
+            stage="quality",
+            infrastructure_error=timed_out or retryable_failure or host_killed or storage_failed,
+            quality_failure=None
+            if timed_out or retryable_failure or host_killed or storage_failed
+            else "duplicate_dataset",
+            quality_outcome="not_evaluated",
+            regressed_task_count=sum(
+                1 for delta in deltas.values() if delta is not None and delta < -1e-12
+            ),
+            unresolved_task_ids=tuple(dict.fromkeys((*names, *unresolved))),
+        )
 
     if unresolved:
+        improved_despite_unresolved = 0
+        for row in rows:
+            spec = row.get("spec")
+            if not isinstance(spec, dict):
+                continue
+            task_id = spec.get("source_dataset")
+            if not isinstance(task_id, str) or task_id not in deltas or "min_delta" not in spec:
+                continue
+            delta = deltas[task_id]
+            if delta is not None and delta >= float(spec["min_delta"]):
+                improved_despite_unresolved += 1
         return Decision(
             keep=None,
             reason="; ".join(failure_reasons),
             target_delta=None,
             regression_deltas=deltas,
             stage="quality",
-            infrastructure_error=timed_out or retryable_failure,
+            infrastructure_error=timed_out or retryable_failure or host_killed or storage_failed,
             quality_failure=None
-            if timed_out or retryable_failure
+            if timed_out or retryable_failure or host_killed or storage_failed
+            else "watchdog_timeout" if watchdog_timed_out
             else "fedot_budget_timeout" if fedot_budget_exhausted
             else failure_kind or "evaluation_error",
             quality_outcome="not_evaluated",
-            improved_task_count=sum(
-                1
-                for row in rows
-                if row["spec"]["source_dataset"] in deltas
-                and deltas[row["spec"]["source_dataset"]]
-                >= float(row["spec"]["min_delta"])
-            ),
+            improved_task_count=improved_despite_unresolved,
             regressed_task_count=sum(
                 1
                 for delta in deltas.values()

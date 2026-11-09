@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 import time
@@ -441,6 +440,7 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
     from fedotllm.agents.evolve.evaluation.fedot_quality import (
         bind_stock_cache,
         run_quality_stock_jobs,
+        side_is_measured,
     )
     from fedotllm.agents.evolve.evaluation.quality_registry import (
         list_quality_task_ids,
@@ -513,10 +513,10 @@ def _cmd_quality_job(args: argparse.Namespace, parser: argparse.ArgumentParser) 
                 ],
             }
         )
-        measured = bool(rows) and all(
-            row["stock"]["status"] == "ok"
-            and math.isfinite(float(row["stock"]["score"]))
-            for row in rows
+        measured = (
+            bool(rows)
+            and len(rows) == len(task_ids)
+            and all(side_is_measured(row["stock"]) for row in rows)
         )
         return 0 if measured else EXIT_INFRASTRUCTURE
     decision = measure_fedot_quality(

@@ -34,6 +34,9 @@ def test_diagnostic_buffer_keeps_bounded_tail_and_early_search_evidence():
     assert buffer.composition_started is True
     buffer.write("timeout is too small for composing\n")
     assert buffer.composition_skipped is True
+    buffer.write("Early stopping criteria was satisfied after 10 minutes\n")
+    assert buffer.early_stopping_fired is True
+    assert buffer.early_stopping_kind == "early_stopping_timeout"
 
 
 def test_diagnostic_buffer_tracks_last_fedot_fit_phase_without_refreshing_it_on_other_logs(tmp_path):
@@ -67,6 +70,36 @@ def test_diagnostic_buffer_tracks_last_fedot_fit_phase_without_refreshing_it_on_
 
     buffer.write("Timeout is too small for composing; initial assumption is used\n")
     assert buffer.fedot_phase == "initial_assumption_fallback"
+
+
+def test_early_stopping_inside_the_budget_stays_a_completed_search():
+    class Composer:
+        was_optimised = True
+
+    class Model:
+        api_composer = Composer()
+        history = None
+
+    ran, detail = worker._search_ran(
+        Model(),
+        "Pipeline composition started\nEarly stopping criteria was satisfied after 10 minutes\n",
+        composition_started=True,
+    )
+
+    assert ran is True
+    assert detail == "early_stopping_timeout"
+
+    class Idle:
+        api_composer = SimpleNamespace(was_optimised=False)
+        history = None
+
+    ran, detail = worker._search_ran(
+        Idle(),
+        "Early stopping criteria was satisfied after 10 minutes\n",
+    )
+
+    assert ran is False
+    assert detail == "early_stopping_timeout"
 
 
 def test_stage_heartbeat_continues_during_long_fit(tmp_path):
@@ -372,8 +405,18 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
     monkeypatch.setitem(sys.modules, "fedot.api.api_utils.timeout", timeout_module)
 
     class FixtureFedot:
-        def __init__(self, **kwargs):
+        def __init__(
+            self, timeout_policy, final_fit_reserve_seconds, cv_folds,
+            max_pipeline_fit_time, max_pipeline_evaluation_time=None, **kwargs,
+        ):
+            kwargs["timeout_policy"] = timeout_policy
+            kwargs["final_fit_reserve_seconds"] = final_fit_reserve_seconds
+            kwargs["cv_folds"] = cv_folds
+            kwargs["max_pipeline_fit_time"] = max_pipeline_fit_time
+            if max_pipeline_evaluation_time is not None:
+                kwargs["max_pipeline_evaluation_time"] = max_pipeline_evaluation_time
             assert kwargs["timeout"] == 45
+            assert kwargs["early_stopping_timeout"] == 45
             assert kwargs["n_jobs"] == 4
             expected_fit = expected_max_pipeline_fit_minutes
             if expected_fit is None:
@@ -403,8 +446,17 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
                 logging.info("x" * (2 * 1024 * 1024))
             if fail_stage == "fit":
                 raise ValueError("fixture fit failure")
+            if fail_stage == "memory":
+                raise MemoryError("fixture allocator refused the fit")
+            if fail_stage == "quota":
+                raise OSError(122, "Quota")
             if fail_stage == "budget":
                 raise FedotBudgetExceeded("final refit reserve exhausted")
+            if fail_stage == "budget_with_holdout":
+                logging.info("holdout metric 0.125")
+                logging.info("FedotBudgetExceeded: final refit reserve exhausted")
+                self.fit_budget_outcome = "budget exhausted"
+                return
 
         def predict(self, values):
             if fail_stage == "predict":
@@ -424,6 +476,63 @@ def _install_fixture_dependencies(monkeypatch, *, fail_stage=None, problem="regr
     fixture_module = ModuleType("fedot.api.main")
     fixture_module.Fedot = FixtureFedot
     monkeypatch.setitem(sys.modules, "fedot.api.main", fixture_module)
+
+
+def test_caught_memory_error_stays_a_per_side_invalid_result(tmp_path, monkeypatch):
+    _install_fixture_dependencies(monkeypatch, fail_stage="memory", verbose_log=False)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "seed": 42, "n_jobs": 4, "max_pipeline_fit_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "proposal_id": "proposal-7", "attempt_id": "proposal-7:fixture:patch:1",
+        "side": "patch", "attempt": 1,
+    }))
+    out = tmp_path / "payload.json"
+    before_handlers = list(logging.getLogger().handlers)
+    before_level = logging.getLogger().level
+    logging.getLogger().handlers.clear()
+    try:
+        rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    finally:
+        logging.getLogger().handlers[:] = before_handlers
+        logging.getLogger().setLevel(before_level)
+    payload = json.loads(out.read_text())
+
+    assert rc == 2
+    assert payload["status"] == "invalid"
+    assert payload["failure_kind"] == "memory_error"
+    assert payload["metric_observations"]["metric_valid"] is False
+    assert "signal" not in payload["metric_observations"]
+
+
+def test_disk_quota_is_storage_error_not_a_candidate_fit_failure(tmp_path, monkeypatch):
+    _install_fixture_dependencies(monkeypatch, fail_stage="quota", verbose_log=False)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "seed": 42, "n_jobs": 4, "max_pipeline_fit_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "proposal_id": "proposal-7", "attempt_id": "proposal-7:fixture:patch:1",
+        "side": "patch", "attempt": 1,
+    }))
+    out = tmp_path / "payload.json"
+    before_handlers = list(logging.getLogger().handlers)
+    before_level = logging.getLogger().level
+    logging.getLogger().handlers.clear()
+    try:
+        rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    finally:
+        logging.getLogger().handlers[:] = before_handlers
+        logging.getLogger().setLevel(before_level)
+    payload = json.loads(out.read_text())
+
+    assert rc == 2
+    assert payload["status"] == "invalid"
+    assert payload["failure_kind"] == "storage_error"
+    assert payload["failed_stage"] == "fit"
 
 
 @pytest.mark.parametrize("fail_fit", [False, True])
@@ -736,6 +845,45 @@ def test_worker_records_internal_fedot_budget_timeout_without_inventing_metric(t
     assert observations["metric_valid"] is False
     assert observations["fedot_budget_phase"] == "final_refit"
     assert observations["fedot_budget_seconds"] == 1500.0
+
+
+def test_budget_timeout_holdout_number_is_not_a_valid_metric(tmp_path, monkeypatch, capsys):
+    _install_fixture_dependencies(
+        monkeypatch,
+        fail_stage="budget_with_holdout",
+        expected_timeout_policy="return_best",
+        expected_final_fit_reserve_seconds=1500,
+        expected_max_pipeline_fit_minutes=1.8,
+        expected_max_pipeline_evaluation_minutes=9,
+        verbose_log=False,
+    )
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "source_dataset": "fixture", "timeout_minutes": 45,
+        "timeout_seconds": 3600, "fedot_search_budget_seconds": 2700,
+        "fedot_timeout_policy": "return_best", "final_fit_reserve_seconds": 1500,
+        "seed": 42, "n_jobs": 4, "cv_folds": 5,
+        "max_pipeline_fit_time_seconds": 108,
+        "max_pipeline_evaluation_time_seconds": 540,
+        "preset": "best_quality", "with_tuning": False,
+        "proposal_id": "proposal-7", "attempt_id": "proposal-7:fixture:patch:1",
+        "side": "patch", "attempt": 1, "worker_log_path": "/logs/worker.log",
+        "registry_identity": "registry-v2-return-best",
+        "max_pipeline_evaluation_policy": "per-cv-candidate-v1",
+    }))
+    out = tmp_path / "payload.json"
+
+    rc = worker.main(["--spec-json", str(spec), "--out", str(out)])
+    payload = json.loads(out.read_text())
+
+    assert rc == 0, payload.get("detail")
+    assert payload["status"] == "timeout"
+    assert payload["score"] is None
+    assert payload["failure_kind"] == "fedot_budget_timeout"
+    observations = payload["metric_observations"]
+    assert observations["metric_valid"] is False
+    assert observations["metric_outcome"] == "not_measured"
+    assert observations["discarded_holdout_score"] == 0.125
 
 
 @pytest.mark.parametrize("composer_options", [[], "", 0, None])

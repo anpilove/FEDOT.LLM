@@ -25,6 +25,7 @@ from fedotllm.agents.evolve.controller.quality_queue import (
 from fedotllm.agents.evolve.controller.release import controller_version
 from fedotllm.agents.evolve.evaluation.smoke_data import smoke_registry
 from fedotllm.agents.evolve.execution.checkout import source_fingerprint
+from fedotllm.agents.evolve.execution.runtime_contract import measure_smoke_aa
 from fedotllm.agents.evolve.storage.journal import read_jsonl, write_json_atomic
 from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit
 
@@ -199,6 +200,11 @@ def run_smoke(source: Path, workspace: Path) -> dict:
     }
     write_json_atomic(workspace / "acceptance.json", {**report, "stage":"started"})
     try:
+        aa = measure_smoke_aa(source, workspace)
+        report["aa"] = {
+            "purpose": aa["purpose"], "quality_claim": aa["quality_claim"],
+            "values": aa["values"], "abs_delta": aa["abs_delta"], "identical": aa["identical"],
+        }
         for proposal, patch in proposals:
             enqueue_quality_job(
                 check, candidate=proposal, patch_text=patch,
@@ -230,9 +236,12 @@ def run_smoke(source: Path, workspace: Path) -> dict:
             if event.get("event") != "quality_task_side_finished":
                 continue
             result = event.get("result") or {}
+            observations = result.get("metric_observations") or {}
             expected_failure = (
                 event.get("candidate") == "smoke-01-failure" and event.get("side") == "patch"
-                and result.get("status") == "crash"
+                and result.get("status") == "invalid"
+                and result.get("outcome") == "invalid"
+                and observations.get("failure_kind") == "fedot_import_error"
                 and "intentional controller smoke import failure" in result.get("detail", "")
             )
             if expected_failure:
@@ -286,6 +295,38 @@ def run_smoke(source: Path, workspace: Path) -> dict:
             and all(value is False for value in result["metric_observations"]["fedot_cache_flags"].values())
             for result in successful_sides)
         artifact_report = validate_worker_artifacts(workspace, events)
+        side_outcomes = []
+        for event in events:
+            if event.get("event") != "quality_task_side_finished":
+                continue
+            result = event.get("result") or {}
+            observations = result.get("metric_observations") or {}
+            side_outcomes.append({
+                "candidate": event.get("candidate"),
+                "task_id": event.get("task_id"),
+                "side": event.get("side"),
+                "status": result.get("status"),
+                "outcome": result.get("outcome"),
+                "failure_kind": result.get("failure_kind") or observations.get("failure_kind"),
+            })
+        outcomes_explicit = bool(side_outcomes) and all(
+            row["outcome"] in {"ok", "invalid", "timeout"} and row["outcome"] == row["status"]
+            for row in side_outcomes
+        )
+        aa_ok = bool(report.get("aa", {}).get("identical")) and report["aa"].get("abs_delta") == 0
+        score_deltas = []
+        for row in metrics:
+            if row.get("stock_status") != "ok" or row.get("patched_status") != "ok":
+                continue
+            stock_score, patched_score = row.get("stock_score"), row.get("patched_score")
+            if isinstance(stock_score, bool) or isinstance(patched_score, bool):
+                continue
+            if isinstance(stock_score, (int, float)) and isinstance(patched_score, (int, float)):
+                if math.isfinite(stock_score) and math.isfinite(patched_score):
+                    score_deltas.append(abs(float(patched_score) - float(stock_score)))
+        if isinstance(report.get("aa"), dict):
+            report["aa"]["control_score_abs_delta"] = max(score_deltas) if score_deltas else None
+            report["aa"]["control_score_pairs"] = len(score_deltas)
         report.update(
             stage="finished", metrics=metrics, queue_counts=queue_counts,
             failed_proposal_did_not_block=failure_handled and control_measured,
@@ -297,8 +338,11 @@ def run_smoke(source: Path, workspace: Path) -> dict:
             worker_artifacts_checked=artifact_report["checked_workers"],
             worker_artifacts_reused=artifact_report["reused_results"],
             worker_artifact_issues=artifact_report["issues"],
+            side_outcomes=side_outcomes,
+            side_outcomes_explicit=outcomes_explicit,
             passed=valid_metrics and failure_handled and control_measured and recovery_ok and source_unchanged
-                   and cache_disabled and not sqlite_files and artifact_report["complete"],
+                   and cache_disabled and not sqlite_files and artifact_report["complete"]
+                   and outcomes_explicit and aa_ok,
         )
     except BaseException as exc:
         report.update(stage="failed", error=f"{type(exc).__name__}: {exc}")

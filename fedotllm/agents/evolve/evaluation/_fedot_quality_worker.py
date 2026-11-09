@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fedotllm.agents.evolve.storage.journal import write_json_atomic
 from fedotllm.agents.evolve.evaluation.quality_registry import TUNING_EVALUATION_POLICIES
+from fedotllm.agents.evolve.execution.storage_guard import storage_failure_text
 
 STACK_DUMP_INTERVAL_SECONDS = 60.0
 SUPPORTED_CANDIDATE_DISPATCHERS = {
@@ -39,6 +40,8 @@ class _BoundedLogBuffer:
         self._size = 0
         self.composition_started = False
         self.composition_skipped = False
+        self.early_stopping_fired = False
+        self.early_stopping_kind = ""
         self.last_log_line = ""
         self.last_log_at = ""
         self.fedot_phase = ""
@@ -49,6 +52,11 @@ class _BoundedLogBuffer:
         lower = text.lower()
         self.composition_started |= "pipeline composition started" in lower
         self.composition_skipped |= "timeout is too small for composing" in lower
+        if "early stopping" in lower:
+            self.early_stopping_fired = True
+            self.early_stopping_kind = (
+                "early_stopping_iterations" if "iteration" in lower else "early_stopping_timeout"
+            )
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if lines:
             self.last_log_line = lines[-1][-500:]
@@ -432,17 +440,36 @@ def _history_generations(history) -> int:
     return 1
 
 
+def _early_stopping_kind(log_text: str) -> str:
+    lower = log_text.lower()
+    if "early stopping" not in lower:
+        return ""
+    if "iteration" in lower:
+        return "early_stopping_iterations"
+    return "early_stopping_timeout"
+
+
 def _search_ran(model, log_text: str, *, composition_started: bool = False,
                 composition_skipped: bool = False) -> tuple[bool, str]:
     composer = getattr(model, "api_composer", None)
     was_optimised = bool(getattr(composer, "was_optimised", False))
     generations = _history_generations(getattr(model, "history", None))
     skipped = composition_skipped or "timeout is too small for composing" in log_text.lower()
+    early = _early_stopping_kind(log_text)
+    started = (
+        composition_started
+        or generations > 0
+        or "pipeline composition started" in log_text.lower()
+    )
     if skipped or not was_optimised:
+        if early and started and not skipped:
+            return True, early
+        if early and not skipped:
+            return False, early
         return False, "composing_did_not_start"
-    if generations <= 0 and not composition_started and "pipeline composition started" not in log_text.lower():
-        return False, "composing_did_not_start"
-    return True, "composing_started"
+    if generations <= 0 and not started:
+        return False, early or "composing_did_not_start"
+    return True, early or "composing_started"
 
 
 def _positive_class_scores(prediction) -> "object":
@@ -655,7 +682,9 @@ def main(argv: list[str] | None = None) -> int:
                 payload["metric_observations"]["python_line_trace_path"] = line_diagnostics.get("output_path")
                 with timings.measure("saved_payload"):
                     write_json_atomic(Path(args.out), payload)
-    return 0 if payload.get("status") != "crash" else 2
+    # ok and an internal budget timeout are completed outcomes. Any other
+    # published result, including a candidate-side exception, is invalid.
+    return 0 if payload.get("status") in {"ok", "timeout"} else 2
 
 
 @contextmanager
@@ -756,6 +785,13 @@ def _evaluate_worker_with_logging(
 
         with timings.measure("fedot_import"):
             from fedot.api.main import Fedot
+            from fedotllm.agents.evolve.evaluation.return_best_policy import (
+                ReturnBestIncompatible, signature_compatibility,
+            )
+            if fedot_timeout_policy == "return_best":
+                compatibility = signature_compatibility(Fedot)
+                if not compatibility["compatible"]:
+                    raise ReturnBestIncompatible(compatibility["missing"])
 
         with timings.measure("load_fold"):
             dataset, fold = load_worker_fold(spec)
@@ -840,6 +876,9 @@ def _evaluate_worker_with_logging(
             cache_dir = out_path.with_suffix(".fedot-cache")
             cache_dir.mkdir(exist_ok=False)
             timeout_minutes = float(spec["timeout_minutes"])
+            # GOLEM's default stagnation stop is 10 minutes. The side budget is
+            # the declared stop; a shorter hidden timer must not end the search.
+            early_stopping_timeout_minutes = max(1, math.ceil(timeout_minutes))
             ts = dataset.problem == "ts_forecasting"
             extra = {}
             if ts:
@@ -860,6 +899,7 @@ def _evaluate_worker_with_logging(
             model = Fedot(
                 problem=dataset.problem,
                 timeout=timeout_minutes,
+                early_stopping_timeout=early_stopping_timeout_minutes,
                 seed=int(spec["seed"]),
                 n_jobs=int(spec["n_jobs"]),
                 preset=str(spec["preset"]),
@@ -905,6 +945,7 @@ def _evaluate_worker_with_logging(
             if not math.isfinite(float(score)):
                 raise ValueError(f"FEDOT returned a non-finite {dataset.metric} score: {score}")
         log_text = log_stream.getvalue()
+        from fedotllm.agents.evolve.evaluation.return_best_policy import budget_timeout_reported
         search_ran, search_detail = _search_ran(
             model, log_text, composition_started=log_stream.composition_started,
             composition_skipped=log_stream.composition_skipped,
@@ -916,6 +957,7 @@ def _evaluate_worker_with_logging(
         payload = {
             "task_id": dataset.task_id,
             "status": status,
+            "outcome": status,
             "score": score,
             "detail": search_detail if not search_ran else "",
             "n_train": fold["n_train"],
@@ -948,6 +990,9 @@ def _evaluate_worker_with_logging(
                 "final_fit_reserve_seconds": final_fit_reserve_seconds,
                 "fedot_fit_budget_outcome": getattr(model, "fit_budget_outcome", None),
                 "timeout_minutes": spec["timeout_minutes"],
+                "early_stopping_timeout_minutes": early_stopping_timeout_minutes,
+                "early_stopping_fired": bool(log_stream.early_stopping_fired),
+                "early_stopping_kind": log_stream.early_stopping_kind or None,
                 "cv_folds": cv_folds,
                 "max_pipeline_fit_time_seconds": max_pipeline_fit_time_seconds,
                 "max_pipeline_fit_policy": fit_policy,
@@ -964,12 +1009,39 @@ def _evaluate_worker_with_logging(
             },
             "log_tail": log_text[-4000:],
         }
+        if budget_timeout_reported(
+            payload["metric_observations"].get("fedot_fit_budget_outcome"),
+            log_text,
+        ):
+            # The holdout number was printed after the budget report. GOLEM
+            # drops that evaluation, so it is not an attested metric.
+            payload["metric_observations"]["discarded_holdout_score"] = score
+            payload["metric_observations"]["metric_valid"] = False
+            payload["metric_observations"]["metric_outcome"] = "not_measured"
+            payload["metric_observations"]["failure_kind"] = "fedot_budget_timeout"
+            payload.update(
+                status="timeout",
+                outcome="timeout",
+                failure_kind="fedot_budget_timeout",
+                score=None,
+                detail="FEDOT budget timeout reported after a holdout number",
+            )
         if not search_ran:
             payload["traceback"] = ""
     except Exception as exc:
         failed_stage = timings.failed_stage
         is_fedot_budget_timeout = _is_fedot_budget_timeout(exc)
-        if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        from fedotllm.agents.evolve.evaluation.return_best_policy import ReturnBestIncompatible
+        if isinstance(exc, ReturnBestIncompatible):
+            failure_kind = "return_best_incompatible"
+        elif isinstance(exc, MemoryError):
+            # The interpreter caught this. It is not the kernel SIGKILL that
+            # pauses the queue, and it is not evidence the patch is wrong.
+            failure_kind = "memory_error"
+        elif isinstance(exc, OSError) and (
+            exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", 122)}
+            or storage_failure_text(f"{type(exc).__name__}: {exc}")
+        ):
             failure_kind = "storage_error"
         elif is_fedot_budget_timeout:
             failure_kind = "fedot_budget_timeout"
@@ -981,9 +1053,11 @@ def _evaluate_worker_with_logging(
             failure_kind = "fedot_fit_error"
         else:
             failure_kind = "worker_error"
+        published_status = "timeout" if is_fedot_budget_timeout else "invalid"
         payload = {
             "task_id": spec.get("source_dataset", ""),
-            "status": "timeout" if is_fedot_budget_timeout else "crash",
+            "status": published_status,
+            "outcome": published_status,
             "failure_kind": failure_kind,
             "failed_stage": failed_stage,
             "last_stage": timings.last_stage,

@@ -421,6 +421,22 @@ def test_normal_completion_preserves_stdout_stderr_and_returncode(tmp_path, canc
     assert outcome.cancelled is False
 
 
+def test_completion_observed_at_the_deadline_stays_a_timeout(tmp_path):
+    script = tmp_path / "done.py"
+    script.write_text("print('done')\n", encoding="utf-8")
+
+    outcome = run_worker(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        timeout=0,
+    )
+
+    assert outcome.timed_out is True
+    assert outcome.timeout_kind == "task_timeout"
+    assert outcome.returncode is None
+
+
 def test_parent_monitored_task_timeout_is_distinct_and_kills_same_session_child(tmp_path):
     """The task deadline must fire before, and independently of, its guardian cap."""
     (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
@@ -530,6 +546,24 @@ def test_repeated_blocked_resource_checks_do_not_create_unbounded_threads(tmp_pa
         assert callback_calls == 1
     finally:
         release_check.set()
+
+
+def test_earlier_task_timeout_survives_guardian_exit_during_pipe_cleanup(tmp_path):
+    """Cleanup after the task deadline must not be relabeled as the later watchdog."""
+    controller = _start_controller(
+        tmp_path,
+        mode="escaped",
+        timeout=0.25,
+        watchdog_timeout=0.5,
+    )
+    try:
+        _wait_file(tmp_path / "ready", controller)
+        controller.communicate(timeout=8)
+        outcome = json.loads((tmp_path / "outcome.json").read_text())
+        assert outcome["timed_out"] is True
+        assert outcome["timeout_kind"] == "task_timeout"
+    finally:
+        _cleanup_fixture(tmp_path, controller, escaped=True)
 
 
 def test_earlier_guardian_watchdog_is_reported_when_escaped_child_holds_pipe(tmp_path):
@@ -768,6 +802,40 @@ def test_guardian_failure_keeps_original_error_when_cleanup_fails(tmp_path, monk
             if proc.poll() is None:
                 _kill_known_group(proc.pid)
             proc.wait(timeout=3)
+
+
+def test_cancellation_is_not_relabeled_when_guardian_exits_during_cleanup(tmp_path):
+    """A guardian exit while draining an escaped pipe must not turn cancellation into a watchdog."""
+    (tmp_path / "worker_fixture.py").write_text(WORKER_FIXTURE)
+    cancellation = threading.Event()
+
+    def cancel_when_ready():
+        deadline = time.monotonic() + 3
+        while not (tmp_path / "ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        cancellation.set()
+
+    setter = threading.Thread(target=cancel_when_ready)
+    setter.start()
+    try:
+        outcome = run_worker(
+            [sys.executable, str(tmp_path / "worker_fixture.py"), str(tmp_path), "escaped"],
+            cwd=tmp_path,
+            env=dict(os.environ),
+            timeout=30,
+            watchdog_timeout=0.6,
+            cancellation_event=cancellation,
+        )
+        assert outcome.cancelled is True
+        assert outcome.timed_out is False
+        assert outcome.timeout_kind is None
+    finally:
+        cancellation.set()
+        setter.join(timeout=4)
+        for name in ("child.pid", "worker.pid"):
+            path = tmp_path / name
+            if path.exists():
+                _kill_known_group(int(path.read_text()))
 
 
 @pytest.mark.parametrize("timeout", [None, 30])

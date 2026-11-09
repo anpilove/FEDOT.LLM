@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import signal
 from dataclasses import asdict
 from pathlib import Path
 import sys
@@ -408,7 +409,29 @@ def test_worker_metric_is_valid_even_when_composition_is_skipped():
     assert result.metric_observations["metric_valid"] is True
 
 
-@pytest.mark.parametrize("side", ["stock_result", "patched_result"])
+def test_parent_drops_a_holdout_number_reported_after_budget_timeout():
+    from fedotllm.agents.evolve.evaluation.fedot_quality import _score_from_payload
+
+    result = _score_from_payload(
+        "openml-31-credit-g",
+        {
+            "status": "ok",
+            "score": 0.73,
+            "log_tail": "FedotBudgetExceeded: final refit reserve exhausted\nholdout metric 0.73",
+            "metric_observations": {
+                "metric_valid": True,
+                "fedot_fit_budget_outcome": "budget exhausted",
+            },
+        },
+        env_hash="test-env",
+        cmd="worker",
+    )
+
+    assert result.status == "timeout"
+    assert result.score != result.score
+    assert result.metric_observations["metric_valid"] is False
+    assert result.metric_observations["failure_kind"] == "fedot_budget_timeout"
+    assert result.metric_observations["discarded_holdout_score"] == 0.73
 @pytest.mark.parametrize("invalid_observations", [{}, {"metric_valid": False}])
 def test_quality_decision_refuses_unattested_stock_or_patch_metrics(
     side, invalid_observations
@@ -435,6 +458,91 @@ def test_timeout_remains_infrastructure_error():
     assert "timeout" in decision.reason
 
 
+def test_watchdog_timeout_is_not_host_infrastructure():
+    row = _pair("openml-31-credit-g", 0.70, 0.80)
+    row["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "timeout", float("nan"),
+        detail="watchdog_timeout after 3900s",
+        metric_observations={
+            "failure_kind": "timeout",
+            "timeout_kind": "watchdog_timeout",
+            "watchdog_fired": True,
+            "metric_valid": False,
+            "metric_outcome": "not_measured",
+        },
+    )
+
+    decision = decision_from_quality_jobs([row])
+
+    assert decision.keep is None
+    assert decision.infrastructure_error is False
+    assert decision.quality_failure == "watchdog_timeout"
+    assert decision.quality_outcome == "not_evaluated"
+
+
+def test_sigkill_pauses_as_host_pressure_and_sigsegv_stays_per_side():
+    killed = _pair("openml-31-credit-g", 0.70, 0.80)
+    killed["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "invalid", float("nan"),
+        detail="worker signaled SIGKILL (9)",
+        metric_observations={"failure_kind": "worker_signaled", "signal": signal.SIGKILL},
+    )
+    fault = _pair("openml-37-diabetes", 0.70, 0.80)
+    fault["patched_result"] = ScoreResult(
+        "openml-37-diabetes", "invalid", float("nan"),
+        detail="worker signaled SIGSEGV (11)",
+        metric_observations={"failure_kind": "worker_signaled", "signal": signal.SIGSEGV},
+    )
+
+    host = decision_from_quality_jobs([killed])
+    side = decision_from_quality_jobs([fault])
+
+    assert host.keep is None
+    assert host.infrastructure_error is True
+    assert host.quality_failure is None
+    assert "SIGKILL" in host.reason
+    assert side.infrastructure_error is False
+    assert side.quality_failure == "evaluation_error"
+    assert side.keep is None
+
+
+def test_caught_memory_error_does_not_pause_or_count_as_candidate_failure():
+    from fedotllm.agents.evolve.evaluation.compare import candidate_failed
+
+    row = _pair("openml-31-credit-g", 0.70, 0.80)
+    row["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "invalid", float("nan"),
+        detail="MemoryError: fixture allocator refused the fit",
+        metric_observations={"failure_kind": "memory_error", "metric_valid": False},
+    )
+
+    decision = decision_from_quality_jobs([row])
+
+    assert decision.keep is None
+    assert decision.infrastructure_error is False
+    assert decision.quality_failure == "evaluation_error"
+    assert candidate_failed(row["patched_result"]) is False
+
+
+def test_storage_error_pauses_and_is_not_a_candidate_failure():
+    from fedotllm.agents.evolve.evaluation.compare import candidate_failed
+
+    row = _pair("openml-31-credit-g", 0.70, 0.80)
+    row["patched_result"] = ScoreResult(
+        "openml-31-credit-g", "invalid", float("nan"),
+        detail="OSError: [Errno 122] Quota",
+        metric_observations={"failure_kind": "storage_error", "metric_valid": False},
+    )
+
+    decision = decision_from_quality_jobs([row])
+
+    assert decision.keep is None
+    assert decision.infrastructure_error is True
+    assert decision.quality_failure is None
+    assert "storage capacity" in decision.reason
+    assert candidate_failed(row["patched_result"]) is False
+
+
 def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructure():
     row = _pair("fedot-ts-traffic", 0.70, 0.80)
     row["patched_result"] = ScoreResult(
@@ -456,6 +564,53 @@ def test_fedot_internal_fit_budget_timeout_is_not_misclassified_as_infrastructur
     assert decision.quality_failure == "fedot_budget_timeout"
     assert decision.quality_outcome == "not_evaluated"
     assert decision.unresolved_task_ids == ("fedot-ts-traffic",)
+
+
+def test_one_invalid_dataset_does_not_keep_the_proposal():
+    measured = _pair("openml-31-credit-g", 0.70, 0.90)
+    missing = _pair("openml-37-diabetes", 0.70, 0.90)
+    missing["patched_result"] = ScoreResult(
+        "openml-37-diabetes", "invalid", float("nan"),
+        metric_observations={"failure_kind": "memory_error", "metric_valid": False},
+    )
+
+    decision = decision_from_quality_jobs([measured, missing])
+
+    assert decision.keep is None
+    assert decision.quality_outcome == "not_evaluated"
+    assert "openml-37-diabetes" in decision.unresolved_task_ids
+
+
+def test_quality_row_without_source_dataset_is_not_a_keep_root():
+    missing = _pair("openml-31-credit-g", 0.70, 0.90)
+    missing["spec"].pop("source_dataset")
+    blank = _pair("openml-31-credit-g", 0.70, 0.90)
+    blank["spec"]["source_dataset"] = ""
+    rooted = _pair("openml-37-diabetes", 0.70, 0.90)
+
+    for rows in ([missing], [blank], [rooted, missing]):
+        decision = decision_from_quality_jobs(rows)
+        assert decision.keep is None
+        assert decision.quality_outcome == "not_evaluated"
+        assert decision.quality_failure == "missing_dataset"
+        assert "unknown_dataset" in decision.unresolved_task_ids
+        assert "quality_row_missing_source_dataset" in decision.reason
+
+
+def test_duplicate_dataset_rows_do_not_hide_a_regression():
+    rows = [
+        _pair("openml-31-credit-g", 0.80, 0.70),
+        _pair("openml-31-credit-g", 0.70, 0.90),
+    ]
+
+    decision = decision_from_quality_jobs(rows)
+
+    assert decision.keep is None
+    assert decision.quality_outcome == "not_evaluated"
+    assert decision.quality_failure == "duplicate_dataset"
+    assert decision.reason == "duplicate_dataset:openml-31-credit-g"
+    assert decision.regression_deltas["openml-31-credit-g"] < 0
+    assert decision.unresolved_task_ids == ("openml-31-credit-g",)
 
 
 def test_quality_keep_requires_gain_without_regression():
@@ -775,6 +930,162 @@ def test_stock_cache_requires_exact_compute_profile_and_complete_identity(tmp_pa
     )
     assert hit.score == 0.77
     assert hit.metric_observations["cache_hit"] is True
+
+
+def test_stock_cache_hit_does_not_open_another_worker_attempt(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.evaluation import fedot_quality as fq
+
+    cache = tmp_path / "stock_cache"
+    fq.bind_stock_cache(cache)
+    registry = load_quality_registry()
+    dataset = get_dataset("openml-31-credit-g", registry)
+    checkout = tmp_path / "FEDOT"
+    checkout.mkdir()
+    monkeypatch.setattr(fq, "_fedot_commit", lambda _checkout: "commit-a")
+    monkeypatch.setattr(fq, "_source_sha256", lambda _checkout: "source-a")
+    monkeypatch.setattr(fq, "fedot_python", lambda _checkout: sys.executable)
+    monkeypatch.setattr(fq, "interpreter_identity", lambda *_args, **_kwargs: "runtime-a")
+    monkeypatch.setattr(fq, "clean_subprocess_env", lambda *_args, **_kwargs: {"PATH": ""})
+    identity = fq.stock_cache_identity(
+        dataset,
+        registry,
+        fedot_commit="commit-a",
+        source_sha256="source-a",
+        n_jobs=4,
+        worker_runtime="runtime-a",
+    )
+    fq._stock_cache_path(dataset, registry, 4).write_text(json.dumps({
+        "task_id": dataset.task_id,
+        "status": "ok",
+        "score": 0.77,
+        "duration_s": 12.0,
+        "metric_observations": {"metric_valid": True, "search_ran": True},
+        "identity": identity,
+    }))
+    launched = []
+
+    def fake_worker(cmd, **_kwargs):
+        spec = json.loads(Path(cmd[cmd.index("--spec-json") + 1]).read_text(encoding="utf-8"))
+        launched.append(spec["side"])
+        out_path = Path(cmd[cmd.index("--out") + 1])
+        out_path.write_text(json.dumps({
+            "task_id": dataset.task_id,
+            "side": spec["side"],
+            "attempt": spec["attempt"],
+            "attempt_id": spec["attempt_id"],
+            "worker_invocation_id": spec["worker_invocation_id"],
+            "registry_identity": spec["registry_identity"],
+            "evaluation_identity": spec.get("evaluation_identity"),
+            "status": "ok",
+            "score": 0.7,
+            "duration_s": 1.0,
+            "metric_observations": {"metric_valid": True, "search_ran": True},
+        }))
+        return WorkerOutcome(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(fq, "run_worker", fake_worker)
+    events = []
+    result = fq.run_quality_pair(
+        dataset,
+        stock_checkout=checkout,
+        patch_checkout=checkout,
+        n_jobs=4,
+        registry=registry,
+        on_side_event=lambda _spec, side, phase, score, attempt: events.append(
+            (side, phase, attempt)
+        ),
+    )
+
+    assert launched == ["patch"]
+    assert [event for event in events if event[0] == "stock"] == [("stock", "finished", 1)]
+    assert result["stock_result"].score == 0.77
+    assert result["stock_result"].metric_observations["cache_hit"] is True
+
+    from concurrent.futures import Future
+
+    def submit_immediately(work, **_kwargs):
+        future = Future()
+        try:
+            future.set_result(work())
+        except BaseException as exc:
+            future.set_exception(exc)
+        return future
+
+    launched.clear()
+    async_events = []
+    async_row = fq._run_quality_pair_async(
+        dataset,
+        stock_checkout=checkout,
+        patch_checkout=checkout,
+        n_jobs=4,
+        registry=registry,
+        submit_compute=submit_immediately,
+        on_side_event=lambda _spec, side, phase, score, attempt: async_events.append(
+            (side, phase, attempt)
+        ),
+    ).result(timeout=2)
+
+    assert launched == ["patch"]
+    assert [event for event in async_events if event[0] == "stock"] == [("stock", "finished", 1)]
+    assert async_row["stock_result"].score == 0.77
+    assert async_row["stock_result"].metric_observations["cache_hit"] is True
+
+
+def test_stock_cache_rejects_a_worker_result_from_another_attempt(tmp_path):
+    from fedotllm.agents.evolve.evaluation import fedot_quality as fq
+    from fedotllm.agents.evolve.types import ScoreResult
+
+    cache = tmp_path / "stock_cache"
+    fq.bind_stock_cache(cache)
+    registry = load_quality_registry()
+    dataset = get_dataset("openml-31-credit-g", registry)
+    checkout = tmp_path / "FEDOT"
+    checkout.mkdir()
+    source_sha256 = fq._source_sha256(str(checkout.resolve()))
+    identity = fq.stock_cache_identity(
+        dataset, registry, n_jobs=8, source_sha256=source_sha256
+    )
+    path = fq._stock_cache_path(dataset, registry, 8)
+    path.write_text(json.dumps({
+        "task_id": dataset.task_id,
+        "status": "ok",
+        "score": 0.77,
+        "duration_s": 1.0,
+        "metric_observations": {
+            "metric_valid": True,
+            "side": "patch",
+            "attempt": 2,
+            "proposal_id": "other-proposal",
+            "attempt_id": f"other-proposal:{dataset.task_id}:patch:2",
+        },
+        "identity": identity,
+    }))
+
+    assert fq._load_stock_cache(
+        dataset, registry, 8, env_hash="test", source_sha256=source_sha256
+    ) is None
+
+    path.unlink()
+    fq._store_stock_cache(
+        ScoreResult(
+            task_id=dataset.task_id,
+            status="ok",
+            score=0.77,
+            metric_observations={
+                "metric_valid": True,
+                "side": "patch",
+                "attempt": 2,
+                "attempt_id": f"other-proposal:{dataset.task_id}:patch:2",
+            },
+        ),
+        dataset,
+        registry,
+        8,
+        source_sha256=source_sha256,
+        stock_cache_root=cache,
+    )
+
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("metric_observations", [{}, {"metric_valid": False}])
@@ -2871,9 +3182,13 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
     from argparse import Namespace
 
     from fedotllm.agents.evolve.__main__ import _cmd_quality_job
+    from fedotllm.agents.evolve.controller import quality_executor
     from fedotllm.agents.evolve.evaluation import fedot_quality, quality_registry
     from fedotllm.agents.evolve.execution import checkout
 
+    # Bind the executor's registry loader before this test replaces the module
+    # attribute. A later drain test must keep the real loader.
+    assert quality_executor.load_quality_registry is quality_registry.load_quality_registry
     monkeypatch.setattr(fedot_quality, "bind_stock_cache", lambda _path: tmp_path / "cache")
     monkeypatch.setattr(
         fedot_quality,
@@ -2882,7 +3197,11 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
             {
                 "spec": {"source_dataset": "fedot-ts-beer"},
                 "search_ran": True,
-                "stock": {"status": "ok", "score": 1.0},
+                "stock": {
+                    "status": "ok",
+                    "score": 1.0,
+                    "metric_observations": {"metric_valid": True},
+                },
             }
         ],
     )
@@ -2906,3 +3225,82 @@ def test_quality_job_cli_loads_registry_for_stock_only(tmp_path, monkeypatch):
     assert _cmd_quality_job(args, parser=object()) == 0
     journal = (args.workspace / "quality_jobs.jsonl").read_text(encoding="utf-8")
     assert '"event": "fedot_quality_stock"' in journal
+
+
+def test_stock_pack_with_half_the_datasets_unattested_is_not_measured():
+    from fedotllm.agents.evolve.evaluation.fedot_quality import side_is_measured, stock_pack_measured
+
+    attested = {"status": "ok", "score": 0.8, "metric_observations": {"metric_valid": True}}
+    bare = {"status": "ok", "score": 0.9}
+    rows = [
+        {"candidate_id": "proposal", "task_id": "one", "measured": side_is_measured(attested)},
+        {"candidate_id": "proposal", "task_id": "two", "measured": side_is_measured(bare)},
+    ]
+    jobs = [{
+        "candidate_id": "proposal",
+        "task_ids": ["one", "two"],
+        "unresolved_task_ids": [],
+    }]
+
+    assert side_is_measured(bare) is False
+    assert stock_pack_measured(rows, jobs) is False
+    assert stock_pack_measured(rows[:1], [{
+        "candidate_id": "proposal",
+        "task_ids": ["one", "two"],
+        "unresolved_task_ids": ["two"],
+    }]) is False
+
+
+def test_stock_pack_rejects_datasets_no_job_asked_for():
+    from fedotllm.agents.evolve.evaluation.fedot_quality import stock_pack_measured
+
+    other = {"candidate_id": "proposal", "task_id": "other", "measured": True}
+    asked = {"candidate_id": "proposal", "task_id": "one", "measured": True}
+    job = {"candidate_id": "proposal", "task_ids": ["one"], "unresolved_task_ids": []}
+
+    assert stock_pack_measured([other], []) is False
+    assert stock_pack_measured([other], [job]) is False
+    assert stock_pack_measured([asked, other], [job]) is False
+    assert stock_pack_measured([asked], [job]) is True
+
+
+def test_stock_only_cli_rejects_a_half_attested_pack(tmp_path, monkeypatch):
+    from argparse import Namespace
+
+    from fedotllm.agents.evolve.__main__ import EXIT_INFRASTRUCTURE, _cmd_quality_job
+    from fedotllm.agents.evolve.controller import quality_executor
+    from fedotllm.agents.evolve.evaluation import fedot_quality, quality_registry
+    from fedotllm.agents.evolve.execution import checkout
+
+    assert quality_executor.load_quality_registry is quality_registry.load_quality_registry
+    monkeypatch.setattr(fedot_quality, "bind_stock_cache", lambda _path: tmp_path / "cache")
+    monkeypatch.setattr(
+        fedot_quality,
+        "run_quality_stock_jobs",
+        lambda **_kwargs: [
+            {
+                "spec": {"source_dataset": "one"},
+                "search_ran": True,
+                "stock": {"status": "ok", "score": 0.8, "metric_observations": {"metric_valid": True}},
+            },
+            {
+                "spec": {"source_dataset": "two"},
+                "search_ran": True,
+                "stock": {"status": "ok", "score": 0.9, "metric_observations": {"metric_valid": False}},
+            },
+        ],
+    )
+    monkeypatch.setattr(quality_registry, "load_quality_registry", lambda: object())
+    monkeypatch.setattr(quality_registry, "list_quality_task_ids", lambda _registry: ("one", "two"))
+    monkeypatch.setattr(checkout, "resolve_fedot_src", lambda: tmp_path / "FEDOT")
+    args = Namespace(
+        patch_checkout=None,
+        stock_only=True,
+        workspace=tmp_path / "quality-job",
+        stock_cache=None,
+        tasks="one,two",
+        n_jobs=4,
+        cpu_quota=28,
+    )
+
+    assert _cmd_quality_job(args, parser=object()) == EXIT_INFRASTRUCTURE

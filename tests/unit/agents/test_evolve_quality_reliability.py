@@ -4,6 +4,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import threading
 from pathlib import Path
 import sys
@@ -346,6 +347,26 @@ def test_nonzero_worker_exit_cannot_return_a_successful_metric(tmp_path, monkeyp
     result = quality.run_quality_side("fedot-ts-beer", checkout=tmp_path, side="patch")
     assert result.status != "ok"
     assert "7" in result.detail
+    assert result.metric_observations["failure_kind"] == "worker_exit"
+
+
+def test_signaled_worker_is_not_a_measured_exit(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.evaluation import fedot_quality as quality
+    from fedotllm.agents.evolve.evaluation.compare import candidate_failed
+    from fedotllm.agents.evolve.execution.process import WorkerOutcome
+
+    def killed_worker(_command, **_kwargs):
+        return WorkerOutcome(-signal.SIGKILL, "Killed", "")
+
+    monkeypatch.setenv("EVOLVE_AGENT_TMP", str(tmp_path / "artifacts"))
+    monkeypatch.setattr(quality, "run_worker", killed_worker)
+    result = quality.run_quality_side("fedot-ts-beer", checkout=tmp_path, side="patch")
+
+    assert result.status == "invalid"
+    assert result.metric_observations["failure_kind"] == "worker_signaled"
+    assert result.metric_observations["signal"] == signal.SIGKILL
+    assert "SIGKILL" in result.detail
+    assert candidate_failed(result) is False
 
 
 def _enqueue(tmp_path, count=1):
@@ -397,6 +418,116 @@ def test_corrupt_quality_journal_blocks_recovery_with_exact_line(tmp_path):
         )
 
 
+def test_recovered_side_does_not_adopt_another_attempts_result(tmp_path):
+    path = tmp_path / "quality_jobs.jsonl"
+    common = dict(candidate="a", task_id="fedot-ts-beer", registry_identity="v1", attempt=1)
+    storage.append_journal(path, {
+        **common,
+        "event": "quality_task_side_finished",
+        "side": "stock",
+        "attempt_id": "a:fedot-ts-beer:stock:1",
+        "result": {
+            "status": "ok",
+            "score": 0.91,
+            "duration_s": 1.0,
+            "metric_observations": {
+                "metric_valid": True,
+                "attempt_id": "a:fedot-ts-beer:stock:2",
+                "attempt": 2,
+            },
+        },
+    })
+    storage.append_journal(path, {
+        **common,
+        "event": "quality_task_side_finished",
+        "side": "patch",
+        "attempt_id": "a:fedot-ts-beer:patch:2",
+        "result": {
+            "status": "ok",
+            "score": 0.92,
+            "duration_s": 1.0,
+            "metric_observations": {"metric_valid": True},
+        },
+    })
+
+    results, attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    assert ("fedot-ts-beer", "stock") not in results
+    assert ("fedot-ts-beer", "patch") not in results
+    assert attempts[("fedot-ts-beer", "stock")] == 1
+    assert attempts[("fedot-ts-beer", "patch")] == 1
+
+
+def test_recovered_side_does_not_adopt_a_result_that_points_at_the_journal(tmp_path):
+    path = tmp_path / "quality_jobs.jsonl"
+    storage.append_journal(path, {
+        "event": "quality_task_side_finished",
+        "candidate": "a",
+        "task_id": "fedot-ts-beer",
+        "side": "stock",
+        "attempt": 1,
+        "attempt_id": "a:fedot-ts-beer:stock:1",
+        "registry_identity": "v1",
+        "worker_result_path": str(path),
+        "worker_paths": {
+            "worker_result_path": str(path),
+            "worker_log_path": str(tmp_path / "worker.log"),
+            "stage_status_path": str(tmp_path / "stage.json"),
+        },
+        "result": {
+            "status": "ok",
+            "score": 0.91,
+            "duration_s": 1.0,
+            "metric_observations": {
+                "metric_valid": True,
+                "worker_paths": {"worker_result_path": str(path)},
+            },
+        },
+    })
+
+    results, attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    assert ("fedot-ts-beer", "stock") not in results
+    assert attempts[("fedot-ts-beer", "stock")] == 1
+
+
+def test_recovered_cache_hit_keeps_the_producer_attempt_identity(tmp_path):
+    path = tmp_path / "quality_jobs.jsonl"
+    storage.append_journal(path, {
+        "event": "quality_task_side_finished",
+        "candidate": "a",
+        "task_id": "fedot-ts-beer",
+        "side": "stock",
+        "attempt": 1,
+        "attempt_id": "a:fedot-ts-beer:stock:1",
+        "registry_identity": "v1",
+        "result": {
+            "status": "ok",
+            "score": 0.9,
+            "duration_s": 1.0,
+            "metric_observations": {
+                "metric_valid": True,
+                "cache_hit": True,
+                "attempt_id": "owner:fedot-ts-beer:stock:4",
+                "attempt": 4,
+            },
+        },
+    })
+
+    results, _attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    recovered = results[("fedot-ts-beer", "stock")]
+    assert recovered.status == "ok"
+    assert recovered.score == 0.9
+    assert recovered.metric_observations["cache_hit"] is True
+
+
 def test_new_attempt_does_not_reuse_result_from_previous_attempt(tmp_path):
     path = tmp_path / "quality_jobs.jsonl"
     common = dict(candidate="a", task_id="fedot-ts-beer", side="stock", registry_identity="v1")
@@ -410,6 +541,57 @@ def test_new_attempt_does_not_reuse_result_from_previous_attempt(tmp_path):
     )
     assert attempts[("fedot-ts-beer", "stock")] == 2
     assert results[("fedot-ts-beer", "stock")].status == "crash"
+
+
+def test_late_spawn_does_not_refit_a_settled_timeout(tmp_path, monkeypatch):
+    import fedotllm.agents.evolve.evaluation.fedot_quality as quality
+    from fedotllm.agents.evolve.evaluation.quality_registry import get_dataset
+    from fedotllm.agents.evolve.types import ScoreResult
+
+    path = tmp_path / "quality_jobs.jsonl"
+    common = dict(
+        candidate="a", task_id="fedot-ts-beer", side="stock",
+        registry_identity="v1", attempt=1,
+    )
+    storage.append_journal(path, {
+        **common,
+        "event": "quality_task_side_finished",
+        "result": {
+            "status": "timeout",
+            "detail": "task_timeout after 3600s",
+            "score": None,
+        },
+    })
+    storage.append_journal(path, {**common, "event": "quality_task_worker_spawned"})
+
+    results, attempts = executor._recover_side_state(
+        path, candidate_id="a", task_ids=("fedot-ts-beer",), registry_identity="v1"
+    )
+
+    assert attempts[("fedot-ts-beer", "stock")] == 1
+    recovered = results[("fedot-ts-beer", "stock")]
+    assert recovered.status == "timeout"
+    assert math.isnan(recovered.score)
+
+    calls = []
+
+    def fake_side(_dataset, *, side, **_kwargs):
+        calls.append(side)
+        assert side == "patch"
+        return ScoreResult(task_id="fedot-ts-beer", status="ok", score=0.75,
+                           metric_observations={"metric_valid": True, "search_ran": True})
+
+    monkeypatch.setattr(quality, "run_quality_side", fake_side)
+    pair = quality.run_quality_pair(
+        get_dataset("fedot-ts-beer"),
+        stock_checkout=Path("/stock"),
+        patch_checkout=Path("/patch"),
+        prior_side_results=results,
+        prior_attempt_counts=attempts,
+    )
+
+    assert calls == ["patch"]
+    assert pair["stock_result"].status == "timeout"
 
 
 def test_unfinished_spawned_event_recovers_as_interrupted_attempt(tmp_path):
@@ -442,7 +624,10 @@ def test_unfinished_spawned_event_recovers_as_interrupted_attempt(tmp_path):
     interrupted = [row for row in events if row.get("event") == "quality_task_side_interrupted"]
     assert len(interrupted) == 1
     assert interrupted[0]["attempt_id"] == "a:fedot-ts-beer:stock:1"
+    assert interrupted[0]["result"]["status"] == "crash"
+    assert interrupted[0]["result"]["outcome"] == "interrupted"
     assert interrupted[0]["result"]["metric_observations"]["failure_kind"] == "controller_interrupted"
+    assert interrupted[0]["result"]["metric_observations"]["outcome"] == "interrupted"
     assert storage.read_jsonl(path, strict=True)
     quarantine_files = list(tmp_path.glob("quality_jobs.jsonl.incomplete-tail.*.bin"))
     assert len(quarantine_files) == 1
@@ -689,6 +874,100 @@ def test_recovers_parent_timeout_manifest_without_inventing_a_metric(tmp_path):
     assert terminal[0]["result"]["status"] == "timeout"
     assert terminal[0]["result"]["score"] is None
     assert storage.read_jsonl(journal, strict=True)
+
+
+def test_result_file_written_after_the_deadline_does_not_replace_timeout_manifest(tmp_path):
+    from fedotllm.agents.evolve.evaluation.fedot_quality import worker_artifact_paths
+
+    journal = tmp_path / "quality_jobs.jsonl"
+    paths = worker_artifact_paths("fedot-ts-beer", "patch", "proposal-r3", 2, root=tmp_path)
+    evaluation_identity = {"n_jobs": 4, "source_sha256": "source-v11"}
+    identity = {
+        "candidate": "proposal-r3",
+        "task_id": "fedot-ts-beer",
+        "side": "patch",
+        "attempt": 2,
+        "attempt_id": "proposal-r3:fedot-ts-beer:patch:2",
+        "registry_identity": "registry-v11",
+        "evaluation_identity": evaluation_identity,
+    }
+    common = {
+        **identity,
+        "candidate_revision_id": "proposal-r3",
+        "proposal_id": "proposal-r3",
+        "spec": {"n_jobs": 4, "timeout_seconds": 5400, "fedot_search_budget_seconds": 4500},
+        "worker_paths": paths,
+        "worker_result_path": paths["worker_result_path"],
+        "stage_status_path": paths["stage_status_path"],
+        "worker_log_path": paths["worker_log_path"],
+    }
+    storage.append_journal(journal, {**common, "event": "quality_task_side_started"})
+    timeout_path = Path(paths["timeout_manifest_path"])
+    timeout_path.write_text(json.dumps({
+        "schema_version": 1,
+        "event": "quality_worker_parent_timeout",
+        **{key: identity[key] for key in (
+            "task_id", "side", "attempt", "attempt_id", "registry_identity", "evaluation_identity"
+        )},
+        "source_dataset": "fedot-ts-beer",
+        "proposal_id": "proposal-r3",
+        "status": "timeout",
+        "failure_kind": "timeout",
+        "metric_outcome": "not_measured",
+        "metric_valid": False,
+        "timeout_kind": "task_timeout",
+        "detail": "task_timeout after 5400s",
+        "side_elapsed_seconds": 5400.0,
+        "worker_elapsed_seconds": 5350.0,
+        "worker_result_path": paths["worker_result_path"],
+        "worker_log_path": paths["worker_log_path"],
+        "stage_status_path": paths["stage_status_path"],
+    }))
+    result_path = Path(paths["worker_result_path"])
+    stage_path = Path(paths["stage_status_path"])
+    result_path.write_text(json.dumps({
+        "task_id": "fedot-ts-beer",
+        "status": "ok",
+        "score": 0.99,
+        "duration_s": 5401.0,
+        "metric_observations": {"metric_valid": True, "search_ran": True},
+        "proposal_id": "proposal-r3",
+        "attempt_id": identity["attempt_id"],
+        "source_dataset": "fedot-ts-beer",
+        "side": "patch",
+        "attempt": 2,
+        "registry_identity": "registry-v11",
+        "evaluation_identity": evaluation_identity,
+    }))
+    stage_path.write_text(json.dumps({
+        "proposal_id": "proposal-r3",
+        "attempt_id": identity["attempt_id"],
+        "task_id": "fedot-ts-beer",
+        "source_dataset": "fedot-ts-beer",
+        "side": "patch",
+        "attempt": 2,
+        "registry_identity": "registry-v11",
+        "evaluation_identity": evaluation_identity,
+        "n_jobs": 4,
+        "timeout_seconds": 5400,
+        "fedot_search_budget_seconds": 4500,
+        "event": "worker_finished",
+    }))
+    os.utime(result_path, (timeout_path.stat().st_mtime + 5, timeout_path.stat().st_mtime + 5))
+
+    results, _attempts = executor._recover_side_state(
+        journal,
+        candidate_id="proposal-r3",
+        task_ids=("fedot-ts-beer",),
+        registry_identity="registry-v11",
+        evaluation_identity=evaluation_identity,
+    )
+
+    recovered = results[("fedot-ts-beer", "patch")]
+    assert recovered.status == "timeout"
+    assert math.isnan(recovered.score)
+    assert recovered.metric_observations["metric_valid"] is False
+    assert recovered.metric_observations["recovered_parent_timeout_manifest"] is True
 
 
 @pytest.mark.parametrize("field,value", [
@@ -1237,6 +1516,50 @@ def test_queue_shuts_down_executors_if_initial_proposal_submit_fails(tmp_path, m
         executor.drain_quality_queue(source, workspace, n_jobs=4, cpu_quota=4)
 
     assert shutdowns == {"proposal": 1, "pairs": 1}
+
+
+def test_latched_storage_error_is_not_relaunched(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError
+
+    source, workspace = _enqueue(tmp_path, 1)
+    status = workspace / "logs" / "service_status.json"
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps({"state": "storage_error", "completion": "incomplete"}))
+    measured = []
+    monkeypatch.setattr(
+        executor,
+        "measure_fedot_quality",
+        lambda *_args, **_kwargs: measured.append(True),
+    )
+
+    with pytest.raises(StorageCapacityError, match="latched"):
+        executor.drain_quality_queue(source, workspace, n_jobs=4, cpu_quota=4)
+
+    proposal = json.loads((workspace / "quality_queue/improvement-0.json").read_text())
+    assert measured == []
+    assert proposal["status"] == "queued"
+    assert proposal.get("keep") is None
+
+
+def test_storage_error_from_measurement_returns_proposal_to_queue(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.execution.storage_guard import StorageCapacityError
+
+    source, workspace = _enqueue(tmp_path, 2)
+
+    def measure(_source, _experiment, *, candidate, **_kwargs):
+        raise StorageCapacityError(28, "No space left on device", str(workspace))
+
+    monkeypatch.setattr(executor, "measure_fedot_quality", measure)
+    with pytest.raises(StorageCapacityError):
+        executor.drain_quality_queue(source, workspace, n_jobs=4, cpu_quota=4)
+
+    started = json.loads((workspace / "quality_queue/improvement-0.json").read_text())
+    waiting = json.loads((workspace / "quality_queue/improvement-1.json").read_text())
+    assert started["status"] == "queued"
+    assert started.get("keep") is None
+    assert "storage_capacity_exhausted" in started["reason"]
+    assert waiting["status"] == "queued"
+    assert waiting.get("keep") is None
 
 
 def test_unattended_queue_stops_when_results_cannot_be_saved(tmp_path, monkeypatch):

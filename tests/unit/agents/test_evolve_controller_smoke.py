@@ -306,7 +306,8 @@ payload = {"task_id":spec["source_dataset"], "side":spec["side"],
            "worker_invocation_id":spec["worker_invocation_id"],
            "registry_identity":spec["registry_identity"],
            "evaluation_identity":spec.get("evaluation_identity"),
-           "status":"crash" if broken else "ok",
+           "status":"invalid" if broken else "ok",
+           "outcome":"invalid" if broken else "ok",
            "score":None if broken else 0.75, "n_train":128, "n_test":32,
            "detail":"intentional controller smoke import failure" if broken else "",
            "failure_kind":"fedot_import_error" if broken else None,
@@ -340,6 +341,13 @@ def test_smoke_advances_after_failed_proposal_and_recovers_without_refitting(tmp
     report = run_smoke(source, workspace)
     assert report["passed"], report
     assert report["purpose"] == "controller_acceptance"
+    assert report["side_outcomes_explicit"] is True
+    assert {row["outcome"] for row in report["side_outcomes"]} == {"ok", "invalid"}
+    assert report["aa"]["abs_delta"] == 0
+    assert report["aa"]["identical"] is True
+    assert report["aa"]["quality_claim"] is False
+    assert report["aa"]["control_score_pairs"] == 3
+    assert report["aa"]["control_score_abs_delta"] == 0
     assert report["failed_proposal_did_not_block"]
     assert report["recovery_without_refitting"]
     assert report["worker_artifacts_complete"]

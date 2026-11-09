@@ -5,17 +5,41 @@ import math
 from fedotllm.agents.evolve.evaluation.tasks import load_task
 from fedotllm.agents.evolve.types import Decision, ScoreResult, TaskSpec
 
+# Worker exceptions that belong to the candidate. A pin mismatch or a
+# budget timeout is not one of these: those stay unresolved infrastructure.
+CANDIDATE_FAILURES = frozenset({
+    "fedot_import_error",
+    "fedot_fit_error",
+    "scoring_error",
+    "worker_error",
+})
 
-def _numeric(result: ScoreResult, sentinel: float) -> float | None:
-    if result.status == "crash":
-        return sentinel
+
+def _failure_kind(result: ScoreResult) -> str | None:
+    kind = (result.metric_observations or {}).get("failure_kind")
+    return kind if isinstance(kind, str) else None
+
+
+def _numeric(result: ScoreResult) -> float | None:
+    # A crash has no fitness. GOLEM drops an individual that was not evaluated
+    # and never treats an invalid fitness as a measured value.
     if result.status != "ok" or not math.isfinite(result.score):
         return None
     return result.score
 
 
-def _patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
-    return stock.status == "ok" and patched.status == "crash"
+def candidate_failed(result: ScoreResult) -> bool:
+    """A candidate-owned failure. Pin mismatches and timeouts are not included."""
+
+    if result.status == "crash":
+        return True
+    return result.status == "invalid" and _failure_kind(result) in CANDIDATE_FAILURES
+
+
+def patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
+    """Stock measured a score and the patch failed as a candidate."""
+
+    return stock.status == "ok" and candidate_failed(patched)
 
 
 def _spec(
@@ -73,14 +97,14 @@ def compare_pack(
     lift_ok = False
     best: float | None = None
     for task_id in lift_ids:
-        hib, floor, sent, mode = _spec(
+        hib, floor, _sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
-        if _patched_broke(stock[task_id], patched[task_id]):
+        if patched_broke(stock[task_id], patched[task_id]):
             lift_deltas[task_id] = None
             continue
-        a = _numeric(stock[task_id], sent)
-        b = _numeric(patched[task_id], sent)
+        a = _numeric(stock[task_id])
+        b = _numeric(patched[task_id])
         if a is None or b is None:
             lift_deltas[task_id] = None
             continue
@@ -92,19 +116,33 @@ def compare_pack(
         if delta >= lift_need:
             lift_ok = True
     regressions: dict[str, float | None] = dict(lift_deltas)
-    if best is None:
+    # GOLEM does not treat an invalid fitness as a successful individual.
+    # One lift dataset without a score blocks KEEP even if another dataset improved.
+    unevaluated = [task_id for task_id in lift_ids if lift_deltas.get(task_id) is None]
+    broke = [
+        task_id for task_id in unevaluated
+        if patched_broke(stock[task_id], patched[task_id])
+    ]
+    if broke:
+        return Decision(
+            keep=False,
+            reason=f"regression {broke[0]} crashed after patch",
+            target_delta=best,
+            regression_deltas=regressions,
+        )
+    if unevaluated:
         return Decision(
             keep=False,
             reason="timeout_or_invalid",
-            target_delta=None,
+            target_delta=best,
             regression_deltas=regressions,
             infrastructure_error=True,
         )
     for task_id in protect_ids:
-        hib, floor, sent, mode = _spec(
+        hib, floor, _sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
-        if _patched_broke(stock[task_id], patched[task_id]):
+        if patched_broke(stock[task_id], patched[task_id]):
             regressions[task_id] = None
             return Decision(
                 keep=False,
@@ -112,8 +150,8 @@ def compare_pack(
                 target_delta=best,
                 regression_deltas=regressions,
             )
-        a = _numeric(stock[task_id], sent)
-        b = _numeric(patched[task_id], sent)
+        a = _numeric(stock[task_id])
+        b = _numeric(patched[task_id])
         if a is None or b is None:
             regressions[task_id] = None
             return Decision(

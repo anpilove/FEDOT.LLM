@@ -27,6 +27,8 @@ from fedotllm.agents.evolve.evaluation.fedot_quality import (
     create_worker_artifact_plan,
     decision_from_quality_jobs,
     run_quality_jobs,
+    side_is_measured,
+    stock_pack_measured,
     worker_artifact_paths,
 )
 from fedotllm.agents.evolve.evaluation.pair_scheduler import SharedPairScheduler
@@ -133,6 +135,83 @@ def _controller_stack_trace(workspace: Path):
             metadata["state"] = "stopped"
         save_metadata()
         _CONTROLLER_TRACE_RESERVATION.release()
+
+
+def _journal_result_matches_attempt(
+    payload: dict,
+    *,
+    task_id: str,
+    side: str,
+    attempt: int,
+    expected_attempt_id: str,
+) -> bool:
+    """A recovered side cannot adopt a worker result from another attempt.
+
+    GOLEM ``has_no_cycle`` rejects a graph that points back into itself. The
+    same rule applies here: the journal attempt and any attempt identity inside
+    its result must name this side, not a different one.
+    """
+
+    observations = payload.get("metric_observations")
+    observations = observations if isinstance(observations, dict) else {}
+    # A cache hit keeps the attempt identity of the worker that produced it.
+    shared = observations.get("cache_hit") is True or observations.get("singleflight_shared") is True
+    for source in (payload, observations):
+        if not shared:
+            recorded_attempt_id = source.get("attempt_id")
+            if recorded_attempt_id not in (None, "") and recorded_attempt_id != expected_attempt_id:
+                return False
+            if "attempt" in source and source.get("attempt") != attempt:
+                return False
+        recorded_side = source.get("side")
+        if recorded_side not in (None, "") and recorded_side != side:
+            return False
+        recorded_task = source.get("task_id")
+        if recorded_task not in (None, "") and recorded_task != task_id:
+            return False
+        recorded_source = source.get("source_dataset")
+        if recorded_source not in (None, "") and recorded_source != task_id:
+            return False
+    return True
+
+
+def _path_is_journal(value: object, journal: Path) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        return Path(value).expanduser().resolve() == journal.resolve()
+    except OSError:
+        return False
+
+
+def _result_points_at_journal(event: dict, payload: dict, journal: Path) -> bool:
+    """A side cannot use the journal event as its own worker artifact.
+
+    GOLEM ``has_no_self_cycled_nodes`` rejects a node that lists itself as an
+    input. ``worker_paths`` that resolve to this journal are that edge.
+    """
+
+    sources: list[dict] = [event, payload]
+    observations = payload.get("metric_observations")
+    if isinstance(observations, dict):
+        sources.append(observations)
+    for source in sources:
+        for key in (
+            "worker_result_path",
+            "worker_log_path",
+            "stage_status_path",
+            "worker_spec_path",
+            "timeout_manifest_path",
+        ):
+            if _path_is_journal(source.get(key), journal):
+                return True
+        for name in ("worker_paths", "shared_worker_paths"):
+            paths = source.get(name)
+            if not isinstance(paths, dict):
+                continue
+            if any(_path_is_journal(item, journal) for item in paths.values()):
+                return True
+    return False
 
 
 def _recover_durable_worker_result(
@@ -273,6 +352,7 @@ def _recover_durable_worker_result(
                 "metric_outcome": "not_measured",
                 "metric_valid": False,
                 "timeout_kind": timeout_kind,
+                "watchdog_fired": timeout_kind == "watchdog_timeout",
                 "elapsed_seconds": side_elapsed,
                 "side_elapsed_seconds": side_elapsed,
                 "worker_elapsed_seconds": worker_elapsed,
@@ -291,7 +371,7 @@ def _recover_durable_worker_result(
                 protected = {
                     "task_id", "side", "attempt", "attempt_id", "proposal_id",
                     "registry_identity", "evaluation_identity", "failure_kind",
-                    "metric_outcome", "metric_valid", "timeout_kind", "elapsed_seconds",
+                    "metric_outcome", "metric_valid", "timeout_kind", "watchdog_fired", "elapsed_seconds",
                     "side_elapsed_seconds", "worker_elapsed_seconds", "timeout_manifest_path",
                     "worker_result_path", "stage_status_path", "worker_log_path",
                     "recovered_parent_timeout_manifest", "worker_invocation_id", "worker_paths",
@@ -443,6 +523,11 @@ def _recover_side_state(
     results: dict[tuple[str, str], ScoreResult] = {}
     latest_phase: dict[tuple[str, str], str] = {}
     latest_event: dict[tuple[str, str], dict] = {}
+    # A terminal attempt is settled. A later start or spawn for that same
+    # attempt must not reopen it. GOLEM skips an individual whose fitness
+    # is already valid instead of evaluating it again.
+    settled_attempt: dict[tuple[str, str], int] = {}
+    open_attempt: dict[tuple[str, str], int] = {}
     if journal.exists() and not journal.is_char_device():
         tail_repair = repair_incomplete_jsonl_tail(journal)
         if tail_repair is not None and journal != Path("/dev/null"):
@@ -468,14 +553,24 @@ def _recover_side_state(
         phase = str(event.get("event") or "")
         attempt = int(event.get("attempt") or 0)
         attempts[key] = max(attempts.get(key, 0), attempt)
-        latest_event[key] = event
         is_active_attempt = phase in {
             "quality_task_side_started", "quality_task_worker_spawned",
             "quality_task_side_waiting_stock_cache",
         }
-        latest_phase[key] = "quality_task_side_started" if is_active_attempt else phase
         if is_active_attempt:
-            results.pop(key, None)
+            settled = settled_attempt.get(key)
+            if settled is not None and attempt <= settled:
+                continue
+            if attempt > open_attempt.get(key, -1):
+                results.pop(key, None)
+            open_attempt[key] = max(open_attempt.get(key, 0), attempt)
+            latest_phase[key] = "quality_task_side_started"
+            latest_event[key] = event
+            continue
+        if attempt < max(open_attempt.get(key, 0), settled_attempt.get(key, 0)):
+            continue
+        latest_event[key] = event
+        latest_phase[key] = phase
         if phase not in {
             "quality_task_side_finished", "quality_task_side_reused",
             "quality_task_side_interrupted",
@@ -483,6 +578,20 @@ def _recover_side_state(
             continue
         payload = event.get("result") or {}
         if not isinstance(payload, dict):
+            continue
+        expected_attempt_id = f"{candidate_id}:{task_id}:{side}:{attempt}"
+        recorded_attempt_id = event.get("attempt_id")
+        if recorded_attempt_id not in (None, "") and recorded_attempt_id != expected_attempt_id:
+            continue
+        if not _journal_result_matches_attempt(
+            payload,
+            task_id=task_id,
+            side=side,
+            attempt=attempt,
+            expected_attempt_id=expected_attempt_id,
+        ):
+            continue
+        if _result_points_at_journal(event, payload, journal):
             continue
         try:
             result = _score_from_payload(
@@ -511,6 +620,7 @@ def _recover_side_state(
                 if recorded_paths.get("worker_invocation_id"):
                     result.metric_observations["worker_invocation_id"] = recorded_paths["worker_invocation_id"]
         results[key] = result
+        settled_attempt[key] = attempt
 
     # A process can stop after the durable `started` event but before `finished`.
     # Preserve that attempt and allow exactly one recovery attempt under the normal
@@ -574,6 +684,7 @@ def _recover_side_state(
             detail=detail,
             metric_observations={
                 "failure_kind": "controller_interrupted",
+                "outcome": "interrupted",
                 "interrupted_after_event": latest_event[key].get("event"),
             },
         )
@@ -598,11 +709,13 @@ def _recover_side_state(
                 "interrupted_after_event": previous.get("event"),
                 "result": {
                     "status": "crash",
+                    "outcome": "interrupted",
                     "score": None,
                     "detail": detail,
                     "duration_s": 0.0,
                     "metric_observations": {
                         "failure_kind": "controller_interrupted",
+                        "outcome": "interrupted",
                         "interrupted_after_event": previous.get("event"),
                     },
                 },
@@ -794,6 +907,8 @@ def measure_fedot_quality(
                     payload[key] = observations[key]
             payload["result"] = {
                 "status": result.status,
+                "outcome": observations.get("outcome") or result.status,
+                "failure_kind": observations.get("failure_kind"),
                 "score": result.score if math.isfinite(float(result.score)) else None,
                 "detail": result.detail,
                 "traceback": result.traceback,
@@ -1035,6 +1150,24 @@ def _job_quality_task_ids(
     return tuple(fallback) if fallback else all_ids
 
 
+def _latched_storage_status(workspace: Path) -> Path | None:
+    """A recorded storage stop must not start another drain."""
+
+    for path in (
+        workspace / "logs" / "service_status.json",
+        workspace / "service_status.json",
+    ):
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("state") == "storage_error":
+            return path
+    return None
+
+
 def _drain_quality_queue_locked(
     source: Path,
     workspace: Path,
@@ -1065,6 +1198,13 @@ def _drain_quality_queue_locked(
     registry = registry or load_quality_registry()
     pool = task_ids or list_quality_task_ids(registry)
     workspace = workspace.resolve()
+    latched = _latched_storage_status(workspace)
+    if latched is not None:
+        raise StorageCapacityError(
+            28,
+            "storage_error is latched; refusing to relaunch the quality queue",
+            str(latched),
+        )
     artifact_root = Path(artifact_root).expanduser().resolve() if artifact_root is not None else workspace / "worker_artifacts"
     stock_cache_root = Path(stock_cache_root or stock_cache).expanduser().resolve() if (stock_cache_root is not None or stock_cache is not None) else workspace / "stock_cache"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -1433,7 +1573,9 @@ def _drain_quality_queue_locked(
                         "toy_metric": job.get("toy_metric"),
                     }
                 )
-                if decision.infrastructure_error and not continue_on_error:
+                if not continue_on_error and (
+                    decision.infrastructure_error or decision.quality_failure == "watchdog_timeout"
+                ):
                     paused_for_retry.set()
             except (OSError, JournalCorruptionError) as exc:
                 # Storage/launch failures are systemic: starting the next
@@ -1539,10 +1681,19 @@ def _drain_quality_queue_locked(
                     payload = {}
                 status = str(payload.get("status") or "")
                 if status == "running":
+                    reason = "executor_interrupted; resumable from quality journal"
+                    if original_error is not None and (
+                        isinstance(original_error, StorageCapacityError)
+                        or storage_failure_text(str(original_error))
+                    ):
+                        reason = (
+                            "storage_capacity_exhausted; proposal returned to queue "
+                            "without a verdict"
+                        )
                     try:
                         write_job_status(
                             job_path, "queued",
-                            {"reason": "executor_interrupted; resumable from quality journal", "keep": None},
+                            {"reason": reason, "keep": None},
                         )
                     except OSError as persist_error:
                         if original_error is None:
@@ -1554,7 +1705,7 @@ def _drain_quality_queue_locked(
                     processed.add(job_key)
                 if status == "partial":
                     processed.add(job_key)
-                if status == "infrastructure_error" and not continue_on_error:
+                if status in {"infrastructure_error", "watchdog_timeout"} and not continue_on_error:
                     paused_for_retry.set()
 
         def process_job(job, proposal_cpu_quota):
@@ -1644,15 +1795,17 @@ def _drain_quality_queue_locked(
         candidate_id = str(event.get("candidate") or "")
         result = event.get("result") or {}
         if task_id and isinstance(result, dict):
+            observations = result.get("metric_observations") or {}
             stock_rows[(candidate_id, task_id)] = {
                 "candidate_id": candidate_id,
                 "task_id": task_id,
                 "status": result.get("status"),
                 "score": result.get("score"),
-                "search_ran": bool((result.get("metric_observations") or {}).get("search_ran")),
-                "cache_hit": bool((result.get("metric_observations") or {}).get("cache_hit")),
+                "measured": side_is_measured(result),
+                "search_ran": bool(observations.get("search_ran")) if isinstance(observations, dict) else False,
+                "cache_hit": bool(observations.get("cache_hit")) if isinstance(observations, dict) else False,
                 "singleflight_shared": bool(
-                    (result.get("metric_observations") or {}).get("singleflight_shared")
+                    observations.get("singleflight_shared") if isinstance(observations, dict) else False
                 ),
             }
     stock_summary = list(stock_rows.values())
@@ -1663,7 +1816,7 @@ def _drain_quality_queue_locked(
         "mode": "drain",
         "registry_identity": registry.identity,
         "task_ids": list(dict.fromkeys(row["task_id"] for row in stock_summary)),
-        "stock_ok": bool(stock_summary) and all(row["status"] == "ok" for row in stock_summary),
+        "stock_ok": stock_pack_measured(stock_summary, results),
         "stock": stock_summary,
         "stock_cache_hits": [
             f"{row['candidate_id']}:{row['task_id']}"

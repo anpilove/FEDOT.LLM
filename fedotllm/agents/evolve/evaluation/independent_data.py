@@ -43,6 +43,41 @@ def partition_indices(target, *, problem: str, external_target=None):
     }
 
 
+def frozen_split_outcomes(target, *, problem: str) -> dict:
+    """Name DEV and FINAL without fitting a model or claiming a KEEP."""
+
+    _, holdouts = partition_indices(target, problem=problem)
+
+    def keys(split_name: str) -> set[str]:
+        namespace, ids = holdouts[split_name]
+        return {f"{namespace}:{int(i)}" for i in ids}
+
+    dev_keys, final_keys, shadow_keys = keys("dev"), keys("final"), keys("shadow")
+    disjoint = (
+        bool(dev_keys)
+        and bool(final_keys)
+        and dev_keys.isdisjoint(final_keys)
+        and dev_keys.isdisjoint(shadow_keys)
+        and final_keys.isdisjoint(shadow_keys)
+    )
+
+    def side(split_name: str, rows: set[str]) -> dict:
+        return {
+            "split": split_name,
+            "outcome": "reserved" if rows and disjoint else "invalid",
+            "count": len(rows),
+            "quality_claim": False,
+        }
+
+    return {
+        "quality_claim": False,
+        "keep": None,
+        "disjoint": disjoint,
+        "dev": side("dev", dev_keys),
+        "final": side("final", final_keys),
+    }
+
+
 def select_indices(target, *, problem: str, split: str, fold=None, external_target=None):
     if split not in {"dev", "shadow", "final"}:
         raise ValueError(f"unknown split: {split}")

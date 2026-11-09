@@ -12,8 +12,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from fedotllm.agents.evolve.execution.checkout import source_fingerprint
+from fedotllm.agents.evolve.execution.checkout import (
+    create_experiment_checkout,
+    discard_experiment_checkout,
+    source_fingerprint,
+)
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
+from fedotllm.agents.evolve.execution.runtime_contract import checkout_runtime_contract
 from fedotllm.agents.evolve.types import SnippetResult
 
 StageName = Literal[
@@ -120,6 +125,7 @@ class MicroCaseResult:
 class MicroFastResult:
     source_hash: str
     cases: tuple[MicroCaseResult, ...]
+    checkout_contract: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -130,6 +136,7 @@ class MicroFastResult:
             "component": "micro-fast",
             "ok": self.ok,
             "source_hash": self.source_hash,
+            "checkout_contract": self.checkout_contract,
             "cases": {
                 case.case_id: {
                     "ok": case.ok,
@@ -485,22 +492,50 @@ def validate_observation(
     )
 
 
-def run_stock_microbenchmark(source: Path) -> MicroFastResult:
-    """Run the deterministic, zero-LLM preflight for all correctness cases."""
+def run_stock_microbenchmark(source: Path, workspace: Path | None = None) -> MicroFastResult:
+    """Run the deterministic, zero-LLM preflight for all correctness cases.
+
+    ``workspace`` runs every probe in an experiment checkout. The frozen
+    source is only read.
+    """
 
     source = source.resolve()
     before = source_fingerprint(source)
-    rows: list[MicroCaseResult] = []
-    for case in micro_cases():
-        row = MicroCaseResult(case.prompt.case_id)
-        row.add(
-            validate_observation(
-                case,
-                run_fedot_snippet(source, case.behavior_probe),
-                patched=False,
-            )
+    checkout = source
+    contract = None
+    if workspace is not None:
+        checkout = create_experiment_checkout(
+            source, workspace, run_id="microbench", candidate_id="stock",
         )
-        rows.append(row)
+    try:
+        rows: list[MicroCaseResult] = []
+        for case in micro_cases():
+            row = MicroCaseResult(case.prompt.case_id)
+            row.add(
+                validate_observation(
+                    case,
+                    run_fedot_snippet(checkout, case.behavior_probe),
+                    patched=False,
+                )
+            )
+            rows.append(row)
+        if workspace is not None:
+            from fedotllm.agents.evolve.evaluation._fedot_quality_worker import (
+                configure_worker_runtime,
+            )
+
+            runtime_paths = configure_worker_runtime(workspace / "microbench-runtime.json")
+            contract = checkout_runtime_contract(
+                source=source,
+                checkout=checkout,
+                workspace=workspace,
+                runtime_paths=runtime_paths,
+            )
+            if not contract["ok"]:
+                raise RuntimeError(f"microbenchmark checkout contract failed: {contract['issues']}")
+    finally:
+        if workspace is not None:
+            discard_experiment_checkout(checkout, workspace=workspace, source=source)
     if source_fingerprint(source) != before:
         raise RuntimeError("stock microbenchmark mutated the frozen source")
-    return MicroFastResult(source_hash=before, cases=tuple(rows))
+    return MicroFastResult(source_hash=before, cases=tuple(rows), checkout_contract=contract)

@@ -716,6 +716,38 @@ def test_blocked_proposal_is_terminal_error_without_automatic_reexecution(
     assert not list((workspace / "logs").glob("controller-*.log"))
 
 
+def test_finished_event_without_task_id_is_not_a_measured_dataset(service, tmp_path):
+    workspace = tmp_path / "campaign"
+    workspace.mkdir()
+    queue = workspace / "quality_queue"
+    queue.mkdir()
+    (queue / "a.json").write_text(json.dumps({
+        "candidate_id": "a",
+        "proposal_id": "a",
+        "status": "keep",
+        "task_ids": [None],
+    }))
+    sides = []
+    for side in ("stock", "patch"):
+        sides.append(json.dumps({
+            "event": "quality_task_side_finished",
+            "candidate": "a",
+            "side": side,
+            "attempt": 1,
+            "result": {
+                "status": "ok",
+                "score": 0.9,
+                "metric_observations": {"metric_valid": True},
+            },
+        }))
+    (workspace / "quality_jobs.jsonl").write_text("\n".join(sides) + "\n")
+
+    progress = service._progress(workspace)
+
+    assert progress["task_finished_events"] == 0
+    assert progress["measured_proposals"] == 0
+
+
 def test_replayed_or_reused_side_events_do_not_count_as_new_task_progress(
     service, tmp_path
 ):
