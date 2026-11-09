@@ -581,6 +581,22 @@ def test_one_invalid_dataset_does_not_keep_the_proposal():
     assert "openml-37-diabetes" in decision.unresolved_task_ids
 
 
+def test_quality_row_without_source_dataset_is_not_a_keep_root():
+    missing = _pair("openml-31-credit-g", 0.70, 0.90)
+    missing["spec"].pop("source_dataset")
+    blank = _pair("openml-31-credit-g", 0.70, 0.90)
+    blank["spec"]["source_dataset"] = ""
+    rooted = _pair("openml-37-diabetes", 0.70, 0.90)
+
+    for rows in ([missing], [blank], [rooted, missing]):
+        decision = decision_from_quality_jobs(rows)
+        assert decision.keep is None
+        assert decision.quality_outcome == "not_evaluated"
+        assert decision.quality_failure == "missing_dataset"
+        assert "unknown_dataset" in decision.unresolved_task_ids
+        assert "quality_row_missing_source_dataset" in decision.reason
+
+
 def test_duplicate_dataset_rows_do_not_hide_a_regression():
     rows = [
         _pair("openml-31-credit-g", 0.80, 0.70),

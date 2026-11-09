@@ -2180,7 +2180,16 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
     storage_failed = False
     retryable_failure = False
     for row in rows:
-        task_id = row["spec"]["source_dataset"]
+        spec = row.get("spec")
+        spec = spec if isinstance(spec, dict) else {}
+        task_id = spec.get("source_dataset")
+        # GOLEM has_root rejects a graph with no root. A row that names no
+        # dataset cannot become the KEEP root.
+        if not isinstance(task_id, str) or not task_id:
+            unresolved.append("unknown_dataset")
+            failure_kind = failure_kind or "missing_dataset"
+            failure_reasons.append("quality_row_missing_source_dataset")
+            continue
         # GOLEM has_one_root rejects a graph with two roots. A second row for
         # the same dataset must not replace the first delta.
         if task_id in seen_tasks:
@@ -2293,6 +2302,17 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         )
 
     if unresolved:
+        improved_despite_unresolved = 0
+        for row in rows:
+            spec = row.get("spec")
+            if not isinstance(spec, dict):
+                continue
+            task_id = spec.get("source_dataset")
+            if not isinstance(task_id, str) or task_id not in deltas or "min_delta" not in spec:
+                continue
+            delta = deltas[task_id]
+            if delta is not None and delta >= float(spec["min_delta"]):
+                improved_despite_unresolved += 1
         return Decision(
             keep=None,
             reason="; ".join(failure_reasons),
@@ -2306,13 +2326,7 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
             else "fedot_budget_timeout" if fedot_budget_exhausted
             else failure_kind or "evaluation_error",
             quality_outcome="not_evaluated",
-            improved_task_count=sum(
-                1
-                for row in rows
-                if row["spec"]["source_dataset"] in deltas
-                and deltas[row["spec"]["source_dataset"]]
-                >= float(row["spec"]["min_delta"])
-            ),
+            improved_task_count=improved_despite_unresolved,
             regressed_task_count=sum(
                 1
                 for delta in deltas.values()
