@@ -138,13 +138,70 @@ def strongest_remembered_final(workspace_root: Path) -> dict | None:
     return best
 
 
+_NOT_MEASURED = {"dedup", "kept_parameter"}
+
+
+def parameters_already_in_defaults(source: Path, proposal: Path) -> dict[str, set[str]]:
+    """Parameters a remembered patch already wrote into the defaults file."""
+
+    def load(path: Path) -> dict:
+        file = path / DEFAULTS_FILE
+        try:
+            payload = json.loads(file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    base = load(source)
+    proposed = load(proposal)
+    locked: dict[str, set[str]] = {}
+    for operation, params in proposed.items():
+        if not isinstance(params, dict):
+            continue
+        current = base.get(operation)
+        current = current if isinstance(current, dict) else {}
+        chosen = {
+            str(key)
+            for key, value in params.items()
+            if key not in current or current.get(key) != value
+        }
+        if chosen:
+            locked[str(operation)] = chosen
+    return locked
+
+
+def proposal_checkout(source: Path, workspace: Path, patch: Path) -> Path:
+    """Copy the frozen source and apply the remembered configuration patch."""
+
+    import subprocess
+
+    from fedotllm.agents.evolve.execution.checkout import create_experiment_checkout
+
+    dest = create_experiment_checkout(
+        source,
+        workspace,
+        run_id="proposal",
+        candidate_id="kept-baseline",
+    )
+    completed = subprocess.run(
+        ["patch", "-p1", "--forward", "--batch", "-d", str(dest), "-i", str(patch)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "patch failed").strip()
+        raise RuntimeError(detail)
+    return dest
+
+
 def remembered_patch_hashes(trials: list[dict]) -> set[str]:
     """Patch hashes that already consumed a measurement, not a dedup note."""
 
     return {
         str(row["patch_hash"])
         for row in trials
-        if row.get("patch_hash") and row.get("stage") != "dedup"
+        if row.get("patch_hash") and row.get("stage") not in _NOT_MEASURED
     }
 
 
@@ -158,7 +215,11 @@ def remember_configuration_trials(workspace_root: Path, run_workspace: Path) -> 
     added = 0
     for row in read_jsonl(run_workspace / "configuration_trials.jsonl"):
         patch_hash = str(row.get("patch_hash") or "")
-        if not patch_hash or row.get("stage") == "dedup" or patch_hash in known:
+        if (
+            not patch_hash
+            or row.get("stage") in _NOT_MEASURED
+            or patch_hash in known
+        ):
             continue
         append_journal(
             memory,
@@ -871,6 +932,7 @@ def search_configuration_variants(
     max_operations: int = 3,
     dev_seed: int = 42,
     retain_dev_keeps: bool = False,
+    proposal_source: Path | None = None,
 ) -> ConfigurationSearchOutcome:
     """Try bounded generic defaults; return only a full-DEV/test-gated winner.
 
@@ -928,6 +990,8 @@ def search_configuration_variants(
             propose_parameter_bundles(single_variants),
         ),
     ]
+    proposal = proposal_source or source
+    locked = parameters_already_in_defaults(source, proposal)
     skipped = set(skip_patch_hashes or ())
     trials: list[dict] = []
     best: ConfigurationSearchOutcome | None = None
@@ -945,7 +1009,23 @@ def search_configuration_variants(
         variant = variants[cursor]
         cursor += 1
         index += 1
-        candidate = candidate_for_variant(source, variant)
+        parts = (
+            list(variant.variants)
+            if isinstance(variant, ParameterBundle)
+            else [variant]
+        )
+        if any(part.parameter in locked.get(part.operation, set()) for part in parts):
+            row = {
+                "event": "configuration_trial",
+                "index": index,
+                "variant": asdict(variant),
+                "stage": "kept_parameter",
+                "reason": "already in the remembered default",
+            }
+            trials.append(row)
+            append_journal(workspace / "configuration_trials.jsonl", row)
+            continue
+        candidate = candidate_for_variant(proposal, variant)
         if candidate is None:
             continue
         patch_hash = normalized_patch_hash(candidate, source_hash)
@@ -967,7 +1047,7 @@ def search_configuration_variants(
         evaluated_trials += 1
         skipped.add(patch_hash)
         experiment = create_experiment_checkout(
-            source,
+            proposal,
             workspace,
             run_id=run_id,
             candidate_id=f"configuration-{index}-{candidate.candidate_id}",
@@ -1170,7 +1250,7 @@ def search_configuration_variants(
                 discard_experiment_checkout(
                     best.experiment,
                     workspace=workspace,
-                    source=source,
+                    source=proposal,
                 )
             previous_keep = next(
                 (
@@ -1229,7 +1309,7 @@ def search_configuration_variants(
                 discard_experiment_checkout(
                     experiment,
                     workspace=workspace,
-                    source=source,
+                    source=proposal,
                 )
     if best is not None:
         return best

@@ -868,6 +868,7 @@ def _cmd_keyless_configuration(
         KEPT_CONFIGURATION_PATCH,
         remember_configuration_trials,
         remembered_configuration_trials,
+        proposal_checkout,
         remembered_patch_hashes,
         strongest_remembered_final,
     )
@@ -891,12 +892,23 @@ def _cmd_keyless_configuration(
         workspace_root / "latest_run.json",
         {"run_id": run_id, "workspace": str(run_workspace), "mode": "keyless_configuration"},
     )
+    remembered = strongest_remembered_final(workspace_root)
+    proposal_source = None
+    remembered_patch = Path(str((remembered or {}).get("patch") or ""))
+    if remembered_patch.is_file():
+        try:
+            proposal_source = proposal_checkout(
+                checkout, run_workspace, remembered_patch
+            )
+        except (OSError, RuntimeError, ValueError):
+            proposal_source = None
     result = benchmark_configuration_search(
         checkout,
         run_workspace,
         tasks=tasks,
         skip_patch_hashes=skipped,
         prior_trials=prior_trials,
+        proposal_source=proposal_source,
     )
     remember_configuration_trials(workspace_root, run_workspace)
     summary = result.get("summary") or {}

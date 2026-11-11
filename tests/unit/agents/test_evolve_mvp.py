@@ -1140,7 +1140,7 @@ def test_keyless_run_skips_configuration_trials_already_measured(tmp_path, monke
     )
     seen = {}
 
-    def search(source, workspace, tasks=("rf", "cancer", "kc2"), skip_patch_hashes=None, prior_trials=None):
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), skip_patch_hashes=None, prior_trials=None, **_kwargs):
         seen["skip"] = set(skip_patch_hashes or ())
         Path(workspace, "configuration_trials.jsonl").write_text(
             json.dumps(
@@ -1249,6 +1249,87 @@ def test_keyless_run_keeps_the_stronger_remembered_final(tmp_path, monkeypatch, 
     assert payload["change"] == "rf min_samples_leaf 1 -> 4"
     assert payload["target_delta"] == 0.0249
     assert Path(payload["patch"]).read_text(encoding="utf-8") == "leaf-4\n"
+
+
+def test_configuration_search_stacks_the_next_parameter_on_a_kept_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    proposal = tmp_path / "proposal"
+    proposal.mkdir()
+    proposal_defaults = proposal / defaults_rel
+    proposal_defaults.parent.mkdir(parents=True)
+    proposal_defaults.write_text(
+        json.dumps({"rf": {"min_samples_leaf": 4, "n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for name in ("__init__.py", "a.py", "b.py"):
+        target = proposal / "fedot" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((source / "fedot" / name).read_text(encoding="utf-8"), encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+    monkeypatch.setattr(
+        judge,
+        "measure_patched",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.90) for task_id in task_ids},
+    )
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="stack-kept",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+        proposal_source=proposal,
+    )
+    try:
+        assert outcome.experiment is not None
+        measured = json.loads((outcome.experiment / defaults_rel).read_text(encoding="utf-8"))
+        assert measured["rf"]["min_samples_leaf"] == 4
+        assert measured["rf"]["min_samples_split"] == 4
+        measured_rows = [
+            row for row in outcome.trials if row.get("stage") != "kept_parameter"
+        ]
+        assert measured_rows[0]["variant"]["parameter"] == "min_samples_split"
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=proposal
+            )
 
 
 def test_final_target_delta_beats_a_higher_dev_default():

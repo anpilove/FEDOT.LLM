@@ -610,6 +610,7 @@ def benchmark_configuration_search(
     tasks: tuple[str, ...] = ("rf", "cancer", "kc2"),
     skip_patch_hashes: set[str] | None = None,
     prior_trials: list[dict] | None = None,
+    proposal_source: Path | None = None,
 ) -> dict:
     """Prove generic runtime-surface search, without loading a canonical patch."""
 
@@ -651,6 +652,7 @@ def benchmark_configuration_search(
         retain_dev_keeps=True,
         skip_patch_hashes=skip_patch_hashes,
         prior_trials=prior_trials,
+        proposal_source=proposal_source,
     )
     if outcome.candidate is None or outcome.experiment is None:
         return {
@@ -691,11 +693,25 @@ def benchmark_configuration_search(
             )
         selected = chosen.variant
         dev_winner = finalists[-1].variant
+        change = (
+            f"{selected.get('operation')} {selected.get('parameter')} "
+            f"{selected.get('current_value')} -> {selected.get('value')}"
+        )
+        if proposal_source is not None:
+            from fedotllm.agents.evolve.commands.configuration_search import (
+                parameters_already_in_defaults,
+            )
+
+            preserved = sorted(
+                parameters_already_in_defaults(source, proposal_source).get(
+                    str(selected.get("operation") or ""),
+                    set(),
+                )
+            )
+            if preserved:
+                change = f"{change} on top of {', '.join(preserved)}"
         summary = {
-            "change": (
-                f"{selected.get('operation')} {selected.get('parameter')} "
-                f"{selected.get('current_value')} -> {selected.get('value')}"
-            ),
+            "change": change,
             "dev_target_delta": chosen.decision.target_delta,
             "dev_task_deltas": chosen.decision.regression_deltas,
             "dev_winner": (
@@ -756,11 +772,12 @@ def benchmark_configuration_search(
         experiments = [item.experiment for item in outcome.dev_keeps]
         if outcome.experiment is not None:
             experiments.append(outcome.experiment)
+        discard_source = proposal_source or source
         for experiment in dict.fromkeys(experiments):
             discard_experiment_checkout(
                 experiment,
                 workspace=workspace,
-                source=source,
+                source=discard_source,
             )
 
 
