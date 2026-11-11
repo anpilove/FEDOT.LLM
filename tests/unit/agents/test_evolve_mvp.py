@@ -448,6 +448,18 @@ def test_unset_depth_is_capped_below_the_xgboost_default():
     ]
 
 
+def test_unset_xgboost_l2_is_not_weakened():
+    from fedotllm.agents.evolve.commands.configuration_search import generic_values
+
+    stronger = generic_values(
+        "reg_lambda", None, classification=True, operation="xgboost"
+    )
+    assert stronger
+    assert all(isinstance(value, (int, float)) and value > 1 for value, _reason in stronger)
+    mild = generic_values("reg_lambda", None, classification=True, operation="lgbm")
+    assert mild[0][0] == 0.01
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

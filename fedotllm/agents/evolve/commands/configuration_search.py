@@ -750,6 +750,7 @@ def generic_values(
     current: Any,
     *,
     classification: bool,
+    operation: str = "",
 ) -> list[tuple[Any, str]]:
     """Small general alternatives ordered from conservative to broader."""
 
@@ -764,6 +765,12 @@ def generic_values(
         return [
             (2, "require minimal support for a learned leaf"),
             (4, "test stronger support for a learned leaf"),
+        ]
+    if parameter == "reg_lambda" and current is None and operation == "xgboost":
+        # XGBoost 3 uses lambda 1 when the parameter is unset. 0.01 removes it.
+        return [
+            (2.0, "increase L2 above the XGBoost default of 1"),
+            (10.0, "test a stronger L2 alternative above the XGBoost default of 1"),
         ]
     if parameter in {"alpha", "l2_leaf_reg", "reg_lambda"}:
         if current in (None, 0, 0.0):
@@ -942,6 +949,7 @@ def propose_parameter_variants(
                 parameter,
                 current,
                 classification=classification,
+                operation=operation,
             ):
                 if not _different(value, current):
                     continue
