@@ -1240,6 +1240,25 @@ def search_configuration_variants(
                 row["reason"] = full.reason
                 trials.append(row)
                 append_journal(workspace / "configuration_trials.jsonl", row)
+                # DEV rank is not FINAL rank. Keep the checkout when the caller
+                # will score every passing DEV on FINAL.
+                if retain_dev_keeps:
+                    full.experiment_id = experiment.name
+                    candidate.behavior_probe = configuration_probe_code(variant.operation)
+                    retained.append(
+                        DevKeep(
+                            candidate=candidate,
+                            experiment=experiment,
+                            decision=full,
+                            tests=after_tests,
+                            behavior_probe=probe,
+                            patch_path=None,
+                            variant=asdict(variant),
+                        )
+                    )
+                    if best is not None:
+                        best.dev_keeps = retained
+                    keep_experiment = True
                 continue
 
             if (

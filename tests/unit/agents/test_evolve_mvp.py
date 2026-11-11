@@ -1332,6 +1332,74 @@ def test_configuration_search_stacks_the_next_parameter_on_a_kept_default(
             )
 
 
+def test_retained_dev_keeps_include_a_passing_trial_that_lost_the_dev_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        params = json.loads((checkout / defaults_rel).read_text(encoding="utf-8"))["rf"]
+        score = 0.90 if params.get("min_samples_leaf") == 2 else 0.86
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="final-near-miss",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=2,
+        retain_dev_keeps=True,
+    )
+    try:
+        assert [row["stage"] for row in outcome.trials] == ["dev_keep", "dev_keep_not_better"]
+        assert len(outcome.dev_keeps) == 2
+        assert outcome.dev_keeps[0].decision.target_delta == pytest.approx(0.10)
+        assert outcome.dev_keeps[1].decision.target_delta == pytest.approx(0.06)
+        assert outcome.dev_keeps[1].experiment.is_dir()
+    finally:
+        for item in outcome.dev_keeps:
+            discard_experiment_checkout(item.experiment, workspace=workspace, source=source)
+        if outcome.experiment is not None and outcome.experiment.is_dir():
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
 def test_final_target_delta_beats_a_higher_dev_default():
     from fedotllm.agents.evolve.commands.configuration_search import choose_final_keep
 

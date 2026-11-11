@@ -684,15 +684,20 @@ def benchmark_configuration_search(
             chosen_index = len(finalists) - 1
         chosen = finalists[chosen_index]
         final = finals[chosen_index]
+        reported_patch = chosen.patch_path
         if chosen.experiment != outcome.experiment and chosen.candidate is not None:
-            write_kept_configuration_patch(
+            reported_patch = write_kept_configuration_patch(
                 workspace,
                 chosen.candidate,
                 source=source,
                 experiment=chosen.experiment,
             )
         selected = chosen.variant
-        dev_winner = finalists[-1].variant
+        dev_winner_keep = next(
+            (item for item in finalists if item.experiment == outcome.experiment),
+            finalists[-1],
+        )
+        dev_winner = dev_winner_keep.variant
         change = (
             f"{selected.get('operation')} {selected.get('parameter')} "
             f"{selected.get('current_value')} -> {selected.get('value')}"
@@ -722,7 +727,7 @@ def benchmark_configuration_search(
             "final_task_deltas": final.regression_deltas,
             "final_keep": final.keep,
             "selection": "highest passing FINAL target_delta",
-            "patch": str(chosen.patch_path or outcome.patch_path or ""),
+            "patch": str(reported_patch or outcome.patch_path or ""),
             "measured": measured_trial_rows(outcome.trials),
         }
         final_by_change = {
