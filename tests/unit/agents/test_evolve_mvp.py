@@ -654,6 +654,144 @@ def test_weak_near_miss_does_not_skip_the_next_parameter(
             discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
 
 
+def test_discarded_early_stopping_callback_is_appended(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        discarded_early_stopping_candidate,
+        write_kept_configuration_patch,
+    )
+    from fedotllm.agents.evolve.execution.patch import apply_patch
+
+    rel = (
+        "fedot/core/operations/evaluation/operation_implementations/"
+        "models/boostings_implementations.py"
+    )
+    source = tmp_path / "pin"
+    target = source / rel
+    target.parent.mkdir(parents=True)
+    body = (
+        "class FedotLightGBMImplementation:\n"
+        "    def update_callbacks(self) -> list:\n"
+        "        callback = []\n"
+        "\n"
+        "        esr = self.params.get('early_stopping_rounds')\n"
+        "        if isinstance(esr, int):\n"
+        "            lgbm_early_stopping(esr, verbose=self.params.get('verbose'))\n"
+        "\n"
+        "        return callback\n"
+    )
+    target.write_text(body, encoding="utf-8")
+    candidate = discarded_early_stopping_candidate(source)
+    assert candidate is not None
+    assert "callback.append(lgbm_early_stopping" in candidate.new_code
+    experiment = tmp_path / "experiment"
+    experiment.mkdir()
+    copied = experiment / rel
+    copied.parent.mkdir(parents=True)
+    copied.write_text(body, encoding="utf-8")
+    assert apply_patch(experiment, candidate) is True
+    assert "callback.append(lgbm_early_stopping" in copied.read_text(encoding="utf-8")
+    assert discarded_early_stopping_candidate(experiment) is None
+    defaults = "fedot/core/repository/data/default_operation_params.json"
+    (source / defaults).parent.mkdir(parents=True, exist_ok=True)
+    (source / defaults).write_text("{}\n", encoding="utf-8")
+    (experiment / defaults).parent.mkdir(parents=True, exist_ok=True)
+    (experiment / defaults).write_text('{"lgbm": {}}\n', encoding="utf-8")
+    patch = write_kept_configuration_patch(
+        tmp_path / "out",
+        PatchCandidate(
+            candidate_id="defaults",
+            file_path=defaults,
+            old_code="{}\n",
+            new_code='{"lgbm": {}}\n',
+            rationale="defaults",
+        ),
+        source=source,
+        experiment=experiment,
+    )
+    text = patch.read_text(encoding="utf-8")
+    assert "boostings_implementations.py" in text
+    assert "callback.append(lgbm_early_stopping" in text
+
+
+def test_measured_early_stopping_callback_is_not_retried(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        discarded_early_stopping_candidate,
+        measure_discarded_early_stopping,
+    )
+    from fedotllm.agents.evolve.execution.checkout import source_fingerprint
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    rel = (
+        "fedot/core/operations/evaluation/operation_implementations/"
+        "models/boostings_implementations.py"
+    )
+    source = tmp_path / "pin"
+    target = source / rel
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "        if isinstance(esr, int):\n"
+        "            lgbm_early_stopping(esr, verbose=self.params.get('verbose'))\n",
+        encoding="utf-8",
+    )
+    candidate = discarded_early_stopping_candidate(source)
+    assert candidate is not None
+    patch_hash = normalized_patch_hash(candidate, source_fingerprint(source))
+    assert (
+        measure_discarded_early_stopping(
+            source,
+            tmp_path / "work",
+            tasks=("lgbm",),
+            lift_ids=("lgbm",),
+            protect_ids=("lgbm",),
+            skip_patch_hashes={patch_hash},
+        )
+        is None
+    )
+
+
+def test_keyless_hunt_measures_the_discarded_callback_before_more_defaults(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+
+    def measure(*_args, **_kwargs):
+        return {
+            "ok": False,
+            "decision": {
+                "keep": False,
+                "reason": "target_delta 0.002 below per-task threshold",
+                "target_delta": 0.002,
+                "regression_deltas": {"lgbm": 0.002},
+            },
+            "summary": {
+                "change": "lgbm early_stopping callback discarded -> appended",
+                "final_keep": False,
+            },
+        }
+
+    def search(*_args, **_kwargs):
+        raise AssertionError("defaults must wait until the callback patch is measured")
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.configuration_search.measure_discarded_early_stopping",
+        measure,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work")])
+    payload = json.loads(capsys.readouterr().out)
+    assert code != 0
+    assert payload["change"] == "lgbm early_stopping callback discarded -> appended"
+
+
 def test_generic_decomposition_surface_proposes_existing_solver_alternatives():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

@@ -26,6 +26,48 @@ from fedotllm.agents.evolve.types import (
 )
 
 DEFAULTS_FILE = "fedot/core/repository/data/default_operation_params.json"
+BOOSTING_IMPLEMENTATIONS = (
+    "fedot/core/operations/evaluation/operation_implementations/"
+    "models/boostings_implementations.py"
+)
+_DISCARDED_EARLY_STOP = (
+    "        if isinstance(esr, int):\n"
+    "            lgbm_early_stopping(esr, verbose=self.params.get('verbose'))\n"
+)
+_APPENDED_EARLY_STOP = (
+    "        if isinstance(esr, int):\n"
+    "            callback.append(lgbm_early_stopping(esr, verbose=self.params.get('verbose')))\n"
+)
+
+
+def discarded_early_stopping_candidate(source: Path) -> PatchCandidate | None:
+    """The LightGBM fit builds an early-stopping callback and then drops it."""
+
+    path = source / BOOSTING_IMPLEMENTATIONS
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if text.count(_DISCARDED_EARLY_STOP) != 1:
+        return None
+    if "callback.append(lgbm_early_stopping" in text:
+        return None
+    return PatchCandidate(
+        candidate_id="early-stopping-callback",
+        file_path=BOOSTING_IMPLEMENTATIONS,
+        old_code=_DISCARDED_EARLY_STOP,
+        new_code=_APPENDED_EARLY_STOP,
+        rationale=(
+            "LightGBM builds the early-stopping callback and then discards it, "
+            "so early_stopping_rounds never stops training"
+        ),
+        behavior_probe=(
+            "from pathlib import Path\n"
+            f"text = Path({BOOSTING_IMPLEMENTATIONS!r}).read_text()\n"
+            "print('EVOLVE_OBSERVATION=' + ("
+            "'appended' if 'callback.append(lgbm_early_stopping' in text else 'discarded'))\n"
+        ),
+    )
 _PARAMETER_PRIORITY = (
     "min_samples_leaf",
     "min_samples_split",
@@ -382,7 +424,17 @@ def write_kept_configuration_patch(
     """Save a git-applyable diff of the measured checkout."""
 
     chunks: list[str] = []
-    for edit in candidate.edits:
+    edits = list(candidate.edits)
+    if not any(edit.file_path == BOOSTING_IMPLEMENTATIONS for edit in edits):
+        frozen = source / BOOSTING_IMPLEMENTATIONS
+        changed = experiment / BOOSTING_IMPLEMENTATIONS
+        if (
+            frozen.is_file()
+            and changed.is_file()
+            and frozen.read_bytes() != changed.read_bytes()
+        ):
+            edits.append(PatchEdit(BOOSTING_IMPLEMENTATIONS, "callback", "callback"))
+    for edit in edits:
         old_path = source / edit.file_path
         new_path = experiment / edit.file_path
         old = old_path.read_text(encoding="utf-8") if old_path.is_file() else ""
@@ -402,6 +454,200 @@ def write_kept_configuration_patch(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(chunks), encoding="utf-8")
     return path
+
+
+def measure_discarded_early_stopping(
+    source: Path,
+    workspace: Path,
+    *,
+    tasks: tuple[str, ...],
+    lift_ids: tuple[str, ...],
+    protect_ids: tuple[str, ...],
+    proposal_source: Path | None = None,
+    skip_patch_hashes: set[str] | None = None,
+    dev_seed: int = 42,
+) -> dict | None:
+    """Measure the discarded LightGBM callback once, through the same gates."""
+
+    from fedotllm.agents.evolve.controller.campaign import compare_behavior_probe
+    from fedotllm.agents.evolve.evaluation.judge import (
+        confirm_candidate_tests,
+        measure_fedot_tests,
+        measure_patched,
+        measure_stock,
+        normalize_test_result,
+        verdict,
+    )
+    from fedotllm.agents.evolve.execution.checkout import (
+        create_experiment_checkout,
+        discard_experiment_checkout,
+        source_fingerprint,
+    )
+    from fedotllm.agents.evolve.execution.patch import apply_patch
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+    from fedotllm.agents.evolve.storage.journal import append_journal
+
+    candidate = discarded_early_stopping_candidate(source)
+    if candidate is None:
+        return None
+    patch_hash = normalized_patch_hash(candidate, source_fingerprint(source))
+    if patch_hash in set(skip_patch_hashes or ()):
+        return None
+    base = proposal_source or source
+    experiment = create_experiment_checkout(
+        base,
+        workspace,
+        run_id="early-stop",
+        candidate_id=candidate.candidate_id,
+    )
+    change = "lgbm early_stopping callback discarded -> appended"
+    journal = workspace / "configuration_trials.jsonl"
+
+    def finish(decision: Decision, stage: str) -> dict:
+        append_journal(
+            journal,
+            {
+                "event": "configuration_trial",
+                "variant": {
+                    "operation": "lgbm",
+                    "parameter": "early_stopping_rounds",
+                    "value": "callback",
+                    "current_value": "discarded",
+                },
+                "candidate": candidate.candidate_id,
+                "patch_hash": patch_hash,
+                "stage": stage,
+                "reason": decision.reason,
+                "quick_decision": asdict(decision) if stage == "quick_dev" else None,
+            },
+        )
+        if experiment.is_dir():
+            discard_experiment_checkout(experiment, workspace=workspace, source=base)
+        return {
+            "ok": False,
+            "decision": {
+                "keep": False,
+                "reason": decision.reason,
+                "target_delta": decision.target_delta,
+                "regression_deltas": decision.regression_deltas,
+                "infrastructure_error": decision.infrastructure_error,
+            },
+            "summary": {
+                "change": change,
+                "final_keep": False,
+                "measured_change": decision.reason,
+            },
+        }
+
+    try:
+        if not apply_patch(experiment, candidate):
+            return finish(Decision(False, "early_stopping_patch_failed", None), "patch")
+        lift = tuple(lift_ids)
+        protect = tuple(protect_ids)
+        measured_ids = tuple(dict.fromkeys((*lift, *protect)))
+        stock = measure_stock(measured_ids, checkout=source, split="dev", seed=dev_seed)
+        quick = verdict(
+            {task_id: stock[task_id] for task_id in lift},
+            measure_patched(lift, checkout=experiment, split="dev", seed=dev_seed),
+            lift_ids=lift,
+            protect_ids=lift,
+        )
+        if not quick.keep:
+            return finish(quick, "quick_dev")
+        full = verdict(
+            stock,
+            measure_patched(measured_ids, checkout=experiment, split="dev", seed=dev_seed),
+            lift_ids=lift,
+            protect_ids=protect,
+        )
+        if not full.keep:
+            return finish(full, "full_dev")
+        shadow_stock = measure_stock(lift, checkout=source, split="shadow", seed=dev_seed)
+        shadow = verdict(
+            shadow_stock,
+            measure_patched(lift, checkout=experiment, split="shadow", seed=dev_seed),
+            lift_ids=lift,
+            protect_ids=lift,
+        )
+        if not shadow.keep:
+            return finish(shadow, "shadow_dev")
+        probe = compare_behavior_probe(source, experiment, candidate.behavior_probe)
+        if probe.get("status") != "changed":
+            return finish(Decision(False, f"probe {probe.get('status')}", full.target_delta), "probe")
+        baseline = normalize_test_result(measure_fedot_tests(source))
+        after_tests, failure, _attempts = confirm_candidate_tests(baseline, experiment)
+        if failure is not None:
+            return finish(failure, "tests")
+        if after_tests.status != "passed":
+            return finish(Decision(False, f"tests {after_tests.status}", full.target_delta), "tests")
+        final_stock = measure_stock(measured_ids, checkout=source, split="final", seed=dev_seed)
+        final = verdict(
+            final_stock,
+            measure_patched(measured_ids, checkout=experiment, split="final", seed=dev_seed),
+            lift_ids=lift,
+            protect_ids=protect,
+        )
+        kept = bool(final.keep)
+        patch_path = ""
+        if kept:
+            published = candidate
+            if proposal_source is not None:
+                published = PatchCandidate(
+                    candidate_id=candidate.candidate_id,
+                    file_path=candidate.file_path,
+                    rationale=candidate.rationale,
+                    edits=[
+                        *candidate.edits,
+                        PatchEdit(DEFAULTS_FILE, "defaults", "defaults"),
+                    ],
+                )
+            patch_path = str(
+                write_kept_configuration_patch(
+                    workspace,
+                    published,
+                    source=source,
+                    experiment=experiment,
+                )
+            )
+        append_journal(
+            journal,
+            {
+                "event": "configuration_trial",
+                "variant": {
+                    "operation": "lgbm",
+                    "parameter": "early_stopping_rounds",
+                    "value": "callback",
+                    "current_value": "discarded",
+                },
+                "candidate": candidate.candidate_id,
+                "patch_hash": patch_hash,
+                "stage": "final" if kept else "final_drop",
+                "reason": final.reason,
+            },
+        )
+        return {
+            "ok": kept,
+            "summary": {
+                "change": change,
+                "final_keep": kept,
+                "final_target_delta": final.target_delta,
+                "final_task_deltas": final.regression_deltas,
+                "dev_target_delta": full.target_delta,
+                "dev_task_deltas": full.regression_deltas,
+                "patch": patch_path,
+                "selection": "highest passing FINAL target_delta",
+            },
+            "checks": {"full_dev_keep": True, "final_keep": kept},
+            "final": {
+                "keep": kept,
+                "reason": final.reason,
+                "target_delta": final.target_delta,
+                "regression_deltas": final.regression_deltas,
+            },
+        }
+    finally:
+        if experiment.is_dir():
+            discard_experiment_checkout(experiment, workspace=workspace, source=base)
 
 
 def _different(value: Any, current: Any) -> bool:

@@ -872,6 +872,7 @@ def _cmd_keyless_configuration(
         remembered_patch_hashes,
         hunt_surface,
         materialize_improved_fedot,
+        measure_discarded_early_stopping,
         strongest_remembered_final,
     )
     from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
@@ -909,16 +910,26 @@ def _cmd_keyless_configuration(
             )
         except (OSError, RuntimeError, ValueError):
             proposal_source = None
-    result = benchmark_configuration_search(
+    result = measure_discarded_early_stopping(
         checkout,
         run_workspace,
         tasks=tasks,
-        skip_patch_hashes=skipped,
-        prior_trials=prior_trials,
-        proposal_source=proposal_source,
         lift_ids=surface["lift"],
         protect_ids=surface["protect"],
+        proposal_source=proposal_source,
+        skip_patch_hashes=skipped,
     )
+    if result is None:
+        result = benchmark_configuration_search(
+            checkout,
+            run_workspace,
+            tasks=tasks,
+            skip_patch_hashes=skipped,
+            prior_trials=prior_trials,
+            proposal_source=proposal_source,
+            lift_ids=surface["lift"],
+            protect_ids=surface["protect"],
+        )
     remember_configuration_trials(workspace_root, run_workspace)
     summary = result.get("summary") or {}
     checks = result.get("checks") or {}
