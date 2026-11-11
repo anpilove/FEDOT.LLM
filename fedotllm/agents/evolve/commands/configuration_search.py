@@ -96,6 +96,87 @@ class DevKeep:
 
 
 KEPT_CONFIGURATION_PATCH = "kept_configuration.patch"
+CONFIGURATION_MEMORY = "configuration_memory.jsonl"
+
+
+def remembered_configuration_trials(workspace_root: Path) -> list[dict]:
+    """Trials this workspace already measured, including earlier run journals."""
+
+    from fedotllm.agents.evolve.storage.journal import read_jsonl
+
+    rows = list(read_jsonl(workspace_root / CONFIGURATION_MEMORY))
+    runs = workspace_root / "runs"
+    if runs.is_dir():
+        for path in sorted(runs.glob("*/configuration_trials.jsonl")):
+            rows.extend(read_jsonl(path))
+    return rows
+
+
+def strongest_remembered_final(workspace_root: Path) -> dict | None:
+    """Earlier keyless FINAL keep with the largest target delta."""
+
+    best: dict | None = None
+    best_delta: float | None = None
+    runs = workspace_root / "runs"
+    if not runs.is_dir():
+        return None
+    for path in sorted(runs.glob("*/keyless_configuration.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+        summary = payload.get("summary") if isinstance(payload, dict) else None
+        if not isinstance(summary, dict) or not summary.get("final_keep"):
+            continue
+        delta = summary.get("final_target_delta")
+        patch = Path(str(summary.get("patch") or ""))
+        if not isinstance(delta, (int, float)) or not patch.is_file():
+            continue
+        if best_delta is None or float(delta) > best_delta:
+            best = summary
+            best_delta = float(delta)
+    return best
+
+
+def remembered_patch_hashes(trials: list[dict]) -> set[str]:
+    """Patch hashes that already consumed a measurement, not a dedup note."""
+
+    return {
+        str(row["patch_hash"])
+        for row in trials
+        if row.get("patch_hash") and row.get("stage") != "dedup"
+    }
+
+
+def remember_configuration_trials(workspace_root: Path, run_workspace: Path) -> int:
+    """Store this run's newly measured trials without copying the test logs."""
+
+    from fedotllm.agents.evolve.storage.journal import append_journal, read_jsonl
+
+    memory = workspace_root / CONFIGURATION_MEMORY
+    known = remembered_patch_hashes(read_jsonl(memory))
+    added = 0
+    for row in read_jsonl(run_workspace / "configuration_trials.jsonl"):
+        patch_hash = str(row.get("patch_hash") or "")
+        if not patch_hash or row.get("stage") == "dedup" or patch_hash in known:
+            continue
+        append_journal(
+            memory,
+            {
+                "record_type": "configuration_trial",
+                "patch_hash": patch_hash,
+                "stage": row.get("stage"),
+                "reason": row.get("reason")
+                or (row.get("full_decision") or {}).get("reason")
+                or (row.get("quick_decision") or {}).get("reason"),
+                "variant": row.get("variant") or {},
+                "candidate": row.get("candidate"),
+                "run_workspace": str(run_workspace),
+            },
+        )
+        known.add(patch_hash)
+        added += 1
+    return added
 
 
 def choose_final_keep(finals: list[Decision]) -> int | None:

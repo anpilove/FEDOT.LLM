@@ -864,6 +864,13 @@ def _cmd_keyless_configuration(
     """Propose and apply a measured default when no model key is available."""
 
     from fedotllm.agents.evolve.benchmark.runner import benchmark_configuration_search
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        KEPT_CONFIGURATION_PATCH,
+        remember_configuration_trials,
+        remembered_configuration_trials,
+        remembered_patch_hashes,
+        strongest_remembered_final,
+    )
     from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
     from fedotllm.agents.evolve.types import Decision
 
@@ -873,6 +880,8 @@ def _cmd_keyless_configuration(
     except ValueError as exc:
         parser.error(str(exc))
     tasks = requested or ("rf", "cancer", "kc2")
+    prior_trials = remembered_configuration_trials(args.workspace.resolve())
+    skipped = remembered_patch_hashes(prior_trials)
     checkout = resolve_fedot_src()
     run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     workspace_root = args.workspace.resolve()
@@ -882,7 +891,14 @@ def _cmd_keyless_configuration(
         workspace_root / "latest_run.json",
         {"run_id": run_id, "workspace": str(run_workspace), "mode": "keyless_configuration"},
     )
-    result = benchmark_configuration_search(checkout, run_workspace, tasks=tasks)
+    result = benchmark_configuration_search(
+        checkout,
+        run_workspace,
+        tasks=tasks,
+        skip_patch_hashes=skipped,
+        prior_trials=prior_trials,
+    )
+    remember_configuration_trials(workspace_root, run_workspace)
     summary = result.get("summary") or {}
     checks = result.get("checks") or {}
     if "final" in result:
@@ -906,7 +922,38 @@ def _cmd_keyless_configuration(
             stage=str(raw.get("stage") or "dev"),
             infrastructure_error=bool(raw.get("infrastructure_error")),
         )
+    historical = strongest_remembered_final(workspace_root)
+    new_delta = summary.get("final_target_delta") if summary.get("final_keep") else None
     _write_json(run_workspace / "keyless_configuration.json", result)
+    if historical is not None and isinstance(historical.get("final_target_delta"), (int, float)):
+        old_delta = float(historical["final_target_delta"])
+        if not isinstance(new_delta, (int, float)) or float(new_delta) <= old_delta:
+            reported_patch = run_workspace / KEPT_CONFIGURATION_PATCH
+            reported_patch.write_text(
+                Path(str(historical["patch"])).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            summary = {
+                **summary,
+                "measured_change": summary.get("change") or decision.reason,
+                "change": historical.get("change"),
+                "final_target_delta": old_delta,
+                "final_task_deltas": historical.get("final_task_deltas") or {},
+                "dev_target_delta": historical.get("dev_target_delta"),
+                "dev_task_deltas": historical.get("dev_task_deltas") or {},
+                "final_keep": True,
+                "patch": str(reported_patch),
+                "selection": "previous FINAL keep remains stronger",
+            }
+            decision = Decision(
+                keep=True,
+                reason="keep",
+                target_delta=old_delta,
+                regression_deltas=dict(historical.get("final_task_deltas") or {}),
+                dev_keep=True,
+                final_keep=True,
+                stage="final",
+            )
     _print_json(
         {
             "keep_dev": decision.dev_keep,
@@ -918,8 +965,11 @@ def _cmd_keyless_configuration(
             "regression_deltas": decision.regression_deltas,
             "workspace": str(run_workspace),
             "change": summary.get("change"),
+            "measured_change": summary.get("measured_change"),
+            "selection": summary.get("selection"),
             "patch": summary.get("patch") or "",
             "tasks": list(tasks),
+            "skipped_previously_measured": len(skipped),
         }
     )
     return _decision_exit_code(decision)

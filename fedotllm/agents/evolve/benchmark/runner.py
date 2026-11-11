@@ -608,6 +608,8 @@ def benchmark_configuration_search(
     source: Path,
     workspace: Path,
     tasks: tuple[str, ...] = ("rf", "cancer", "kc2"),
+    skip_patch_hashes: set[str] | None = None,
+    prior_trials: list[dict] | None = None,
 ) -> dict:
     """Prove generic runtime-surface search, without loading a canonical patch."""
 
@@ -647,6 +649,8 @@ def benchmark_configuration_search(
         max_trials=3,
         dev_seed=42,
         retain_dev_keeps=True,
+        skip_patch_hashes=skip_patch_hashes,
+        prior_trials=prior_trials,
     )
     if outcome.candidate is None or outcome.experiment is None:
         return {

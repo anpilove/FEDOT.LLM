@@ -1067,7 +1067,7 @@ def test_run_without_a_model_key_applies_the_measured_configuration(tmp_path, mo
     monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
     seen = {}
 
-    def search(source, workspace, tasks=("rf", "cancer", "kc2")):
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), **_kwargs):
         seen["tasks"] = tasks
         seen["workspace"] = workspace
         patch = Path(workspace) / "kept_configuration.patch"
@@ -1114,6 +1114,141 @@ def test_run_without_a_model_key_applies_the_measured_configuration(tmp_path, mo
     assert Path(payload["patch"]).is_file()
     assert seen["tasks"] == ("rf", "cancer")
     assert "proposing measured configuration defaults" in captured.err
+
+
+def test_keyless_run_skips_configuration_trials_already_measured(tmp_path, monkeypatch, capsys):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    old = tmp_path / "work" / "runs" / "old"
+    old.mkdir(parents=True)
+    (old / "configuration_trials.jsonl").write_text(
+        json.dumps(
+            {
+                "patch_hash": "already-measured",
+                "stage": "dev_keep",
+                "variant": {
+                    "operation": "rf",
+                    "parameter": "min_samples_leaf",
+                    "value": 4,
+                    "current_value": 1,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), skip_patch_hashes=None, prior_trials=None):
+        seen["skip"] = set(skip_patch_hashes or ())
+        Path(workspace, "configuration_trials.jsonl").write_text(
+            json.dumps(
+                {
+                    "patch_hash": "new-split",
+                    "stage": "quick_dev",
+                    "reason": "regression rf delta -0.0115",
+                    "variant": {
+                        "operation": "rf",
+                        "parameter": "min_samples_split",
+                        "value": 4,
+                        "current_value": 2,
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "ok": False,
+            "decision": {
+                "keep": False,
+                "reason": "regression rf delta -0.0115",
+                "target_delta": -0.0115,
+                "regression_deltas": {"rf": -0.0115},
+            },
+            "trials": [],
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "rf"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert seen["skip"] == {"already-measured"}
+    assert payload["skipped_previously_measured"] == 1
+    memory = (tmp_path / "work" / "configuration_memory.jsonl").read_text(encoding="utf-8")
+    assert "new-split" in memory
+    assert "already-measured" not in memory
+
+
+def test_keyless_run_keeps_the_stronger_remembered_final(tmp_path, monkeypatch, capsys):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    previous = tmp_path / "work" / "runs" / "previous"
+    previous.mkdir(parents=True)
+    previous_patch = previous / "kept_configuration.patch"
+    previous_patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "final_task_deltas": {"rf": 0.0249},
+                    "dev_target_delta": 0.0232,
+                    "dev_task_deltas": {"rf": 0.0105},
+                    "patch": str(previous_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), **_kwargs):
+        patch = Path(workspace) / "kept_configuration.patch"
+        patch.write_text("max-depth-8\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "summary": {
+                "change": "rf max_depth None -> 8",
+                "final_keep": True,
+                "final_target_delta": 0.0152,
+                "final_task_deltas": {"rf": 0.0152},
+                "dev_target_delta": 0.0175,
+                "patch": str(patch),
+            },
+            "checks": {"full_dev_keep": True, "final_keep": True},
+            "final": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.0152,
+                "regression_deltas": {"rf": 0.0152},
+            },
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "rf"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["change"] == "rf min_samples_leaf 1 -> 4"
+    assert payload["target_delta"] == 0.0249
+    assert Path(payload["patch"]).read_text(encoding="utf-8") == "leaf-4\n"
 
 
 def test_final_target_delta_beats_a_higher_dev_default():
