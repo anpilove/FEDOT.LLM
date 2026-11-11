@@ -1251,6 +1251,111 @@ def test_keyless_run_keeps_the_stronger_remembered_final(tmp_path, monkeypatch, 
     assert Path(payload["patch"]).read_text(encoding="utf-8") == "leaf-4\n"
 
 
+def test_keyless_hunt_moves_to_the_next_fedot_operation_after_an_rf_keep(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    previous = tmp_path / "work" / "runs" / "previous"
+    previous.mkdir(parents=True)
+    previous_patch = previous / "kept_configuration.patch"
+    previous_patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "final_task_deltas": {"rf": 0.0249},
+                    "patch": str(previous_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), **kwargs):
+        seen["tasks"] = tuple(tasks)
+        seen["lift"] = tuple(kwargs.get("lift_ids") or ())
+        seen["protect"] = tuple(kwargs.get("protect_ids") or ())
+        patch = Path(workspace) / "kept_configuration.patch"
+        patch.write_text("lgbm-leaf\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "summary": {
+                "change": "lgbm min_data_in_leaf 1 -> 4",
+                "final_keep": True,
+                "final_target_delta": 0.012,
+                "final_task_deltas": {"lgbm": 0.012, "rf": 0.0249},
+                "dev_target_delta": 0.012,
+                "patch": str(patch),
+            },
+            "checks": {"full_dev_keep": True, "final_keep": True},
+            "final": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.012,
+                "regression_deltas": {"lgbm": 0.012},
+            },
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work")])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert seen["lift"] == ("lgbm", "cancer->lgbm", "kc2->lgbm")
+    assert "rf" in seen["protect"]
+    assert "cancer" in seen["protect"]
+    assert "kc2" in seen["protect"]
+    assert payload["change"] == "lgbm min_data_in_leaf 1 -> 4"
+    assert payload["target_delta"] == 0.012
+    assert Path(payload["patch"]).read_text(encoding="utf-8") == "lgbm-leaf\n"
+    assert payload["fedot_operation"] == "lgbm"
+
+
+def test_hunt_materializes_the_improved_fedot_tree(tmp_path: Path):
+    import difflib
+
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        materialize_improved_fedot,
+    )
+
+    source = tmp_path / "pin"
+    rel = "fedot/core/repository/data/default_operation_params.json"
+    original = '{ "rf": { "n_jobs": 1 } }\n'
+    target = source / rel
+    target.parent.mkdir(parents=True)
+    target.write_text(original, encoding="utf-8")
+    updated = '{ "rf": { "n_jobs": 1, "min_samples_leaf": 4 } }\n'
+    patch = tmp_path / "kept_configuration.patch"
+    patch.write_text(
+        "".join(
+            difflib.unified_diff(
+                original.splitlines(keepends=True),
+                updated.splitlines(keepends=True),
+                fromfile=f"a/{rel}",
+                tofile=f"b/{rel}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    dest = tmp_path / "improved_fedot"
+    materialized = materialize_improved_fedot(source, dest, patch)
+    improved = json.loads((materialized / rel).read_text(encoding="utf-8"))
+    assert improved["rf"]["min_samples_leaf"] == 4
+    assert "min_samples_leaf" not in target.read_text(encoding="utf-8")
+
+
 def test_configuration_search_stacks_the_next_parameter_on_a_kept_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

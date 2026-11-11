@@ -611,6 +611,8 @@ def benchmark_configuration_search(
     skip_patch_hashes: set[str] | None = None,
     prior_trials: list[dict] | None = None,
     proposal_source: Path | None = None,
+    lift_ids: tuple[str, ...] | None = None,
+    protect_ids: tuple[str, ...] | None = None,
 ) -> dict:
     """Prove generic runtime-surface search, without loading a canonical patch."""
 
@@ -622,12 +624,15 @@ def benchmark_configuration_search(
     )
     from fedotllm.agents.evolve.evaluation.tasks import load_task
 
-    specs = {task_id: load_task(task_id) for task_id in tasks}
+    lift = lift_ids or tasks
+    protect = protect_ids or tasks
+    measured = tuple(dict.fromkeys((*lift, *protect)))
+    specs = {task_id: load_task(task_id) for task_id in measured}
     operation_hints = {
         task_id: tuple(spec.nodes) for task_id, spec in specs.items()
     }
     stock = measure_stock(
-        tasks,
+        measured,
         checkout=source,
         split="dev",
         seed=42,
@@ -644,8 +649,8 @@ def benchmark_configuration_search(
         problem_by_task={
             task_id: spec.problem for task_id, spec in specs.items()
         },
-        lift_ids=tasks,
-        protect_ids=tasks,
+        lift_ids=lift,
+        protect_ids=protect,
         baseline_tests=baseline_tests,
         max_trials=3,
         dev_seed=42,
@@ -664,18 +669,18 @@ def benchmark_configuration_search(
         }
     try:
         finalists = outcome.dev_keeps or []
-        final_stock = measure_stock(tasks, checkout=source, split="final", seed=42)
+        final_stock = measure_stock(measured, checkout=source, split="final", seed=42)
         finals = [
             verdict(
                 final_stock,
                 measure_patched(
-                    tasks,
+                    measured,
                     checkout=item.experiment,
                     split="final",
                     seed=42,
                 ),
-                lift_ids=tasks,
-                protect_ids=tasks,
+                lift_ids=lift,
+                protect_ids=protect,
             )
             for item in finalists
         ]

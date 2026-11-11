@@ -870,6 +870,8 @@ def _cmd_keyless_configuration(
         remembered_configuration_trials,
         proposal_checkout,
         remembered_patch_hashes,
+        hunt_surface,
+        materialize_improved_fedot,
         strongest_remembered_final,
     )
     from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
@@ -880,7 +882,12 @@ def _cmd_keyless_configuration(
         requested = _task_ids(args.lift_tasks)
     except ValueError as exc:
         parser.error(str(exc))
-    tasks = requested or ("rf", "cancer", "kc2")
+    surface = hunt_surface(args.workspace.resolve(), requested)
+    tasks = tuple(dict.fromkeys((*surface["lift"], *surface["protect"])))
+    print(
+        f"hunting FEDOT operation {surface['operation']}",
+        file=sys.stderr,
+    )
     prior_trials = remembered_configuration_trials(args.workspace.resolve())
     skipped = remembered_patch_hashes(prior_trials)
     checkout = resolve_fedot_src()
@@ -909,6 +916,8 @@ def _cmd_keyless_configuration(
         skip_patch_hashes=skipped,
         prior_trials=prior_trials,
         proposal_source=proposal_source,
+        lift_ids=surface["lift"],
+        protect_ids=surface["protect"],
     )
     remember_configuration_trials(workspace_root, run_workspace)
     summary = result.get("summary") or {}
@@ -936,10 +945,17 @@ def _cmd_keyless_configuration(
         )
     historical = strongest_remembered_final(workspace_root)
     new_delta = summary.get("final_target_delta") if summary.get("final_keep") else None
+    reported_operation = str(surface["operation"])
     _write_json(run_workspace / "keyless_configuration.json", result)
     if historical is not None and isinstance(historical.get("final_target_delta"), (int, float)):
         old_delta = float(historical["final_target_delta"])
-        if not isinstance(new_delta, (int, float)) or float(new_delta) <= old_delta:
+        old_operation = str(historical.get("change") or "").split()[:1]
+        new_operation = str(summary.get("change") or "").split()[:1]
+        same_operation = bool(old_operation) and old_operation == new_operation
+        weaker = not isinstance(new_delta, (int, float)) or float(new_delta) <= old_delta
+        # A smaller lift on a new FEDOT operation is an additional improvement.
+        # Only the same operation has to beat the remembered FINAL delta.
+        if not summary.get("final_keep") or (same_operation and weaker):
             reported_patch = run_workspace / KEPT_CONFIGURATION_PATCH
             reported_patch.write_text(
                 Path(str(historical["patch"])).read_text(encoding="utf-8"),
@@ -966,6 +982,20 @@ def _cmd_keyless_configuration(
                 final_keep=True,
                 stage="final",
             )
+            reported_operation = old_operation[0] if old_operation else reported_operation
+    improved_fedot = ""
+    patch_path = Path(str(summary.get("patch") or ""))
+    if patch_path.is_file():
+        try:
+            improved_fedot = str(
+                materialize_improved_fedot(
+                    checkout,
+                    workspace_root / "improved_fedot",
+                    patch_path,
+                )
+            )
+        except (OSError, RuntimeError, ValueError):
+            improved_fedot = ""
     _print_json(
         {
             "keep_dev": decision.dev_keep,
@@ -980,7 +1010,9 @@ def _cmd_keyless_configuration(
             "measured_change": summary.get("measured_change"),
             "selection": summary.get("selection"),
             "patch": summary.get("patch") or "",
+            "fedot": improved_fedot,
             "tasks": list(tasks),
+            "fedot_operation": reported_operation,
             "skipped_previously_measured": len(skipped),
         }
     )

@@ -112,6 +112,68 @@ def remembered_configuration_trials(workspace_root: Path) -> list[dict]:
     return rows
 
 
+HUNT_SURFACES: tuple[dict[str, tuple[str, ...] | str], ...] = (
+    {
+        "operation": "rf",
+        "lift": ("rf", "cancer", "kc2"),
+        "protect": ("rf", "cancer", "kc2"),
+    },
+    {
+        "operation": "lgbm",
+        "lift": ("lgbm", "cancer->lgbm", "kc2->lgbm"),
+        "protect": (
+            "lgbm",
+            "cancer->lgbm",
+            "kc2->lgbm",
+            "rf",
+            "cancer",
+            "kc2",
+        ),
+    },
+)
+
+
+def hunt_surface(workspace_root: Path, requested: tuple[str, ...] = ()) -> dict:
+    """Next FEDOT operation a keyless hunt should measure.
+
+    An explicit task list stays on that list. Otherwise a FINAL keep for an
+    operation moves the hunt to the next operation, and the previous tasks stay
+    protected so the new default cannot give back the earlier FEDOT improvement.
+    """
+
+    if requested:
+        operation = requested[0].rsplit("->", 1)[-1]
+        return {"operation": operation, "lift": requested, "protect": requested}
+    kept: set[str] = set()
+    runs = workspace_root / "runs"
+    if runs.is_dir():
+        for path in sorted(runs.glob("*/keyless_configuration.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError):
+                continue
+            summary = payload.get("summary") if isinstance(payload, dict) else None
+            if not isinstance(summary, dict) or not summary.get("final_keep"):
+                continue
+            change = str(summary.get("change") or "").strip()
+            operation = change.split()[0] if change else ""
+            if operation:
+                kept.add(operation)
+    for surface in HUNT_SURFACES:
+        if surface["operation"] not in kept:
+            return {
+                "operation": surface["operation"],
+                "lift": surface["lift"],
+                "protect": surface["protect"],
+            }
+    last = HUNT_SURFACES[-1]
+    return {
+        "operation": last["operation"],
+        "lift": last["lift"],
+        "protect": last["protect"],
+    }
+
+
 def strongest_remembered_final(workspace_root: Path) -> dict | None:
     """Earlier keyless FINAL keep with the largest target delta."""
 
@@ -168,6 +230,37 @@ def parameters_already_in_defaults(source: Path, proposal: Path) -> dict[str, se
         if chosen:
             locked[str(operation)] = chosen
     return locked
+
+
+def materialize_improved_fedot(source: Path, dest: Path, patch: Path) -> Path:
+    """Copy the pinned FEDOT tree and apply the kept patch. The pin stays unchanged."""
+
+    import shutil
+    import subprocess
+
+    source = source.resolve()
+    dest = dest.resolve()
+    if dest == source or dest in source.parents or source in dest.parents:
+        raise ValueError("improved FEDOT and immutable source must be disjoint")
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        source,
+        dest,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", ".venv", ".pytest_cache"),
+    )
+    completed = subprocess.run(
+        ["patch", "-p1", "--forward", "--batch", "-d", str(dest), "-i", str(patch.resolve())],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        shutil.rmtree(dest, ignore_errors=True)
+        detail = (completed.stderr or completed.stdout or "patch failed").strip()
+        raise RuntimeError(detail)
+    return dest
 
 
 def proposal_checkout(source: Path, workspace: Path, patch: Path) -> Path:
