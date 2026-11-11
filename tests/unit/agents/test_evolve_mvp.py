@@ -706,6 +706,38 @@ def test_configuration_candidate_adds_missing_operation_default(tmp_path: Path):
     assert payload["rf"] == {"n_jobs": 1}
 
 
+def test_configuration_search_unmeasured_stock_is_infrastructure(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    stock = {
+        task_id: ScoreResult(task_id, "invalid", float("nan"), detail="worker exit 1")
+        for task_id in ("rf", "cancer", "kc2")
+    }
+
+    outcome = search_configuration_variants(
+        source,
+        tmp_path / "workspace",
+        run_id="configuration-unmeasured",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={task_id: ("rf",) for task_id in stock},
+        problem_by_task={task_id: "classification" for task_id in stock},
+        lift_ids=tuple(stock),
+        protect_ids=tuple(stock),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+    )
+
+    assert outcome.candidate is None
+    assert outcome.trials == []
+    assert outcome.decision.keep is False
+    assert outcome.decision.infrastructure_error is True
+    assert outcome.decision.reason == "configuration_stock_unmeasured rf"
+
+
 def test_configuration_search_requires_quick_full_probe_and_tests(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

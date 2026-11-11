@@ -623,6 +623,26 @@ def _score_rows(scores: dict[str, ScoreResult]) -> dict[str, dict]:
     }
 
 
+def _unmeasured_configuration_task(
+    stock: dict[str, ScoreResult],
+    operation_hints: dict[str, tuple[str, ...]],
+) -> str | None:
+    """Name one hinted task that has no measured parameter surface.
+
+    A measured pack with no tunable keys is a real empty search. A pack whose
+    stock rows never reached ``ok`` never observed a surface, so it must not
+    be recorded as ``no_configuration_keep``.
+    """
+
+    if parameter_surfaces(operation_hints, stock):
+        return None
+    for task_id in operation_hints:
+        result = stock.get(task_id)
+        if result is None or result.status != "ok":
+            return task_id
+    return None
+
+
 def search_configuration_variants(
     source: Path,
     workspace: Path,
@@ -647,6 +667,17 @@ def search_configuration_variants(
     affected-workload pass is only a cost filter; a winner must also pass the
     complete DEV protect suite, the public behavior probe, and comparative tests.
     """
+
+    unmeasured = _unmeasured_configuration_task(stock, operation_hints)
+    if unmeasured is not None:
+        return ConfigurationSearchOutcome(
+            decision=Decision(
+                False,
+                f"configuration_stock_unmeasured {unmeasured}",
+                None,
+                infrastructure_error=True,
+            )
+        )
 
     from fedotllm.agents.evolve.execution.checkout import (
         create_experiment_checkout,

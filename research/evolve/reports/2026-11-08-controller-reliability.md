@@ -49,6 +49,10 @@ GOLEM `GraphVerifier.verify` returns false when a rule returns `False` or raises
 
 A doctor run on pinned commit `8990f28b0664c99f7eb2fddcee3931151fe16e79` failed while importing the checkout. The snippet worker imported `fedot` before the preflight script, so the probe died as `process exited 1` and the dask check was reported before dask had been measured. The worker now emits `EVOLVE_PREFLIGHT` with `dask` and `import_error` when that import fails. Doctor keeps the record and puts the exception on the path check. The same run now reports `ModuleNotFoundError: No module named 'dask'` and `dask.importable=false`.
 
+## Configuration search without a measurement
+
+`benchmark --component configuration-search` on pinned FEDOT `8990f28` measured `rf`, `cancer`, and `kc2` as `invalid` because the checkout import failed. The search then returned `no_configuration_keep` with `infrastructure_error=false` and no trials. That is now `configuration_stock_unmeasured rf` with `infrastructure_error=true`. A measured stock pack that simply has no tunable surface still ends as `no_configuration_keep`.
+
 ## Not claimed
 
 Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only.
