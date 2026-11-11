@@ -587,6 +587,73 @@ def test_broad_surface_tries_each_parameter_before_a_second_scale():
     assert params.index("reg_alpha") < second_leaf_support
 
 
+def test_weak_near_miss_does_not_skip_the_next_parameter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"lgbm": {"verbose": -1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"verbose": -1},
+            "supported_parameters": ["learning_rate", "num_leaves"],
+            "estimator_defaults": {"learning_rate": 0.1, "num_leaves": 31},
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        params = json.loads((checkout / defaults_rel).read_text(encoding="utf-8"))["lgbm"]
+        score = 0.90 if params.get("num_leaves") == 15 else 0.805
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="defer-near-miss",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=2,
+    )
+    try:
+        measured = [row for row in outcome.trials if row.get("stage") != "dedup"]
+        assert [row["variant"]["parameter"] for row in measured] == [
+            "learning_rate",
+            "num_leaves",
+        ]
+        assert measured[1]["variant"]["value"] == 15
+        assert outcome.decision.keep is True
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
 def test_generic_decomposition_surface_proposes_existing_solver_alternatives():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

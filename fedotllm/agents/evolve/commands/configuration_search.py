@@ -1247,9 +1247,9 @@ def search_configuration_variants(
                             continue
                         queued_signatures.add(signature)
                         fresh.append(refined)
-                    # Use DEV feedback immediately. Depth is bounded because a
-                    # refinement never refines another refinement.
-                    variants[cursor:cursor] = fresh
+                    # Keep the refinement, but do not let it jump ahead of the next
+                    # parameter. A refinement never refines another refinement.
+                    variants.extend(fresh)
                 continue
 
             full_patched = measure_patched(
