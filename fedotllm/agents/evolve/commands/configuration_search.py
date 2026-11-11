@@ -461,8 +461,8 @@ def generic_values(
             return [(max(2, current - 2), "slightly reduce depth to test overfitting")]
     if parameter == "min_child_samples" and isinstance(current, int) and current > 1:
         return [
-            (max(2, current // 2), "allow finer leaves while retaining regularization"),
             (current * 2, "increase leaf support to reduce variance"),
+            (max(2, current // 2), "allow finer leaves while retaining regularization"),
         ]
     if parameter == "max_features" and current == "sqrt":
         return [("log2", "test a nearby feature-subsampling regime")]

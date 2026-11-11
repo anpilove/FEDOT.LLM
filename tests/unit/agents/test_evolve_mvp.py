@@ -526,7 +526,7 @@ def test_generic_lgbm_surface_reaches_regularization_and_capacity_variants():
     )
 
     pairs = [(row.parameter, row.value) for row in variants]
-    assert pairs[:2] == [("min_child_samples", 10), ("min_child_samples", 40)]
+    assert pairs[:2] == [("min_child_samples", 40), ("min_child_samples", 10)]
     assert ("reg_lambda", 0.01) in pairs
     assert ("reg_alpha", 0.01) in pairs
 
