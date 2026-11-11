@@ -460,6 +460,17 @@ def test_unset_xgboost_l2_is_not_weakened():
     assert mild[0][0] == 0.01
 
 
+def test_unset_xgboost_learning_rate_starts_from_the_booster_default():
+    from fedotllm.agents.evolve.commands.configuration_search import generic_values
+
+    values = generic_values(
+        "learning_rate", None, classification=True, operation="xgboost"
+    )
+    assert values
+    assert values[0][0] == 0.15
+    assert generic_values("learning_rate", None, classification=True, operation="lgbm") == []
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

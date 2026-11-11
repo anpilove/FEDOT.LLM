@@ -802,6 +802,12 @@ def generic_values(
         ]
     if parameter == "max_features" and current == "sqrt":
         return [("log2", "test a nearby feature-subsampling regime")]
+    if parameter == "learning_rate" and current is None and operation == "xgboost":
+        # XGBoost 3 uses eta 0.3 when the parameter is unset.
+        return [
+            (0.15, "slower updates than the XGBoost default of 0.3"),
+            (0.6, "faster updates than the XGBoost default of 0.3"),
+        ]
     if parameter == "learning_rate" and isinstance(current, (int, float)) and current > 0:
         return [
             (float(current) / 2.0, "slower updates may improve boosting generalization"),
