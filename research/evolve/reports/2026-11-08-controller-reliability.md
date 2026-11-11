@@ -65,7 +65,9 @@ With no `FEDOTLLM_LLM_API_KEY`, `benchmark --component configuration-search` mea
 
 The search used to return the first passing default. With a two-trial budget it now keeps the later default only when its DEV target_delta is strictly larger. On pinned FEDOT `8990f28` the second trial, `min_samples_leaf` 4, beat 2: DEV target_delta 0.0232 (`kc2` +0.0232, `rf` +0.0105, `cancer` -0.0017) and FINAL target_delta 0.0249 (`rf` +0.0249, `kc2` +0.0071, `cancer` 0). The surviving patch sets `min_samples_leaf` to 4. That file is a diff of the whole defaults document, with a trailing newline, so `git apply` accepts it. A diff of only the `rf` object did not: `git apply` reported a corrupt patch, and `patch` needed fuzz.
 
-The benchmark now scores three trials and lists each one in `summary.measured`, including the drop reason. The third trial is `min_samples_split` 2 -> 4. Its best lift was 0.0055 on `kc2`, and `rf` fell by 0.0115, so the quick gate returned `regression rf delta -0.0115`. The kept patch stays `min_samples_leaf` 4. This is not a 40-dataset quality KEEP, and `run` / `hunt` still do not invent a source patch without `FEDOTLLM_LLM_API_KEY`.
+The benchmark now scores three trials and lists each one in `summary.measured`, including the drop reason. On one run the third trial was `min_samples_split` 2 -> 4. Its best lift was 0.0055 on `kc2`, and `rf` fell by 0.0115, so the quick gate returned `regression rf delta -0.0115`.
+
+When a later value of the same parameter beats an earlier keep, the search now inserts one farther step ahead of the unrelated parameters. `min_samples_leaf` 6 then beat 4 on DEV: target_delta 0.0307 (`kc2` +0.0307, `rf` +0.0128, `cancer` -0.0017) against 0.0232. FINAL for 6 still kept, at target_delta 0.0198 (`rf` +0.0198, `kc2` +0.0071, `cancer` -0.0017). That FINAL delta is smaller than the 0.0249 measured for leaf 4 on the previous identical three-task benchmark. DEV-max and FINAL-max are not the same choice. The patch from this run sets `min_samples_leaf` to 6. This is not a 40-dataset quality KEEP, and `run` / `hunt` still do not invent a source patch without `FEDOTLLM_LLM_API_KEY`.
 
 ## Not claimed
 

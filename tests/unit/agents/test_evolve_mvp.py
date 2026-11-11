@@ -978,6 +978,8 @@ def test_configuration_search_measures_the_next_parameter_and_keeps_the_better(
         ).read_text(encoding="utf-8")
         if '"min_samples_split": 4' in text:
             score = 0.84
+        elif '"min_samples_leaf": 6' in text:
+            score = 0.88
         elif '"min_samples_leaf": 4' in text:
             score = 0.93
         else:
@@ -1010,18 +1012,20 @@ def test_configuration_search_measures_the_next_parameter_and_keeps_the_better(
         lift_ids=("rf",),
         protect_ids=("rf",),
         baseline_tests=TestResult("passed", 0),
-        max_trials=3,
+        max_trials=4,
     )
     try:
         assert [row["variant"]["parameter"] for row in outcome.trials] == [
             "min_samples_leaf",
             "min_samples_leaf",
+            "min_samples_leaf",
             "min_samples_split",
         ]
-        assert [row["variant"]["value"] for row in outcome.trials] == [2, 4, 4]
+        assert [row["variant"]["value"] for row in outcome.trials] == [2, 4, 6, 4]
         assert [row["stage"] for row in outcome.trials] == [
             "dev_keep",
             "dev_keep",
+            "dev_keep_not_better",
             "dev_keep_not_better",
         ]
         assert outcome.decision.target_delta == pytest.approx(0.13)

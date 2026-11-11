@@ -469,6 +469,47 @@ def _refined_numeric_value(
     return refined
 
 
+def _step_farther(
+    previous: dict | None,
+    winner: ParameterVariant | ParameterBundle,
+) -> ParameterVariant | None:
+    """One step past a value that beat an earlier keep of the same parameter."""
+
+    if previous is None or isinstance(winner, ParameterBundle):
+        return None
+    if _REFINEMENT_MARKER in winner.rationale:
+        return None
+    if (
+        previous.get("operation") != winner.operation
+        or previous.get("parameter") != winner.parameter
+    ):
+        return None
+    previous_value = previous.get("value")
+    current = winner.current_value
+    selected = winner.value
+    if (
+        isinstance(previous_value, bool)
+        or isinstance(current, bool)
+        or isinstance(selected, bool)
+        or not isinstance(previous_value, (int, float))
+        or not isinstance(current, (int, float))
+        or not isinstance(selected, (int, float))
+    ):
+        return None
+    if abs(float(selected) - float(current)) <= abs(float(previous_value) - float(current)):
+        return None
+    farther = _refined_numeric_value(current, selected, 1.5)
+    if farther is None:
+        return None
+    return ParameterVariant(
+        operation=winner.operation,
+        parameter=winner.parameter,
+        value=farther,
+        current_value=current,
+        rationale=f"{_REFINEMENT_MARKER}: slightly farther in the promising direction",
+    )
+
+
 def refine_parameter_choice(
     variant: ParameterVariant | ParameterBundle,
 ) -> list[ParameterVariant | ParameterBundle]:
@@ -1013,6 +1054,20 @@ def search_configuration_variants(
                     workspace=workspace,
                     source=source,
                 )
+            previous_keep = next(
+                (
+                    row.get("variant")
+                    for row in reversed(trials)
+                    if row.get("stage") == "dev_keep"
+                ),
+                None,
+            )
+            farther = _step_farther(previous_keep, variant)
+            if farther is not None:
+                signature = json.dumps(asdict(farther), sort_keys=True, default=str)
+                if signature not in queued_signatures:
+                    queued_signatures.add(signature)
+                    variants.insert(cursor, farther)
             full.experiment_id = experiment.name
             candidate.behavior_probe = configuration_probe_code(variant.operation)
             patch_path = write_kept_configuration_patch(
