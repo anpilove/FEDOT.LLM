@@ -863,7 +863,10 @@ def test_configuration_search_keeps_the_stronger_later_variant(
     source = _source(tmp_path)
     defaults = source / "fedot/core/repository/data/default_operation_params.json"
     defaults.parent.mkdir(parents=True)
-    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2), encoding="utf-8")
+    defaults.write_text(
+        json.dumps({"note": "header", "rf": {"n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     flow = (
         {
             "operation": "rf",
@@ -918,8 +921,20 @@ def test_configuration_search_keeps_the_stronger_later_variant(
         assert outcome.trials[0]["variant"]["value"] == 2
         assert outcome.trials[1]["variant"]["value"] == 4
         text = (workspace / "kept_configuration.patch").read_text(encoding="utf-8")
+        assert text.endswith("\n")
         assert '"min_samples_leaf": 4' in text
         assert '"min_samples_leaf": 2' not in text
+        copy = tmp_path / "apply"
+        target = copy / "fedot/core/repository/data/default_operation_params.json"
+        target.parent.mkdir(parents=True)
+        target.write_text(defaults.read_text(encoding="utf-8"), encoding="utf-8")
+        applied = subprocess.run(
+            ["git", "apply", "--check", str(workspace / "kept_configuration.patch")],
+            cwd=copy,
+            capture_output=True,
+            text=True,
+        )
+        assert applied.returncode == 0, applied.stderr
     finally:
         if outcome.experiment is not None:
             discard_experiment_checkout(

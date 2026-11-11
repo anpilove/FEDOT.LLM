@@ -86,19 +86,32 @@ class ConfigurationSearchOutcome:
 KEPT_CONFIGURATION_PATCH = "kept_configuration.patch"
 
 
-def write_kept_configuration_patch(workspace: Path, candidate: PatchCandidate) -> Path:
-    """Save the applied default edit outside the experiment checkout."""
+def write_kept_configuration_patch(
+    workspace: Path,
+    candidate: PatchCandidate,
+    *,
+    source: Path,
+    experiment: Path,
+) -> Path:
+    """Save a git-applyable diff of the measured checkout."""
 
     chunks: list[str] = []
     for edit in candidate.edits:
-        chunks.extend(
+        old_path = source / edit.file_path
+        new_path = experiment / edit.file_path
+        old = old_path.read_text(encoding="utf-8") if old_path.is_file() else ""
+        new = new_path.read_text(encoding="utf-8") if new_path.is_file() else ""
+        diff = "".join(
             difflib.unified_diff(
-                edit.old_code.splitlines(keepends=True),
-                edit.new_code.splitlines(keepends=True),
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
                 fromfile=f"a/{edit.file_path}",
                 tofile=f"b/{edit.file_path}",
             )
         )
+        if diff and not diff.endswith("\n"):
+            diff += "\n"
+        chunks.append(diff)
     path = workspace / KEPT_CONFIGURATION_PATCH
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(chunks), encoding="utf-8")
@@ -982,7 +995,12 @@ def search_configuration_variants(
                 )
             full.experiment_id = experiment.name
             candidate.behavior_probe = configuration_probe_code(variant.operation)
-            patch_path = write_kept_configuration_patch(workspace, candidate)
+            patch_path = write_kept_configuration_patch(
+                workspace,
+                candidate,
+                source=source,
+                experiment=experiment,
+            )
             row["stage"] = "dev_keep"
             row["reason"] = full.reason
             row["patch"] = str(patch_path)
