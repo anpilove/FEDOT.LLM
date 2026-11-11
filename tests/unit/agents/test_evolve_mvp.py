@@ -535,6 +535,45 @@ def test_final_split_regression_queues_the_midpoint_of_the_booster_default():
     assert final_split_midpoints([weak], {"xgboost"}) == []
 
 
+def test_below_threshold_neighbor_of_a_final_lift_is_remeasured():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        follows_final_neighbor,
+        remembered_patch_hashes,
+    )
+
+    final = {
+        "stage": "final",
+        "patch_hash": "hash-2",
+        "variant": {"operation": "xgboost", "parameter": "reg_lambda", "value": 2.0},
+        "final_decision": {
+            "regression_deltas": {
+                "xgboost": 0.010926422400953206,
+                "kc2->xgboost": -0.015607886089813783,
+            }
+        },
+    }
+    quick = {
+        "stage": "quick_dev",
+        "patch_hash": "hash-10",
+        "reason": "target_delta 0.0045 below per-task threshold",
+        "variant": {"operation": "xgboost", "parameter": "reg_lambda", "value": 10.0},
+        "quick_decision": {
+            "reason": "target_delta 0.0045 below per-task threshold",
+            "regression_deltas": {
+                "xgboost": 0.004488134246847353,
+                "cancer->xgboost": -0.0034965034965034336,
+                "kc2->xgboost": 0.0005737234652897216,
+            },
+        },
+    }
+    deltas = quick["quick_decision"]["regression_deltas"]
+    assert follows_final_neighbor([final], "xgboost", "reg_lambda", deltas)
+    assert "hash-10" not in remembered_patch_hashes([final, quick])
+    assert "hash-2" in remembered_patch_hashes([final, quick])
+    finished = {**quick, "stage": "final", "reason": "regression kc2->xgboost delta -0.0100"}
+    assert "hash-10" in remembered_patch_hashes([final, quick, finished])
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

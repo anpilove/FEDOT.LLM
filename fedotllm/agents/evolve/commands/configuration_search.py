@@ -410,13 +410,113 @@ def proposal_checkout(source: Path, workspace: Path, patch: Path) -> Path:
     return dest
 
 
-def remembered_patch_hashes(trials: list[dict]) -> set[str]:
-    """Patch hashes that already consumed a measurement, not a dedup note."""
+def follows_final_neighbor(
+    trials: list[dict],
+    operation: str,
+    parameter: str,
+    deltas: dict,
+) -> bool:
+    """True when this value stays positive on a task a sibling lifted on FINAL.
 
+    ``reg_lambda`` 2 reached +0.0109 on the base ``xgboost`` task at FINAL.
+    ``reg_lambda`` 10 had +0.0045 on that same task at quick DEV and stopped
+    below the 0.01 bar, so FINAL never saw it.
+    """
+
+    lifted: set[str] = set()
+    for row in trials:
+        if row.get("stage") != "final":
+            continue
+        variant = row.get("variant") or {}
+        if not isinstance(variant, dict) or "variants" in variant:
+            continue
+        if variant.get("operation") != operation or variant.get("parameter") != parameter:
+            continue
+        recorded = (row.get("final_decision") or {}).get("regression_deltas") or {}
+        if not isinstance(recorded, dict):
+            continue
+        for task_id, delta in recorded.items():
+            try:
+                if float(delta) >= _SPLIT_LIFT:
+                    lifted.add(str(task_id))
+            except (TypeError, ValueError):
+                continue
+    if not lifted:
+        return False
+    numeric: dict[str, float] = {}
+    for task_id, delta in deltas.items():
+        try:
+            numeric[str(task_id)] = float(delta)
+        except (TypeError, ValueError):
+            return False
+    if any(value <= -_SPLIT_LIFT for value in numeric.values()):
+        return False
+    return any(numeric.get(task_id, 0.0) > 0 for task_id in lifted)
+
+
+def _promotable_quick(row: dict, trials: list[dict]) -> bool:
+    if row.get("stage") != "quick_dev":
+        return False
+    reason = str(row.get("reason") or (row.get("quick_decision") or {}).get("reason") or "")
+    if not reason.startswith("target_delta"):
+        return False
+    variant = row.get("variant") or {}
+    if not isinstance(variant, dict) or "variants" in variant:
+        return False
+    deltas = (row.get("quick_decision") or {}).get("regression_deltas") or {}
+    if not isinstance(deltas, dict):
+        return False
+    return follows_final_neighbor(
+        trials,
+        str(variant.get("operation") or ""),
+        str(variant.get("parameter") or ""),
+        deltas,
+    )
+
+
+def promote_final_neighbor(
+    decision: Decision,
+    variant: ParameterVariant | ParameterBundle,
+    trials: list[dict],
+) -> Decision:
+    """Keep measuring a below-threshold value that matches a FINAL lift."""
+
+    if decision.keep or isinstance(variant, ParameterBundle):
+        return decision
+    if not str(decision.reason).startswith("target_delta"):
+        return decision
+    if not follows_final_neighbor(
+        trials,
+        variant.operation,
+        variant.parameter,
+        decision.regression_deltas,
+    ):
+        return decision
+    return Decision(
+        True,
+        "final_neighbor",
+        decision.target_delta,
+        regression_deltas=dict(decision.regression_deltas),
+    )
+
+
+def remembered_patch_hashes(trials: list[dict]) -> set[str]:
+    """Patch hashes that already consumed a measurement, not a dedup note.
+
+    A quick drop just under the threshold stays eligible when a sibling value
+    of the same parameter already cleared 0.01 on FINAL for one of its tasks.
+    A later stage of that same hash is final and stays skipped.
+    """
+
+    latest: dict[str, dict] = {}
+    for row in trials:
+        patch_hash = str(row.get("patch_hash") or "")
+        if patch_hash and row.get("stage") not in _NOT_MEASURED:
+            latest[patch_hash] = row
     return {
-        str(row["patch_hash"])
-        for row in trials
-        if row.get("patch_hash") and row.get("stage") not in _NOT_MEASURED
+        patch_hash
+        for patch_hash, row in latest.items()
+        if not _promotable_quick(row, trials)
     }
 
 
@@ -1843,6 +1943,10 @@ def search_configuration_variants(
                 )
                 row["quick_decision"] = asdict(quick)
                 row["reason"] = quick.reason
+            quick = promote_final_neighbor(quick, variant, prior_trials or [])
+            if quick.reason == "final_neighbor":
+                row["quick_decision"] = asdict(quick)
+                row["reason"] = quick.reason
             if not quick.keep:
                 last = quick
                 trials.append(row)
@@ -1890,6 +1994,10 @@ def search_configuration_variants(
             row["stage"] = "full_dev"
             row["full_decision"] = asdict(full)
             row["full_scores"] = _score_rows(full_patched)
+            full = promote_final_neighbor(full, variant, prior_trials or [])
+            if full.reason == "final_neighbor":
+                row["full_decision"] = asdict(full)
+                row["reason"] = full.reason
             if not full.keep:
                 last = full
                 trials.append(row)
@@ -1922,6 +2030,10 @@ def search_configuration_variants(
             row["stage"] = "shadow_dev"
             row["shadow_decision"] = asdict(shadow)
             row["shadow_scores"] = _score_rows(shadow_patched)
+            shadow = promote_final_neighbor(shadow, variant, prior_trials or [])
+            if shadow.reason == "final_neighbor":
+                row["shadow_decision"] = asdict(shadow)
+                row["reason"] = shadow.reason
             if not shadow.keep:
                 last = shadow
                 row["reason"] = shadow.reason
