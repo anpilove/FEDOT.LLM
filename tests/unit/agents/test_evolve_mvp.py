@@ -542,6 +542,51 @@ def test_generic_lgbm_surface_reaches_regularization_and_capacity_variants():
     assert ("num_leaves", 15) in deep_pairs
 
 
+def test_broad_surface_tries_each_parameter_before_a_second_scale():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        propose_parameter_variants,
+        spread_first_parameter_values,
+    )
+
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"max_depth": -1},
+            "supported_parameters": [
+                "min_child_samples",
+                "reg_alpha",
+                "reg_lambda",
+                "max_depth",
+                "learning_rate",
+                "num_leaves",
+            ],
+            "estimator_defaults": {
+                "min_child_samples": 20,
+                "reg_alpha": 0.0,
+                "reg_lambda": 0.0,
+                "max_depth": -1,
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+            },
+        },
+    )
+    variants = propose_parameter_variants(
+        {"lgbm": ("lgbm",)},
+        {"lgbm": ScoreResult("lgbm", "ok", 0.8, dataflow=flow)},
+        problem_by_task={"lgbm": "classification"},
+        max_variants_per_operation=20,
+        max_total=20,
+    )
+    params = [row.parameter for row in spread_first_parameter_values(variants)]
+    second_leaf_support = params.index(
+        "min_child_samples", params.index("min_child_samples") + 1
+    )
+    assert params.index("max_depth") < second_leaf_support
+    assert params.index("learning_rate") < second_leaf_support
+    assert params.index("reg_alpha") < second_leaf_support
+
+
 def test_generic_decomposition_surface_proposes_existing_solver_alternatives():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

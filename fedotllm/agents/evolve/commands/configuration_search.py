@@ -677,6 +677,31 @@ def propose_parameter_bundles(
     return bundles
 
 
+def spread_first_parameter_values(
+    variants: list[ParameterVariant | ParameterBundle],
+) -> list[ParameterVariant | ParameterBundle]:
+    """Give every parameter one trial before a second scale of an earlier one.
+
+    A broad boosting surface otherwise spends the whole budget on two scales of
+    the first knob. The second scale stays queued, after the other parameters.
+    """
+
+    first: list[ParameterVariant | ParameterBundle] = []
+    rest: list[ParameterVariant | ParameterBundle] = []
+    seen: set[tuple[str, str]] = set()
+    for variant in variants:
+        if isinstance(variant, ParameterBundle):
+            first.append(variant)
+            continue
+        key = (variant.operation, variant.parameter)
+        if key in seen:
+            rest.append(variant)
+        else:
+            seen.add(key)
+            first.append(variant)
+    return [*first, *rest]
+
+
 def schedule_parameter_variants(
     singles: list[ParameterVariant],
     bundles: list[ParameterBundle],
@@ -1076,13 +1101,15 @@ def search_configuration_variants(
         max_variants_per_operation=max(16, max_trials * 4),
         max_total=max(16, max_trials * max(2, max_operations)),
     )
-    variants: list[ParameterVariant | ParameterBundle] = [
-        *refinements_from_trials(prior_trials or []),
-        *schedule_parameter_variants(
-            single_variants,
-            propose_parameter_bundles(single_variants),
-        ),
-    ]
+    variants = spread_first_parameter_values(
+        [
+            *refinements_from_trials(prior_trials or []),
+            *schedule_parameter_variants(
+                single_variants,
+                propose_parameter_bundles(single_variants),
+            ),
+        ]
+    )
     proposal = proposal_source or source
     locked = parameters_already_in_defaults(source, proposal)
     skipped = set(skip_patch_hashes or ())
