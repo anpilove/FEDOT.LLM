@@ -2144,6 +2144,57 @@ def test_measured_second_scale_moves_the_hunt_to_catboost(tmp_path: Path):
     assert still_lgbm["operation"] == "lgbm"
 
 
+def test_exhausted_catboost_moves_the_hunt_to_xgboost(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import hunt_surface
+
+    work = tmp_path / "work"
+    previous = work / "runs" / "previous"
+    previous.mkdir(parents=True)
+    patch = previous / "kept_configuration.patch"
+    patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        {
+            "stage": "quick_dev",
+            "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.01},
+        },
+        {
+            "stage": "quick_dev",
+            "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.1},
+        },
+        {
+            "stage": "final",
+            "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.015},
+        },
+        {
+            "stage": "final",
+            "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.06},
+        },
+    ]
+    (previous / "configuration_trials.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    surface = hunt_surface(work)
+    assert surface["operation"] == "xgboost"
+    assert surface["lift"] == ("xgboost", "cancer->xgboost", "kc2->xgboost")
+    assert "catboost" in surface["protect"]
+    assert "lgbm" in surface["protect"]
+    assert "rf" in surface["protect"]
+
+
 def test_hunt_materializes_the_improved_fedot_tree(tmp_path: Path):
     import difflib
 
