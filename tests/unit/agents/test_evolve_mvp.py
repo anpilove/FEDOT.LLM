@@ -1061,6 +1061,19 @@ def test_configuration_search_measures_the_next_parameter_and_keeps_the_better(
             )
 
 
+def test_final_target_delta_beats_a_higher_dev_default():
+    from fedotllm.agents.evolve.commands.configuration_search import choose_final_keep
+
+    finals = [
+        Decision(True, "keep", 0.0170),
+        Decision(True, "keep", 0.0249),
+        Decision(True, "keep", 0.0198),
+    ]
+    assert choose_final_keep(finals) == 1
+    assert choose_final_keep([Decision(False, "regression rf", 0.01), Decision(True, "keep", 0.002)]) == 1
+    assert choose_final_keep([Decision(False, "regression rf", -0.02)]) is None
+
+
 def test_configuration_search_durable_dedup_does_not_consume_new_trial_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

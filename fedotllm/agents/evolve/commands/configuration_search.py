@@ -81,9 +81,40 @@ class ConfigurationSearchOutcome:
     behavior_probe: dict = field(default_factory=dict)
     trials: list[dict] = field(default_factory=list)
     patch_path: Path | None = None
+    dev_keeps: list[DevKeep] = field(default_factory=list)
+
+
+@dataclass
+class DevKeep:
+    candidate: PatchCandidate
+    experiment: Path
+    decision: Decision
+    tests: TestResult | None
+    behavior_probe: dict
+    patch_path: Path | None
+    variant: dict
 
 
 KEPT_CONFIGURATION_PATCH = "kept_configuration.patch"
+
+
+def choose_final_keep(finals: list[Decision]) -> int | None:
+    """Index of the passing FINAL with the largest target delta."""
+
+    chosen: int | None = None
+    for index, decision in enumerate(finals):
+        if not decision.keep:
+            continue
+        if chosen is None:
+            chosen = index
+            continue
+        current = finals[chosen].target_delta
+        candidate = decision.target_delta
+        if candidate is None:
+            continue
+        if current is None or candidate > current:
+            chosen = index
+    return chosen
 
 
 def measured_trial_rows(trials: list[dict]) -> list[dict]:
@@ -758,6 +789,7 @@ def search_configuration_variants(
     max_trials: int = 6,
     max_operations: int = 3,
     dev_seed: int = 42,
+    retain_dev_keeps: bool = False,
 ) -> ConfigurationSearchOutcome:
     """Try bounded generic defaults; return only a full-DEV/test-gated winner.
 
@@ -818,6 +850,7 @@ def search_configuration_variants(
     skipped = set(skip_patch_hashes or ())
     trials: list[dict] = []
     best: ConfigurationSearchOutcome | None = None
+    retained: list[DevKeep] = []
     full_ids = tuple(dict.fromkeys((*lift_ids, *protect_ids)))
     last = Decision(False, "no_configuration_keep", None)
     evaluated_trials = 0
@@ -1048,7 +1081,11 @@ def search_configuration_variants(
                 append_journal(workspace / "configuration_trials.jsonl", row)
                 continue
 
-            if best is not None and best.experiment is not None:
+            if (
+                not retain_dev_keeps
+                and best is not None
+                and best.experiment is not None
+            ):
                 discard_experiment_checkout(
                     best.experiment,
                     workspace=workspace,
@@ -1081,6 +1118,18 @@ def search_configuration_variants(
             row["patch"] = str(patch_path)
             trials.append(row)
             append_journal(workspace / "configuration_trials.jsonl", row)
+            if retain_dev_keeps:
+                retained.append(
+                    DevKeep(
+                        candidate=candidate,
+                        experiment=experiment,
+                        decision=full,
+                        tests=after_tests,
+                        behavior_probe=probe,
+                        patch_path=patch_path,
+                        variant=asdict(variant),
+                    )
+                )
             best = ConfigurationSearchOutcome(
                 candidate=candidate,
                 experiment=experiment,
@@ -1090,6 +1139,7 @@ def search_configuration_variants(
                 behavior_probe=probe,
                 trials=trials,
                 patch_path=patch_path,
+                dev_keeps=retained,
             )
             keep_experiment = True
             last = full
