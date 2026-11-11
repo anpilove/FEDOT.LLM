@@ -412,6 +412,18 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_workspace(p, "/tmp/evolve-agent-recall")
     p.add_argument("--no-llm", action="store_true")
 
+    p = sub.add_parser(
+        "early-screen",
+        help="Offline screen of archived quality pairs. No FEDOT fit and no LLM",
+    )
+    p.add_argument("--pairs", type=Path, required=True, help="JSON object with a pairs list")
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Also write the JSON report to this path",
+    )
+
     p = sub.add_parser("repair", help="Phase 2: oracle-location fixer.")
     _add_fedot(p)
     _add_presets(p)
@@ -752,6 +764,22 @@ def _cmd_recall(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     return 0
 
 
+def _cmd_early_screen(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from fedotllm.agents.evolve.evaluation.early_screen import load_pair_archive, screen_pair_archive
+    from fedotllm.agents.evolve.evaluation.quality_registry import load_quality_registry
+
+    try:
+        pairs = load_pair_archive(args.pairs)
+        report = screen_pair_archive(pairs, load_quality_registry().datasets)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        parser.error(str(exc))
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    _print_json(report)
+    return 0
+
+
 def _cmd_repair(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from fedotllm.agents.evolve.commands.repair import (
         gate_saved_repairs,
@@ -993,6 +1021,7 @@ HANDLERS: dict[str, Handler] = {
     "replay": _cmd_replay,
     "noise": _cmd_noise,
     "recall": _cmd_recall,
+    "early-screen": _cmd_early_screen,
     "repair": _cmd_repair,
     "run": _cmd_campaign,
     "continue": _cmd_campaign,
