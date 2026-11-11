@@ -471,6 +471,33 @@ def test_unset_xgboost_learning_rate_starts_from_the_booster_default():
     assert generic_values("learning_rate", None, classification=True, operation="lgbm") == []
 
 
+def test_historical_refinement_stays_on_the_lift_operation():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        refinements_for_operations,
+    )
+
+    trials = [
+        {
+            "stage": "quick_dev",
+            "reason": "target_delta 0.0063 below per-task threshold",
+            "quick_decision": {
+                "target_delta": 0.0063,
+                "reason": "target_delta 0.0063 below per-task threshold",
+            },
+            "variant": {
+                "operation": "catboost",
+                "parameter": "learning_rate",
+                "value": 0.015,
+                "current_value": 0.03,
+            },
+        }
+    ]
+    assert refinements_for_operations(trials, {"xgboost"}) == []
+    kept = refinements_for_operations(trials, {"catboost"})
+    assert kept
+    assert kept[0].operation == "catboost"
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

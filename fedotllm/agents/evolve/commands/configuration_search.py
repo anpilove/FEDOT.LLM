@@ -1369,6 +1369,23 @@ def refinements_from_trials(trials: list[dict[str, Any]]) -> list[ParameterVaria
     return out
 
 
+def refinements_for_operations(
+    trials: list[dict[str, Any]],
+    operations: set[str],
+) -> list[ParameterVariant | ParameterBundle]:
+    """Keep historical near-misses on the operation this hunt is measuring.
+
+    A catboost learning-rate refinement otherwise spends a trial during an
+    xgboost hunt.
+    """
+
+    return [
+        variant
+        for variant in refinements_from_trials(trials)
+        if variant.operation in operations
+    ]
+
+
 def _operation_block(text: str, operation: str) -> tuple[str, dict] | None:
     pattern = re.compile(rf'^  "{re.escape(operation)}"\s*:\s*', re.MULTILINE)
     match = pattern.search(text)
@@ -1598,7 +1615,7 @@ def search_configuration_variants(
     variants = defer_bundles_of_measured_values(
         spread_first_parameter_values(
             [
-                *refinements_from_trials(prior_trials or []),
+                *refinements_for_operations(prior_trials or [], lift_operations),
                 *schedule_parameter_variants(
                     single_variants,
                     propose_parameter_bundles(single_variants),
