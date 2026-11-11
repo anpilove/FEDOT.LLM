@@ -57,9 +57,15 @@ A doctor run on pinned commit `8990f28b0664c99f7eb2fddcee3931151fe16e79` failed 
 
 The configuration benchmark's behavior probe on pinned FEDOT `8990f28` exited on both sides with `EVOLVE_PREFLIGHT` and `ModuleNotFoundError: No module named 'dask'`. That pair was labeled `invalid` / `inconclusive_invalid_probe`, so the campaign would spend the next revision rewriting a probe that never ran. The same pair is now `infrastructure` / `environment_import_failed`. The campaign records `behavior_probe_infrastructure` and stops instead of asking for a new probe. A one-sided probe failure stays `invalid`.
 
+## Configuration search proposes without a model key
+
+`dask-ml==2024.4.4` is a project dependency so `uv run` can import pinned FEDOT `8990f28`. That release imports `dask_ml` and still runs with scikit-learn 1.3.2. `dask-ml` 2025.1.0 does not. Doctor on this pin now reports `fedot_import.ok=true` and `dask.importable=true`. `return_best` stays missing, so the evaluator remains skipped.
+
+With no `FEDOTLLM_LLM_API_KEY`, `benchmark --component configuration-search` measured `rf`, `cancer`, and `kc2`, wrote `min_samples_leaf` 1 -> 2 into the experiment copy of `default_operation_params.json`, and saw the probe change to `{"min_samples_leaf": 2, "n_jobs": 1}`. DEV target_delta was 0.0172 (`kc2` +0.0172, `rf` +0.0050, `cancer` 0). FINAL target_delta was 0.0170 (`rf` +0.0170, `kc2` +0.0011, `cancer` -0.0017). The benchmark then discarded the experiment checkout. This is not a 40-dataset quality KEEP, and `run` / `hunt` still do not invent a source patch without `FEDOTLLM_LLM_API_KEY`.
+
 ## Not claimed
 
-Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only.
+Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only. The three-task configuration keep above is not that registry KEEP.
 
 ## Regression command
 

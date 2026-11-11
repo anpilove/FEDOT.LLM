@@ -285,11 +285,21 @@ def test_doctor_names_the_checkout_import_error(tmp_path: Path, monkeypatch):
     assert checks["evaluator"]["reason"] == "preflight_failed"
 
 
-def test_doctor_rejects_a_dask_pin_when_dask_is_not_installed(
+def test_doctor_rejects_a_dask_pin_when_the_worker_cannot_import_dask(
     tmp_path: Path, monkeypatch
 ):
     pytest.importorskip("importlib")
     source = _package(tmp_path / "FEDOT", API, extra="import dask\n")
+    hidden = (
+        "import sys\n"
+        "from pathlib import Path as _Path\n"
+        "sys.path[:] = [item for item in sys.path "
+        "if not (_Path(item) / 'dask').exists()]\n"
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.PREFLIGHT_SNIPPET",
+        hidden + PREFLIGHT_SNIPPET,
+    )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.commands.doctor.run_stock",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("evaluator ran")),
