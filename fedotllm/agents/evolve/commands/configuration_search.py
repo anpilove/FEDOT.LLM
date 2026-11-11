@@ -1454,8 +1454,20 @@ def search_configuration_variants(
         max_trials=max_trials,
         max_operations=max_operations,
     )
+    lift_operations = {
+        operation
+        for task_id in lift_ids
+        for operation in operation_hints.get(task_id, ())
+    }
+    proposal_hints = {
+        task_id: tuple(
+            operation for operation in operations if operation in lift_operations
+        )
+        for task_id, operations in operation_hints.items()
+        if any(operation in lift_operations for operation in operations)
+    }
     single_variants = propose_parameter_variants(
-        operation_hints,
+        proposal_hints,
         stock,
         problem_by_task=problem_by_task,
         max_operations=max_operations,

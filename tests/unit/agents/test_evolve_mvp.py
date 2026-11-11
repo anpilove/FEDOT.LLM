@@ -635,6 +635,91 @@ def test_variant_budget_includes_the_first_value_of_extra_trees():
     assert ("extra_trees", True) in [(row.parameter, row.value) for row in variants]
 
 
+def test_lift_hunt_does_not_spend_a_trial_on_a_protected_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterVariant,
+        candidate_for_variant,
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps({"lgbm": {"learning_rate": 0.1}, "rf": {"n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    source_hash = source_fingerprint(source)
+    skipped = set()
+    for value in (0.05, 0.2):
+        candidate = candidate_for_variant(
+            source,
+            ParameterVariant("lgbm", "learning_rate", value, 0.1, "already tried"),
+        )
+        assert candidate is not None
+        skipped.add(normalized_patch_hash(candidate, source_hash))
+    lgbm_flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"learning_rate": 0.1},
+            "supported_parameters": ["learning_rate"],
+            "estimator_defaults": {"learning_rate": 0.1},
+        },
+    )
+    rf_flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_split"],
+            "estimator_defaults": {"min_samples_split": 2},
+        },
+    )
+    stock = {
+        "lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=lgbm_flow),
+        "rf": ScoreResult("rf", "ok", 0.80, dataflow=rf_flow),
+    }
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.90) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(judge, "measure_stock", lambda task_ids, **_kwargs: {
+        task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+    })
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="lift-only",
+        source_hash=source_hash,
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",), "rf": ("rf",)},
+        problem_by_task={"lgbm": "classification", "rf": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm", "rf"),
+        baseline_tests=TestResult("passed", 0),
+        skip_patch_hashes=skipped,
+        max_trials=1,
+    )
+    try:
+        assert [row["variant"]["operation"] for row in outcome.trials] == ["lgbm", "lgbm"]
+        assert all(row["stage"] == "dedup" for row in outcome.trials)
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
 def test_weak_near_miss_does_not_skip_the_next_parameter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
