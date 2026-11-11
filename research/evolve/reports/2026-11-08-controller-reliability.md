@@ -41,6 +41,10 @@ identical: True
 
 The control arm of the fixture smoke records control_score_pairs=3 and control_score_abs_delta=0.
 
+## Missing requested dataset
+
+GOLEM `GraphVerifier.verify` returns false when a rule returns `False` or raises `ValueError`. A rule that returns `None` does not reject the graph. Any other exception leaves `verify`. `compare_pack` used to raise `KeyError` when a requested lift or protect id was absent from the stock or patch map, which stopped the campaign before the next hypothesis. That gap is now `keep=False`, `infrastructure_error=True`, reason `missing_measurement <task_id>`. A measured gain on another dataset in the same pack does not KEEP.
+
 ## Not claimed
 
 Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only.
@@ -48,7 +52,7 @@ Full OpenML registry KEEP was not run. Identical smoke repeats and reserved spli
 ## Regression command
 
 ```
-uv run pytest -q tests/unit/agents/test_evolve_runtime_contract.py tests/unit/agents/test_evolve_return_best_policy.py tests/unit/agents/test_evolve_worker_invocation_protocol.py tests/unit/agents/test_evolve_quality_worker_diagnostics.py tests/unit/agents/test_evolve_controller_smoke.py tests/unit/agents/test_evolve_doctor_preflight.py tests/unit/agents/test_evolve_quality_cache_policy.py tests/unit/agents/test_evolve_mvp.py::test_dev_final_indices_are_disjoint_and_repeatable tests/unit/agents/test_evolve_quality_reliability.py tests/unit/agents/test_evolve_budget_retry_review_fixes.py tests/unit/agents/test_evolve_invalid_alignment.py tests/unit/agents/test_evolve_compare_invalid.py tests/unit/agents/test_evolve_transfer.py
+uv run pytest -q tests/unit/agents/test_evolve_runtime_contract.py tests/unit/agents/test_evolve_return_best_policy.py tests/unit/agents/test_evolve_worker_invocation_protocol.py tests/unit/agents/test_evolve_quality_worker_diagnostics.py tests/unit/agents/test_evolve_controller_smoke.py tests/unit/agents/test_evolve_doctor_preflight.py tests/unit/agents/test_evolve_quality_cache_policy.py tests/unit/agents/test_evolve_mvp.py::test_dev_final_indices_are_disjoint_and_repeatable tests/unit/agents/test_evolve_quality_reliability.py tests/unit/agents/test_evolve_budget_retry_review_fixes.py tests/unit/agents/test_evolve_invalid_alignment.py tests/unit/agents/test_evolve_compare_invalid.py tests/unit/agents/test_evolve_transfer.py tests/unit/agents/test_evolve_agent.py::test_compare_pack_keep_and_protect tests/unit/agents/test_evolve_agent.py::test_compare_pack_uses_per_task_rmse_threshold tests/unit/agents/test_evolve_agent.py::test_compare_pack_distinguishes_small_metric_signal_from_practical_keep tests/unit/agents/test_evolve_audit.py::test_nonfinite_protect_score_cannot_pass tests/unit/agents/test_evolve_audit.py::test_scoreboard_preserves_small_relative_keep_and_last_drop
 ```
 
-Result: 235 passed in 11.74s.
+Result: 263 passed in 12.91s.
