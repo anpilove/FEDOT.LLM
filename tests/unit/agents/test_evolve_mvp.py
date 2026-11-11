@@ -1165,6 +1165,97 @@ def test_bundle_of_measured_values_waits_behind_an_unseen_parameter(
             discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
 
 
+def test_zero_delta_parameter_does_not_spend_a_bundle_trial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps(
+            {
+                "lgbm": {
+                    "colsample_bytree": 1.0,
+                    "subsample": 1.0,
+                    "bagging_fraction": 0.85,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {
+                "colsample_bytree": 1.0,
+                "subsample": 1.0,
+                "bagging_fraction": 0.85,
+            },
+            "supported_parameters": [
+                "colsample_bytree",
+                "subsample",
+                "bagging_fraction",
+            ],
+            "estimator_defaults": {
+                "colsample_bytree": 1.0,
+                "subsample": 1.0,
+                "bagging_fraction": 0.85,
+            },
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        params = json.loads((checkout / defaults_rel).read_text(encoding="utf-8"))["lgbm"]
+        score = 0.90 if params.get("bagging_fraction") == 0.7 else 0.80
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="inert-bundle",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=3,
+    )
+    try:
+        assert any(row.get("stage") == "inert_part" for row in outcome.trials)
+        assert any(
+            row.get("variant", {}).get("parameter") == "bagging_fraction"
+            and row.get("stage") != "dedup"
+            for row in outcome.trials
+        )
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
 def test_configuration_candidate_adds_missing_operation_default(tmp_path: Path):
     from fedotllm.agents.evolve.commands.configuration_search import (
         ParameterVariant,

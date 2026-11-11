@@ -1008,6 +1008,45 @@ def defer_bundles_of_measured_values(
     return [*leading, *deferred]
 
 
+def _exact_zero(value: Any) -> bool:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    return numeric == 0.0
+
+
+def inert_parameter_values(trials: list[dict[str, Any]]) -> set[tuple[str, str, str]]:
+    """Single values that left every measured task unchanged."""
+
+    inert: set[tuple[str, str, str]] = set()
+    for row in trials:
+        if row.get("stage") in _NOT_MEASURED:
+            continue
+        payload = row.get("variant")
+        decision = row.get("quick_decision")
+        if (
+            not isinstance(payload, dict)
+            or isinstance(payload.get("variants"), list)
+            or "parameter" not in payload
+            or not isinstance(decision, dict)
+        ):
+            continue
+        deltas = decision.get("regression_deltas") or {}
+        if not deltas or not _exact_zero(decision.get("target_delta")):
+            continue
+        if not all(_exact_zero(delta) for delta in deltas.values()):
+            continue
+        inert.add(
+            (
+                str(payload.get("operation") or ""),
+                str(payload["parameter"]),
+                _value_key(payload.get("value")),
+            )
+        )
+    return inert
+
+
 def schedule_parameter_variants(
     singles: list[ParameterVariant],
     bundles: list[ParameterBundle],
@@ -1425,6 +1464,7 @@ def search_configuration_variants(
     full_ids = tuple(dict.fromkeys((*lift_ids, *protect_ids)))
     last = Decision(False, "no_configuration_keep", None)
     evaluated_trials = 0
+    inert = inert_parameter_values(prior_trials or [])
     queued_signatures = {
         json.dumps(asdict(variant), sort_keys=True, default=str)
         for variant in variants
@@ -1464,6 +1504,22 @@ def search_configuration_variants(
                 "patch_hash": patch_hash,
                 "stage": "dedup",
                 "reason": "previously_evaluated_patch",
+            }
+            trials.append(row)
+            append_journal(workspace / "configuration_trials.jsonl", row)
+            continue
+        if isinstance(variant, ParameterBundle) and any(
+            (part.operation, part.parameter, _value_key(part.value)) in inert
+            for part in variant.variants
+        ):
+            row = {
+                "event": "configuration_trial",
+                "index": index,
+                "variant": asdict(variant),
+                "candidate": candidate.candidate_id,
+                "patch_hash": patch_hash,
+                "stage": "inert_part",
+                "reason": "paired with a parameter value that did not move any task",
             }
             trials.append(row)
             append_journal(workspace / "configuration_trials.jsonl", row)
@@ -1541,6 +1597,17 @@ def search_configuration_variants(
                 last = quick
                 trials.append(row)
                 append_journal(workspace / "configuration_trials.jsonl", row)
+                if (
+                    not isinstance(variant, ParameterBundle)
+                    and quick.regression_deltas
+                    and _exact_zero(quick.target_delta)
+                    and all(
+                        _exact_zero(delta) for delta in quick.regression_deltas.values()
+                    )
+                ):
+                    inert.add(
+                        (variant.operation, variant.parameter, _value_key(variant.value))
+                    )
                 if (
                     quick.target_delta is not None
                     and quick.target_delta > 0
