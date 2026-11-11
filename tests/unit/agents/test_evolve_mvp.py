@@ -1061,6 +1061,61 @@ def test_configuration_search_measures_the_next_parameter_and_keeps_the_better(
             )
 
 
+def test_run_without_a_model_key_applies_the_measured_configuration(tmp_path, monkeypatch, capsys):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    seen = {}
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2")):
+        seen["tasks"] = tasks
+        seen["workspace"] = workspace
+        patch = Path(workspace) / "kept_configuration.patch"
+        patch.write_text(
+            "diff --git a/fedot/core/repository/data/default_operation_params.json\n",
+            encoding="utf-8",
+        )
+        return {
+            "ok": True,
+            "summary": {
+                "change": "rf min_samples_leaf 1 -> 4",
+                "final_keep": True,
+                "patch": str(patch),
+            },
+            "checks": {"full_dev_keep": True, "final_keep": True},
+            "dev": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.0232,
+                "regression_deltas": {"rf": 0.0105},
+            },
+            "final": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.0249,
+                "regression_deltas": {"rf": 0.0249},
+            },
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "rf,cancer"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["keep_final"] is True
+    assert payload["change"] == "rf min_samples_leaf 1 -> 4"
+    assert Path(payload["patch"]).is_file()
+    assert seen["tasks"] == ("rf", "cancer")
+    assert "proposing measured configuration defaults" in captured.err
+
+
 def test_final_target_delta_beats_a_higher_dev_default():
     from fedotllm.agents.evolve.commands.configuration_search import choose_final_keep
 

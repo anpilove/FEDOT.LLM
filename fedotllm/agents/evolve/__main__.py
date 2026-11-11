@@ -858,6 +858,73 @@ def _resume_branch(
     return branch, feedback
 
 
+def _cmd_keyless_configuration(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> int:
+    """Propose and apply a measured default when no model key is available."""
+
+    from fedotllm.agents.evolve.benchmark.runner import benchmark_configuration_search
+    from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
+    from fedotllm.agents.evolve.types import Decision
+
+    _validate_campaign_args(args, parser)
+    try:
+        requested = _task_ids(args.lift_tasks)
+    except ValueError as exc:
+        parser.error(str(exc))
+    tasks = requested or ("rf", "cancer", "kc2")
+    checkout = resolve_fedot_src()
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    workspace_root = args.workspace.resolve()
+    run_workspace = workspace_root / "runs" / run_id
+    run_workspace.mkdir(parents=True, exist_ok=False)
+    _write_json(
+        workspace_root / "latest_run.json",
+        {"run_id": run_id, "workspace": str(run_workspace), "mode": "keyless_configuration"},
+    )
+    result = benchmark_configuration_search(checkout, run_workspace, tasks=tasks)
+    summary = result.get("summary") or {}
+    checks = result.get("checks") or {}
+    if "final" in result:
+        final = result["final"]
+        decision = Decision(
+            keep=bool(final.get("keep")),
+            reason=str(final.get("reason") or "no_configuration_keep"),
+            target_delta=final.get("target_delta"),
+            regression_deltas=final.get("regression_deltas") or {},
+            dev_keep=bool(checks.get("full_dev_keep")),
+            final_keep=bool(summary.get("final_keep")),
+            stage="final",
+        )
+    else:
+        raw = result.get("decision") or {}
+        decision = Decision(
+            keep=bool(raw.get("keep")),
+            reason=str(raw.get("reason") or "no_configuration_keep"),
+            target_delta=raw.get("target_delta"),
+            regression_deltas=raw.get("regression_deltas") or {},
+            stage=str(raw.get("stage") or "dev"),
+            infrastructure_error=bool(raw.get("infrastructure_error")),
+        )
+    _write_json(run_workspace / "keyless_configuration.json", result)
+    _print_json(
+        {
+            "keep_dev": decision.dev_keep,
+            "keep_final": decision.final_keep,
+            "keep_correctness": decision.correctness_keep,
+            "stage": decision.stage,
+            "reason": decision.reason,
+            "target_delta": decision.target_delta,
+            "regression_deltas": decision.regression_deltas,
+            "workspace": str(run_workspace),
+            "change": summary.get("change"),
+            "patch": summary.get("patch") or "",
+            "tasks": list(tasks),
+        }
+    )
+    return _decision_exit_code(decision)
+
+
 def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """``run`` and ``continue``: one hunt campaign, optionally resuming a branch."""
     from fedotllm.agents.evolve.controller.campaign import run_once
@@ -875,6 +942,12 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         os.environ["EVOLVE_AGENT_COVERAGE_TASKS"] = str(args.coverage_tasks)
 
     scout, verifier, fixer = _stage_inferences(args.presets)
+    if args.cmd == "run" and (scout is None or fixer is None):
+        print(
+            "FEDOTLLM_LLM_API_KEY is not set; proposing measured configuration defaults",
+            file=sys.stderr,
+        )
+        return _cmd_keyless_configuration(args, parser)
     if scout is None or fixer is None:
         print("FEDOTLLM_LLM_API_KEY is not set; propose_patch will no-op", file=sys.stderr)
     checkout = resolve_fedot_src()

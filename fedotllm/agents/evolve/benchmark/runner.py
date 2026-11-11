@@ -604,7 +604,11 @@ def benchmark_configuration(source: Path, workspace: Path) -> dict:
         )
 
 
-def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
+def benchmark_configuration_search(
+    source: Path,
+    workspace: Path,
+    tasks: tuple[str, ...] = ("rf", "cancer", "kc2"),
+) -> dict:
     """Prove generic runtime-surface search, without loading a canonical patch."""
 
     from fedotllm.agents.evolve.commands.configuration_search import (
@@ -613,9 +617,12 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
         search_configuration_variants,
         write_kept_configuration_patch,
     )
+    from fedotllm.agents.evolve.evaluation.tasks import load_task
 
-    tasks = ("rf", "cancer", "kc2")
-    operation_hints = {task_id: ("rf",) for task_id in tasks}
+    specs = {task_id: load_task(task_id) for task_id in tasks}
+    operation_hints = {
+        task_id: tuple(spec.nodes) for task_id, spec in specs.items()
+    }
     stock = measure_stock(
         tasks,
         checkout=source,
@@ -631,7 +638,9 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
         source_hash=source_fingerprint(source),
         stock=stock,
         operation_hints=operation_hints,
-        problem_by_task={task_id: "classification" for task_id in tasks},
+        problem_by_task={
+            task_id: spec.problem for task_id, spec in specs.items()
+        },
         lift_ids=tasks,
         protect_ids=tasks,
         baseline_tests=baseline_tests,
