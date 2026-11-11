@@ -437,6 +437,17 @@ def test_generic_configuration_variants_use_runtime_surface_not_case_catalog(
     assert payload["rf"] == {"min_samples_leaf": 2, "n_jobs": 1}
 
 
+def test_unset_depth_is_capped_below_the_xgboost_default():
+    from fedotllm.agents.evolve.commands.configuration_search import generic_values
+
+    unset = generic_values("max_depth", None, classification=True)
+    assert unset
+    assert all(isinstance(value, int) and value < 6 for value, _reason in unset)
+    assert generic_values("max_depth", -1, classification=True) == [
+        (8, "bound model depth to reduce variance")
+    ]
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,

@@ -781,8 +781,11 @@ def generic_values(
             (0.1, "test a stronger sparse-regularization alternative"),
         ]
     if parameter == "max_depth":
-        if current in (None, -1):
+        if current == -1:
             return [(8, "bound model depth to reduce variance")]
+        if current is None:
+            # XGBoost 3 fits depth 6 when the parameter is unset. 8 is deeper.
+            return [(4, "cap an unset depth below the common finite booster default")]
         if isinstance(current, int) and current > 2:
             return [(max(2, current - 2), "slightly reduce depth to test overfitting")]
     if parameter == "min_child_samples" and isinstance(current, int) and current > 1:
