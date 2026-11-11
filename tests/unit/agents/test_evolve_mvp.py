@@ -2332,6 +2332,48 @@ def test_exhausted_catboost_moves_the_hunt_to_xgboost(tmp_path: Path):
     assert "rf" in surface["protect"]
 
 
+def test_xgboost_keep_moves_the_hunt_to_logit(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import hunt_surface
+
+    work = tmp_path / "work"
+    for name, change in (
+        ("rf-keep", "rf min_samples_leaf 1 -> 4"),
+        ("xgboost-keep", "xgboost reg_lambda None -> 10.0"),
+    ):
+        run = work / "runs" / name
+        run.mkdir(parents=True)
+        patch = run / "kept_configuration.patch"
+        patch.write_text(change + "\n", encoding="utf-8")
+        (run / "keyless_configuration.json").write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "change": change,
+                        "final_keep": True,
+                        "final_target_delta": 0.0164,
+                        "patch": str(patch),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+    rows = [
+        {"stage": "quick_dev", "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.01}},
+        {"stage": "quick_dev", "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.1}},
+        {"stage": "quick_dev", "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.015}},
+        {"stage": "quick_dev", "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.06}},
+    ]
+    (work / "runs" / "rf-keep" / "configuration_trials.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    surface = hunt_surface(work)
+    assert surface["operation"] == "logit"
+    assert surface["lift"] == ("logit", "cancer->logit", "kc2->logit")
+    assert "xgboost" in surface["protect"]
+    assert "rf" in surface["protect"]
+
+
 def test_hunt_materializes_the_improved_fedot_tree(tmp_path: Path):
     import difflib
 

@@ -205,6 +205,27 @@ HUNT_SURFACES: tuple[dict[str, tuple[str, ...] | str], ...] = (
             "kc2",
         ),
     },
+    {
+        "operation": "logit",
+        "lift": ("logit", "cancer->logit", "kc2->logit"),
+        "protect": (
+            "logit",
+            "cancer->logit",
+            "kc2->logit",
+            "xgboost",
+            "cancer->xgboost",
+            "kc2->xgboost",
+            "catboost",
+            "cancer->catboost",
+            "kc2->catboost",
+            "lgbm",
+            "cancer->lgbm",
+            "kc2->lgbm",
+            "rf",
+            "cancer",
+            "kc2",
+        ),
+    },
 )
 
 
