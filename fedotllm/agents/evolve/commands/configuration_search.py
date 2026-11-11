@@ -956,6 +956,58 @@ def spread_first_parameter_values(
     return [*first, *rest]
 
 
+def _value_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def measured_parameter_values(trials: list[dict[str, Any]]) -> set[tuple[str, str, str]]:
+    """Values that already consumed a trial, including both sides of a bundle."""
+
+    measured: set[tuple[str, str, str]] = set()
+    for row in trials:
+        if row.get("stage") in _NOT_MEASURED:
+            continue
+        payload = row.get("variant")
+        if not isinstance(payload, dict):
+            continue
+        nested = payload.get("variants")
+        parts = nested if isinstance(nested, list) else [payload]
+        operation = str(payload.get("operation") or "")
+        for part in parts:
+            if not isinstance(part, dict) or "parameter" not in part:
+                continue
+            measured.add(
+                (
+                    str(part.get("operation") or operation),
+                    str(part["parameter"]),
+                    _value_key(part.get("value")),
+                )
+            )
+    return measured
+
+
+def defer_bundles_of_measured_values(
+    variants: list[ParameterVariant | ParameterBundle],
+    measured: set[tuple[str, str, str]],
+) -> list[ParameterVariant | ParameterBundle]:
+    """Keep a pair of already-tried values from blocking an unseen parameter."""
+
+    if not measured:
+        return variants
+    leading: list[ParameterVariant | ParameterBundle] = []
+    deferred: list[ParameterVariant | ParameterBundle] = []
+    for variant in variants:
+        parts = list(variant.variants) if isinstance(variant, ParameterBundle) else []
+        if parts and all(
+            (part.operation, part.parameter, _value_key(part.value)) in measured
+            for part in parts
+        ):
+            deferred.append(variant)
+        else:
+            leading.append(variant)
+    return [*leading, *deferred]
+
+
 def schedule_parameter_variants(
     singles: list[ParameterVariant],
     bundles: list[ParameterBundle],
@@ -1352,14 +1404,17 @@ def search_configuration_variants(
         max_variants_per_operation=max(16, max_trials * 4),
         max_total=max(16, max_trials * max(2, max_operations)),
     )
-    variants = spread_first_parameter_values(
-        [
-            *refinements_from_trials(prior_trials or []),
-            *schedule_parameter_variants(
-                single_variants,
-                propose_parameter_bundles(single_variants),
-            ),
-        ]
+    variants = defer_bundles_of_measured_values(
+        spread_first_parameter_values(
+            [
+                *refinements_from_trials(prior_trials or []),
+                *schedule_parameter_variants(
+                    single_variants,
+                    propose_parameter_bundles(single_variants),
+                ),
+            ]
+        ),
+        measured_parameter_values(prior_trials or []),
     )
     proposal = proposal_source or source
     locked = parameters_already_in_defaults(source, proposal)

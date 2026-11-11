@@ -1053,6 +1053,118 @@ def test_historical_near_miss_waits_behind_an_unmeasured_parameter(
             discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
 
 
+def test_bundle_of_measured_values_waits_behind_an_unseen_parameter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterVariant,
+        candidate_for_variant,
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps(
+            {
+                "lgbm": {
+                    "reg_lambda": 0.0,
+                    "num_leaves": 31,
+                    "bagging_fraction": 0.85,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    regularizer = ParameterVariant("lgbm", "reg_lambda", 0.01, 0.0, "mild L2")
+    leaves = ParameterVariant("lgbm", "num_leaves", 15, 31, "smaller")
+    source_hash = source_fingerprint(source)
+    skipped = {
+        normalized_patch_hash(candidate, source_hash)
+        for candidate in (
+            candidate_for_variant(source, regularizer),
+            candidate_for_variant(source, leaves),
+        )
+        if candidate is not None
+    }
+    assert len(skipped) == 2
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {
+                "reg_lambda": 0.0,
+                "num_leaves": 31,
+                "bagging_fraction": 0.85,
+            },
+            "supported_parameters": ["reg_lambda", "num_leaves", "bagging_fraction"],
+            "estimator_defaults": {
+                "reg_lambda": 0.0,
+                "num_leaves": 31,
+                "bagging_fraction": 0.85,
+            },
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(judge, "measure_stock", lambda task_ids, **_kwargs: stock)
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+
+    def measured_single(parameter: str, value: float | int, current: float | int) -> dict:
+        return {
+            "stage": "quick_dev",
+            "reason": "target_delta 0.0057 below per-task threshold",
+            "variant": {
+                "operation": "lgbm",
+                "parameter": parameter,
+                "value": value,
+                "current_value": current,
+                "rationale": "already measured",
+            },
+        }
+
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="measured-bundle",
+        source_hash=source_hash,
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        skip_patch_hashes=skipped,
+        prior_trials=[
+            measured_single("reg_lambda", 0.01, 0.0),
+            measured_single("num_leaves", 15, 31),
+        ],
+        max_trials=1,
+    )
+    try:
+        measured = [row for row in outcome.trials if row.get("stage") != "dedup"]
+        assert measured[0]["variant"]["parameter"] == "bagging_fraction"
+        assert measured[0]["variant"]["value"] == 0.7
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
 def test_configuration_candidate_adds_missing_operation_default(tmp_path: Path):
     from fedotllm.agents.evolve.commands.configuration_search import (
         ParameterVariant,
