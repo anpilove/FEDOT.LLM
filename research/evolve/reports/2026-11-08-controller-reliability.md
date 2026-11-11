@@ -53,6 +53,10 @@ A doctor run on pinned commit `8990f28b0664c99f7eb2fddcee3931151fe16e79` failed 
 
 `benchmark --component configuration-search` on pinned FEDOT `8990f28` measured `rf`, `cancer`, and `kc2` as `invalid` because the checkout import failed. The search then returned `no_configuration_keep` with `infrastructure_error=false` and no trials. That is now `configuration_stock_unmeasured rf` with `infrastructure_error=true`. A measured stock pack that simply has no tunable surface still ends as `no_configuration_keep`.
 
+## Behavior probe before import
+
+The configuration benchmark's behavior probe on pinned FEDOT `8990f28` exited on both sides with `EVOLVE_PREFLIGHT` and `ModuleNotFoundError: No module named 'dask'`. That pair was labeled `invalid` / `inconclusive_invalid_probe`, so the campaign would spend the next revision rewriting a probe that never ran. The same pair is now `infrastructure` / `environment_import_failed`. The campaign records `behavior_probe_infrastructure` and stops instead of asking for a new probe. A one-sided probe failure stays `invalid`.
+
 ## Not claimed
 
 Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only.

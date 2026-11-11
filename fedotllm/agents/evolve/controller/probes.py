@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Callable
 
-from fedotllm.agents.evolve.types import SnippetResult
+from fedotllm.agents.evolve.types import Decision, SnippetResult
 from fedotllm.agents.evolve.storage.hypothesis import behavior_probe_fingerprint
 
 SnippetRunner = Callable[[Path, str], SnippetResult]
 _OBSERVATION_RE = re.compile(r"^EVOLVE_OBSERVATION=(.*)$", re.MULTILINE)
+_PREFLIGHT_RE = re.compile(r"^EVOLVE_PREFLIGHT (\{.*\})$", re.MULTILINE)
 
 
 def compare_with_prior_probe(source, experiment, code, *, prior_probe, compare_fn):
@@ -30,6 +32,18 @@ def compare_with_prior_probe(source, experiment, code, *, prior_probe, compare_f
         return {**retried, "code": prior_code, "reused_probe_from_candidate": origin,
                 "submitted_probe_result": result}
     return {**result, "prior_probe_attempt": retried, "prior_probe_candidate": origin}
+
+def _preflight_import_error(stdout: str) -> str | None:
+    matches = _PREFLIGHT_RE.findall(stdout or "")
+    if len(matches) != 1:
+        return None
+    try:
+        payload = json.loads(matches[0])
+    except json.JSONDecodeError:
+        return None
+    error = payload.get("import_error") if isinstance(payload, dict) else None
+    return error if isinstance(error, str) and error else None
+
 
 def compare_behavior_probe(
     source: Path,
@@ -71,7 +85,15 @@ def compare_behavior_probe(
 
     stock_row = row(stock)
     patched_row = row(patched)
-    if stock.status == "runtime_error" and "AssertionError" in (stock.stderr or ""):
+    shared_import = _preflight_import_error(stock.stdout or "")
+    if (
+        shared_import
+        and shared_import == _preflight_import_error(patched.stdout or "")
+        and stock_row["observation"] is None
+        and patched_row["observation"] is None
+    ):
+        status = "infrastructure"
+    elif stock.status == "runtime_error" and "AssertionError" in (stock.stderr or ""):
         status = "changed" if (
             patched.status == "ok" and patched_row["observation"] is not None
         ) else "invalid"
@@ -87,6 +109,7 @@ def compare_behavior_probe(
         # Two successful executions with different deterministic observations.
         status = "changed"
     interpretation = {
+        "infrastructure": "environment_import_failed",
         "invalid": "inconclusive_invalid_probe",
         "missing": "inconclusive_invalid_probe",
         "patched_error": "patch_regression",
@@ -98,9 +121,29 @@ def compare_behavior_probe(
         "code": probe,
         "probe_valid": status in {"no_change", "changed"},
         "hypothesis_result": interpretation,
+        "import_error": (shared_import or "") if status == "infrastructure" else "",
         "stock": stock_row,
         "patched": patched_row,
     }
+
+
+def infrastructure_probe_decision(result: dict, *, experiment_id: str = "") -> Decision | None:
+    """Stop the campaign when both checkouts fail before the probe runs."""
+
+    if result.get("status") != "infrastructure":
+        return None
+    error = str(result.get("import_error") or "").strip()
+    reason = "behavior_probe_infrastructure"
+    if error:
+        reason = f"{reason}: {error}"
+    return Decision(
+        False,
+        reason[:500],
+        None,
+        experiment_id=experiment_id,
+        infrastructure_error=True,
+        stage="infrastructure",
+    )
 
 
 def _behavior_probe_blocks_candidate(result: dict) -> bool:

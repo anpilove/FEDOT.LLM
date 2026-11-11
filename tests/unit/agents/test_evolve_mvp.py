@@ -6477,6 +6477,39 @@ def test_behavior_probe_requires_declared_observation_and_real_stock_execution(
     assert result["hypothesis_result"] == "inconclusive_invalid_probe"
 
 
+def test_behavior_probe_shared_import_failure_is_infrastructure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    marker = (
+        'EVOLVE_PREFLIGHT {"dask": false, "import_error": '
+        '"ModuleNotFoundError: No module named \'dask\'"}\n'
+    )
+    monkeypatch.setattr(
+        loop,
+        "run_fedot_snippet",
+        lambda *_a, **_k: SnippetResult(
+            "runtime_error", "probe", stdout=marker, exit_code=1
+        ),
+    )
+
+    result = loop.compare_behavior_probe(
+        tmp_path / "source", tmp_path / "experiment", "print('EVOLVE_OBSERVATION=1')"
+    )
+
+    assert result["status"] == "infrastructure"
+    assert result["probe_valid"] is False
+    assert result["hypothesis_result"] == "environment_import_failed"
+    assert "No module named 'dask'" in result["import_error"]
+    decision = loop.infrastructure_probe_decision(result, experiment_id="exp")
+    assert decision is not None
+    assert decision.infrastructure_error is True
+    assert decision.keep is False
+    assert decision.reason.startswith("behavior_probe_infrastructure")
+
+
 def test_verifier_rejects_model_quality_threshold_as_bug_proof():
     from fedotllm.agents.evolve.agents.verifier import _probe_is_meaningful
 
