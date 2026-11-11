@@ -239,9 +239,12 @@ def test_invalid_limits_are_rejected(kwargs):
 def test_campaign_reserves_correctness_and_repair_calls():
     from fedotllm.agents.evolve.__main__ import _campaign_reserves
 
-    assert _campaign_reserves(
-        40, 12, has_verifier=True, has_fixer=True
-    ) == {"verifier": 3, "fixer": 12}
-    assert _campaign_reserves(
-        4, 12, has_verifier=True, has_fixer=True
-    ) == {"verifier": 3}
+    wide = _campaign_reserves(40, 12, has_verifier=True, has_fixer=True)
+    assert wide == {"verifier": 3, "fixer": 12}
+    assert 40 - sum(wide.values()) >= 6
+    # A ten-query cap still has to finish the catalog turn and one file
+    # decision. Reserving nine of those calls left the live GLM pick at
+    # zero sites after a single successful request.
+    tight = _campaign_reserves(10, 12, has_verifier=True, has_fixer=True)
+    assert 10 - sum(tight.values()) >= 6
+    assert _campaign_reserves(4, 12, has_verifier=True, has_fixer=True) == {}

@@ -134,14 +134,21 @@ def _decision_exit_code(decision) -> int:
     return 0 if decision.dev_keep else 1
 
 
+# Catalog turn plus the five-step file decision (four evidence turns and one
+# pick/skip turn). A tighter cap must not reserve these calls away: the live
+# GLM pick stopped at zero sites after the catalog request because nine of ten
+# queries were held for verifier and fixer.
+DISCOVERY_QUERY_FLOOR = 6
+
+
 def _bounded_fixer_reserve(max_queries: int | None, requested: int) -> int:
-    """Keep repair/probe capacity while always leaving discovery one request."""
+    """Keep repair/probe capacity while leaving discovery a full file decision."""
 
     if requested < 0:
         raise ValueError("--llm-reserve-fixer-queries must be non-negative")
     if max_queries is None:
         return requested
-    return min(requested, max(0, max_queries - 1))
+    return min(requested, max(0, max_queries - DISCOVERY_QUERY_FLOOR))
 
 
 def _campaign_reserves(
@@ -155,7 +162,7 @@ def _campaign_reserves(
 
     if fixer_requested < 0:
         raise ValueError("--llm-reserve-fixer-queries must be non-negative")
-    available = None if max_queries is None else max(0, max_queries - 1)
+    available = None if max_queries is None else max(0, max_queries - DISCOVERY_QUERY_FLOOR)
     verifier = 3 if has_verifier else 0
     if available is not None:
         verifier = min(verifier, available)
