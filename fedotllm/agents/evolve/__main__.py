@@ -95,6 +95,31 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(payload, indent=2, default=str), flush=True)
 
 
+def _run_trial_rows(result: dict) -> list[dict]:
+    """Short trial rows for the command output."""
+
+    rows = []
+    for row in result.get("trials") or []:
+        if not isinstance(row, dict) or row.get("stage") == "dedup":
+            continue
+        variant = row.get("variant") if isinstance(row.get("variant"), dict) else {}
+        nested = None
+        for key in ("final_decision", "shadow_decision", "full_decision", "quick_decision"):
+            if isinstance(row.get(key), dict):
+                nested = row[key]
+                break
+        rows.append(
+            {
+                "operation": variant.get("operation"),
+                "parameter": variant.get("parameter"),
+                "value": variant.get("value"),
+                "stage": row.get("stage"),
+                "reason": row.get("reason") or (nested or {}).get("reason"),
+            }
+        )
+    return rows
+
+
 def _decision_exit_code(decision) -> int:
     if decision.infrastructure_error:
         return EXIT_INFRASTRUCTURE
@@ -951,6 +976,8 @@ def _cmd_keyless_configuration(
             reason=str(raw.get("reason") or "no_configuration_keep"),
             target_delta=raw.get("target_delta"),
             regression_deltas=raw.get("regression_deltas") or {},
+            dev_keep=bool(raw.get("dev_keep")),
+            final_keep=bool(raw.get("final_keep")),
             stage=str(raw.get("stage") or "dev"),
             infrastructure_error=bool(raw.get("infrastructure_error")),
         )
@@ -966,7 +993,22 @@ def _cmd_keyless_configuration(
         weaker = not isinstance(new_delta, (int, float)) or float(new_delta) <= old_delta
         # A smaller lift on a new FEDOT operation is an additional improvement.
         # Only the same operation has to beat the remembered FINAL delta.
-        if not summary.get("final_keep") or (same_operation and weaker):
+        # A run that keeps nothing must not report the older patch as its own keep.
+        if not summary.get("final_keep"):
+            reported_patch = run_workspace / KEPT_CONFIGURATION_PATCH
+            reported_patch.write_text(
+                Path(str(historical["patch"])).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            summary = {
+                **summary,
+                "measured_change": summary.get("change") or decision.reason,
+                "published_change": historical.get("change"),
+                "published_patch": str(reported_patch),
+                "patch": str(reported_patch),
+                "selection": "this run did not keep; the published patch remains",
+            }
+        elif same_operation and weaker:
             reported_patch = run_workspace / KEPT_CONFIGURATION_PATCH
             reported_patch.write_text(
                 Path(str(historical["patch"])).read_text(encoding="utf-8"),
@@ -1019,10 +1061,13 @@ def _cmd_keyless_configuration(
             "workspace": str(run_workspace),
             "change": summary.get("change"),
             "measured_change": summary.get("measured_change"),
+            "published_change": summary.get("published_change"),
+            "published_patch": summary.get("published_patch") or "",
             "selection": summary.get("selection"),
             "patch": summary.get("patch") or "",
             "fedot": improved_fedot,
             "tasks": list(tasks),
+            "trials": _run_trial_rows(result),
             "fedot_operation": reported_operation,
             "skipped_previously_measured": len(skipped),
         }

@@ -2121,6 +2121,74 @@ def test_keyless_run_keeps_the_stronger_remembered_final(tmp_path, monkeypatch, 
     assert Path(payload["patch"]).read_text(encoding="utf-8") == "leaf-4\n"
 
 
+def test_keyless_run_reports_the_hunted_operation_when_nothing_new_is_kept(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    previous = tmp_path / "work" / "runs" / "20261111-230000-xgb"
+    previous.mkdir(parents=True)
+    previous_patch = previous / "kept_configuration.patch"
+    previous_patch.write_text("stacked\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "xgboost reg_lambda None -> 10.0",
+                    "final_keep": True,
+                    "final_target_delta": 0.0164,
+                    "final_task_deltas": {"xgboost": 0.0023, "kc2->xgboost": 0.0164},
+                    "patch": str(previous_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def search(source, workspace, tasks=("logit",), **_kwargs):
+        return {
+            "ok": True,
+            "decision": {
+                "keep": False,
+                "reason": "target_delta 0.0000 below per-task threshold",
+                "target_delta": 0.0,
+                "regression_deltas": {"logit": 0.0},
+            },
+            "trials": [
+                {
+                    "stage": "shadow_dev",
+                    "reason": "regression logit delta -0.0287",
+                    "variant": {
+                        "operation": "logit",
+                        "parameter": "class_weight",
+                        "value": "balanced",
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "logit"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["fedot_operation"] == "logit"
+    assert payload["keep_final"] is False
+    assert payload["reason"] == "target_delta 0.0000 below per-task threshold"
+    assert payload["published_change"] == "xgboost reg_lambda None -> 10.0"
+    assert payload["change"] != "xgboost reg_lambda None -> 10.0"
+    assert Path(payload["published_patch"]).read_text(encoding="utf-8") == "stacked\n"
+    assert payload["trials"][0]["parameter"] == "class_weight"
+    assert payload["trials"][0]["stage"] == "shadow_dev"
+    assert code == 1
+
+
 def test_keyless_hunt_moves_to_the_next_fedot_operation_after_an_rf_keep(
     tmp_path, monkeypatch, capsys
 ):
