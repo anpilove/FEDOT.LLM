@@ -923,6 +923,9 @@ def propose_parameter_bundles(
     return bundles
 
 
+_REFINEMENT_MARKER = "execution-guided refinement"
+
+
 def spread_first_parameter_values(
     variants: list[ParameterVariant | ParameterBundle],
 ) -> list[ParameterVariant | ParameterBundle]:
@@ -930,12 +933,17 @@ def spread_first_parameter_values(
 
     A broad boosting surface otherwise spends the whole budget on two scales of
     the first knob. The second scale stays queued, after the other parameters.
+    A historical near-miss refinement is a second look at a parameter that
+    already had a trial, so it waits with those later scales.
     """
 
     first: list[ParameterVariant | ParameterBundle] = []
     rest: list[ParameterVariant | ParameterBundle] = []
     seen: set[tuple[str, str]] = set()
     for variant in variants:
+        if _REFINEMENT_MARKER in variant.rationale:
+            rest.append(variant)
+            continue
         if isinstance(variant, ParameterBundle):
             first.append(variant)
             continue
@@ -977,9 +985,6 @@ def schedule_parameter_variants(
             pending = [bundle for bundle in pending if bundle not in ready]
     scheduled.extend(pending)
     return scheduled
-
-
-_REFINEMENT_MARKER = "execution-guided refinement"
 
 
 def _refined_numeric_value(
