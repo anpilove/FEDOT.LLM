@@ -831,7 +831,8 @@ def test_configuration_search_requires_quick_full_probe_and_tests(
         assert measured[0] == ("dev", ("rf", "cancer", "kc2"))
         assert measured[1] == ("dev", ("rf", "cancer", "kc2", "catboost"))
         assert measured[2] == ("shadow", ("rf", "cancer", "kc2"))
-        assert outcome.trials[-1]["stage"] == "dev_keep"
+        assert any(row["stage"] == "dev_keep" for row in outcome.trials)
+        assert outcome.trials[-1]["stage"] == "dev_keep_not_better"
         patch = workspace / "kept_configuration.patch"
         assert outcome.patch_path == patch
         assert patch.is_file()
@@ -846,6 +847,84 @@ def test_configuration_search_requires_quick_full_probe_and_tests(
                 source=source,
             )
     assert (workspace / "kept_configuration.patch").is_file()
+
+
+def test_configuration_search_keeps_the_stronger_later_variant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2), encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf"],
+            "estimator_defaults": {"min_samples_leaf": 1},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+
+    def fake_patched(task_ids, **kwargs):
+        text = (
+            Path(kwargs["checkout"])
+            / "fedot/core/repository/data/default_operation_params.json"
+        ).read_text(encoding="utf-8")
+        score = 0.93 if '"min_samples_leaf": 4' in text else 0.85
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", fake_patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(
+        judge, "measure_fedot_tests", lambda *args, **kwargs: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop, "compare_behavior_probe", lambda *args, **kwargs: {"status": "changed"}
+    )
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="configuration-best",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=2,
+    )
+    try:
+        assert outcome.decision.keep is True
+        assert outcome.decision.target_delta == pytest.approx(0.13)
+        assert [row["stage"] for row in outcome.trials] == ["dev_keep", "dev_keep"]
+        assert outcome.trials[0]["variant"]["value"] == 2
+        assert outcome.trials[1]["variant"]["value"] == 4
+        text = (workspace / "kept_configuration.patch").read_text(encoding="utf-8")
+        assert '"min_samples_leaf": 4' in text
+        assert '"min_samples_leaf": 2' not in text
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
 
 
 def test_configuration_search_durable_dedup_does_not_consume_new_trial_budget(

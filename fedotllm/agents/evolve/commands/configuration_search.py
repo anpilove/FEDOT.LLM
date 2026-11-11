@@ -743,6 +743,7 @@ def search_configuration_variants(
     ]
     skipped = set(skip_patch_hashes or ())
     trials: list[dict] = []
+    best: ConfigurationSearchOutcome | None = None
     full_ids = tuple(dict.fromkeys((*lift_ids, *protect_ids)))
     last = Decision(False, "no_configuration_keep", None)
     evaluated_trials = 0
@@ -954,6 +955,8 @@ def search_configuration_variants(
                 trials.append(row)
                 append_journal(workspace / "configuration_trials.jsonl", row)
                 if blocked.infrastructure_error:
+                    if best is not None:
+                        return best
                     return ConfigurationSearchOutcome(
                         decision=blocked,
                         tests=after_tests,
@@ -961,16 +964,31 @@ def search_configuration_variants(
                     )
                 continue
 
+            incumbent = None if best is None else best.decision.target_delta
+            if incumbent is not None and (
+                full.target_delta is None or full.target_delta <= incumbent
+            ):
+                row["stage"] = "dev_keep_not_better"
+                row["reason"] = full.reason
+                trials.append(row)
+                append_journal(workspace / "configuration_trials.jsonl", row)
+                continue
+
+            if best is not None and best.experiment is not None:
+                discard_experiment_checkout(
+                    best.experiment,
+                    workspace=workspace,
+                    source=source,
+                )
             full.experiment_id = experiment.name
             candidate.behavior_probe = configuration_probe_code(variant.operation)
+            patch_path = write_kept_configuration_patch(workspace, candidate)
             row["stage"] = "dev_keep"
             row["reason"] = full.reason
-            patch_path = write_kept_configuration_patch(workspace, candidate)
             row["patch"] = str(patch_path)
             trials.append(row)
             append_journal(workspace / "configuration_trials.jsonl", row)
-            keep_experiment = True
-            return ConfigurationSearchOutcome(
+            best = ConfigurationSearchOutcome(
                 candidate=candidate,
                 experiment=experiment,
                 decision=full,
@@ -980,6 +998,8 @@ def search_configuration_variants(
                 trials=trials,
                 patch_path=patch_path,
             )
+            keep_experiment = True
+            last = full
         finally:
             if not keep_experiment:
                 discard_experiment_checkout(
@@ -987,4 +1007,6 @@ def search_configuration_variants(
                     workspace=workspace,
                     source=source,
                 )
+    if best is not None:
+        return best
     return ConfigurationSearchOutcome(decision=last, trials=trials)

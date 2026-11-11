@@ -632,7 +632,7 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
         lift_ids=tasks,
         protect_ids=tasks,
         baseline_tests=baseline_tests,
-        max_trials=1,
+        max_trials=2,
         dev_seed=42,
     )
     if outcome.candidate is None or outcome.experiment is None:
@@ -657,14 +657,17 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
             lift_ids=tasks,
             protect_ids=tasks,
         )
-        selected = outcome.trials[-1].get("variant") or {}
+        kept = [row for row in outcome.trials if row.get("stage") == "dev_keep"]
+        selected = (kept[-1].get("variant") or {}) if kept else {}
         summary = {
             "change": (
                 f"{selected.get('operation')} {selected.get('parameter')} "
                 f"{selected.get('current_value')} -> {selected.get('value')}"
             ),
             "dev_target_delta": outcome.decision.target_delta,
+            "dev_task_deltas": outcome.decision.regression_deltas,
             "final_target_delta": final.target_delta,
+            "final_task_deltas": final.regression_deltas,
             "final_keep": final.keep,
             "patch": str(outcome.patch_path or ""),
         }
@@ -673,7 +676,7 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
                 "config-"
             ),
             "quick_dev_keep": bool(
-                (outcome.trials[-1].get("quick_decision") or {}).get("keep")
+                ((kept[-1].get("quick_decision") or {}) if kept else {}).get("keep")
             ),
             "full_dev_keep": outcome.decision.keep,
             "behavior_changed": outcome.behavior_probe.get("status") == "changed",
