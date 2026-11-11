@@ -587,6 +587,54 @@ def test_broad_surface_tries_each_parameter_before_a_second_scale():
     assert params.index("reg_alpha") < second_leaf_support
 
 
+def test_variant_budget_includes_the_first_value_of_extra_trees():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        configuration_variant_budget,
+        propose_parameter_variants,
+    )
+
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"max_depth": -1},
+            "supported_parameters": [
+                "min_child_samples",
+                "reg_lambda",
+                "reg_alpha",
+                "max_depth",
+                "learning_rate",
+                "num_leaves",
+                "colsample_bytree",
+                "subsample",
+                "bagging_fraction",
+                "extra_trees",
+            ],
+            "estimator_defaults": {
+                "min_child_samples": 20,
+                "reg_lambda": 0.0,
+                "reg_alpha": 0.0,
+                "max_depth": -1,
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+                "colsample_bytree": 1.0,
+                "subsample": 1.0,
+                "bagging_fraction": 0.85,
+                "extra_trees": False,
+            },
+        },
+    )
+    per_operation, total = configuration_variant_budget(max_trials=3, max_operations=3)
+    variants = propose_parameter_variants(
+        {"lgbm": ("lgbm",)},
+        {"lgbm": ScoreResult("lgbm", "ok", 0.8, dataflow=flow)},
+        problem_by_task={"lgbm": "classification"},
+        max_variants_per_operation=per_operation,
+        max_total=total,
+    )
+    assert ("extra_trees", True) in [(row.parameter, row.value) for row in variants]
+
+
 def test_weak_near_miss_does_not_skip_the_next_parameter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

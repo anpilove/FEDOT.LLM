@@ -795,6 +795,24 @@ def parameter_surfaces(
     return surfaces
 
 
+def configuration_variant_budget(
+    *,
+    max_trials: int,
+    max_operations: int,
+) -> tuple[int, int]:
+    """Keep a first value for every known parameter inside the queued prefix.
+
+    Two scales of the early knobs otherwise fill a short list and a later
+    parameter such as ``extra_trees`` is never proposed.
+    """
+
+    depth = len(_PARAMETER_PRIORITY) * 2
+    return (
+        max(depth, max_trials * 4),
+        max(depth, max_trials * max(2, max_operations)),
+    )
+
+
 def propose_parameter_variants(
     operation_hints: dict[str, tuple[str, ...]],
     scores: dict[str, ScoreResult],
@@ -1432,6 +1450,10 @@ def search_configuration_variants(
     # Build a deeper ordered queue than the per-campaign execution budget.
     # Durable duplicates are filtered below and must not prevent later
     # parameters of the same estimator from ever being reached.
+    per_operation, total = configuration_variant_budget(
+        max_trials=max_trials,
+        max_operations=max_operations,
+    )
     single_variants = propose_parameter_variants(
         operation_hints,
         stock,
@@ -1440,8 +1462,8 @@ def search_configuration_variants(
         # Keep enough alternatives behind the already-tried prefix of one
         # estimator.  Per-operation truncation must not recreate the same
         # durable-memory starvation at a smaller level.
-        max_variants_per_operation=max(16, max_trials * 4),
-        max_total=max(16, max_trials * max(2, max_operations)),
+        max_variants_per_operation=per_operation,
+        max_total=total,
     )
     variants = defer_bundles_of_measured_values(
         spread_first_parameter_values(
