@@ -658,6 +658,16 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
             protect_ids=tasks,
         )
         selected = outcome.trials[-1].get("variant") or {}
+        summary = {
+            "change": (
+                f"{selected.get('operation')} {selected.get('parameter')} "
+                f"{selected.get('current_value')} -> {selected.get('value')}"
+            ),
+            "dev_target_delta": outcome.decision.target_delta,
+            "final_target_delta": final.target_delta,
+            "final_keep": final.keep,
+            "patch": str(outcome.patch_path or ""),
+        }
         checks = {
             "generated_without_canonical_patch": outcome.candidate.candidate_id.startswith(
                 "config-"
@@ -673,6 +683,7 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
         return {
             "ok": all(checks.values()),
             "component": "configuration-search",
+            "summary": summary,
             "checks": checks,
             "selected_variant": selected,
             "candidate": outcome.candidate.candidate_id,

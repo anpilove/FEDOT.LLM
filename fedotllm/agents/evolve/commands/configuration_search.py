@@ -8,6 +8,7 @@ never reads scores, datasets, benchmark cases, or FINAL.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import math
@@ -79,6 +80,29 @@ class ConfigurationSearchOutcome:
     patched: dict[str, ScoreResult] = field(default_factory=dict)
     behavior_probe: dict = field(default_factory=dict)
     trials: list[dict] = field(default_factory=list)
+    patch_path: Path | None = None
+
+
+KEPT_CONFIGURATION_PATCH = "kept_configuration.patch"
+
+
+def write_kept_configuration_patch(workspace: Path, candidate: PatchCandidate) -> Path:
+    """Save the applied default edit outside the experiment checkout."""
+
+    chunks: list[str] = []
+    for edit in candidate.edits:
+        chunks.extend(
+            difflib.unified_diff(
+                edit.old_code.splitlines(keepends=True),
+                edit.new_code.splitlines(keepends=True),
+                fromfile=f"a/{edit.file_path}",
+                tofile=f"b/{edit.file_path}",
+            )
+        )
+    path = workspace / KEPT_CONFIGURATION_PATCH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(chunks), encoding="utf-8")
+    return path
 
 
 def _different(value: Any, current: Any) -> bool:
@@ -941,6 +965,8 @@ def search_configuration_variants(
             candidate.behavior_probe = configuration_probe_code(variant.operation)
             row["stage"] = "dev_keep"
             row["reason"] = full.reason
+            patch_path = write_kept_configuration_patch(workspace, candidate)
+            row["patch"] = str(patch_path)
             trials.append(row)
             append_journal(workspace / "configuration_trials.jsonl", row)
             keep_experiment = True
@@ -952,6 +978,7 @@ def search_configuration_variants(
                 patched=full_patched,
                 behavior_probe=probe,
                 trials=trials,
+                patch_path=patch_path,
             )
         finally:
             if not keep_experiment:

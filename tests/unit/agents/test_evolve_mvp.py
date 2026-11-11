@@ -832,6 +832,12 @@ def test_configuration_search_requires_quick_full_probe_and_tests(
         assert measured[1] == ("dev", ("rf", "cancer", "kc2", "catboost"))
         assert measured[2] == ("shadow", ("rf", "cancer", "kc2"))
         assert outcome.trials[-1]["stage"] == "dev_keep"
+        patch = workspace / "kept_configuration.patch"
+        assert outcome.patch_path == patch
+        assert patch.is_file()
+        text = patch.read_text(encoding="utf-8")
+        assert "fedot/core/repository/data/default_operation_params.json" in text
+        assert '"min_samples_leaf": 2' in text
     finally:
         if outcome.experiment is not None:
             discard_experiment_checkout(
@@ -839,6 +845,7 @@ def test_configuration_search_requires_quick_full_probe_and_tests(
                 workspace=workspace,
                 source=source,
             )
+    assert (workspace / "kept_configuration.patch").is_file()
 
 
 def test_configuration_search_durable_dedup_does_not_consume_new_trial_budget(
