@@ -1386,6 +1386,75 @@ def refinements_for_operations(
     ]
 
 
+_UNSET_BOOSTER_DEFAULTS: dict[tuple[str, str], int | float] = {
+    ("xgboost", "reg_lambda"): 1.0,
+    ("xgboost", "learning_rate"): 0.3,
+    ("xgboost", "max_depth"): 6,
+}
+_SPLIT_LIFT = 0.01
+
+
+def final_split_midpoints(
+    trials: list[dict[str, Any]],
+    operations: set[str],
+) -> list[ParameterVariant]:
+    """Bisect a value that cleared one FINAL task and regressed another.
+
+    ``reg_lambda`` 2 improved the base ``xgboost`` task by 0.0109 on FINAL and
+    dropped ``kc2`` by 0.0156. The unset parameter recorded no current value,
+    so the neighborhood between the booster default of 1 and 2 was never queued.
+    """
+
+    ranked: list[tuple[float, ParameterVariant]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in trials:
+        if row.get("stage") != "final":
+            continue
+        decision = row.get("final_decision")
+        if not isinstance(decision, dict) or decision.get("keep"):
+            continue
+        deltas = decision.get("regression_deltas")
+        if not isinstance(deltas, dict):
+            continue
+        numeric: list[float] = []
+        for value in deltas.values():
+            try:
+                numeric.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        if not any(item >= _SPLIT_LIFT for item in numeric) or not any(item < 0 for item in numeric):
+            continue
+        variant = _variant_from_payload(row.get("variant") or {})
+        if not isinstance(variant, ParameterVariant) or variant.operation not in operations:
+            continue
+        current = variant.current_value
+        if isinstance(current, bool) or not isinstance(current, (int, float)):
+            current = _UNSET_BOOSTER_DEFAULTS.get((variant.operation, variant.parameter))
+        if current is None:
+            continue
+        midpoint = _refined_numeric_value(current, variant.value, 0.5)
+        if midpoint is None:
+            continue
+        key = (variant.operation, variant.parameter, _value_key(midpoint))
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append(
+            (
+                max(item for item in numeric if item >= _SPLIT_LIFT),
+                ParameterVariant(
+                    operation=variant.operation,
+                    parameter=variant.parameter,
+                    value=midpoint,
+                    current_value=current,
+                    rationale="between the booster default and a split-unstable value",
+                ),
+            )
+        )
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [variant for _delta, variant in ranked]
+
+
 def _operation_block(text: str, operation: str) -> tuple[str, dict] | None:
     pattern = re.compile(rf'^  "{re.escape(operation)}"\s*:\s*', re.MULTILINE)
     match = pattern.search(text)
@@ -1612,18 +1681,21 @@ def search_configuration_variants(
         max_variants_per_operation=per_operation,
         max_total=total,
     )
-    variants = defer_bundles_of_measured_values(
-        spread_first_parameter_values(
-            [
-                *refinements_for_operations(prior_trials or [], lift_operations),
-                *schedule_parameter_variants(
-                    single_variants,
-                    propose_parameter_bundles(single_variants),
-                ),
-            ]
+    variants = [
+        *final_split_midpoints(prior_trials or [], lift_operations),
+        *defer_bundles_of_measured_values(
+            spread_first_parameter_values(
+                [
+                    *refinements_for_operations(prior_trials or [], lift_operations),
+                    *schedule_parameter_variants(
+                        single_variants,
+                        propose_parameter_bundles(single_variants),
+                    ),
+                ]
+            ),
+            measured_parameter_values(prior_trials or []),
         ),
-        measured_parameter_values(prior_trials or []),
-    )
+    ]
     proposal = proposal_source or source
     locked = parameters_already_in_defaults(source, proposal)
     skipped = set(skip_patch_hashes or ())

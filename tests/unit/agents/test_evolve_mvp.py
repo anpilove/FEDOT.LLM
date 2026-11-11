@@ -498,6 +498,43 @@ def test_historical_refinement_stays_on_the_lift_operation():
     assert kept[0].operation == "catboost"
 
 
+def test_final_split_regression_queues_the_midpoint_of_the_booster_default():
+    from fedotllm.agents.evolve.commands.configuration_search import final_split_midpoints
+
+    trial = {
+        "stage": "final",
+        "reason": "regression kc2->xgboost delta -0.0156",
+        "final_decision": {
+            "keep": False,
+            "reason": "regression kc2->xgboost delta -0.0156",
+            "target_delta": 0.010926422400953206,
+            "regression_deltas": {
+                "xgboost": 0.010926422400953206,
+                "cancer->xgboost": 0.0034965034965035446,
+                "kc2->xgboost": -0.015607886089813783,
+            },
+        },
+        "variant": {
+            "operation": "xgboost",
+            "parameter": "reg_lambda",
+            "value": 2.0,
+            "current_value": None,
+        },
+    }
+    queued = final_split_midpoints([trial], {"xgboost"})
+    assert [item.value for item in queued] == [1.5]
+    assert queued[0].current_value == 1.0
+    weak = {
+        **trial,
+        "final_decision": {
+            **trial["final_decision"],
+            "target_delta": 0.004,
+            "regression_deltas": {"xgboost": 0.004, "kc2->xgboost": -0.02},
+        },
+    }
+    assert final_split_midpoints([weak], {"xgboost"}) == []
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,
