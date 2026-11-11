@@ -1474,6 +1474,25 @@ def _unmeasured_configuration_task(
     return None
 
 
+def _single_task_lift(deltas: dict) -> bool:
+    """True when one lift task is up and every other measured task is not.
+
+    ``kc2->xgboost`` carried ``reg_lambda`` 0.01 to 0.0711 while the other two
+    lift tasks fell. That candidate then lost 0.1462 on the shadow split.
+    A one-task surface stays eligible: the kept rf default was measured on
+    tasks that were both up.
+    """
+
+    numeric = [
+        value
+        for value in deltas.values()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    ]
+    if len(numeric) < 2:
+        return False
+    return sum(value > 0 for value in numeric) < 2
+
+
 def search_configuration_variants(
     source: Path,
     workspace: Path,
@@ -1709,6 +1728,15 @@ def search_configuration_variants(
                 "quick_decision": asdict(quick),
                 "quick_scores": _score_rows(quick_patched),
             }
+            if quick.keep and _single_task_lift(quick.regression_deltas):
+                quick = Decision(
+                    False,
+                    "single_task_lift",
+                    quick.target_delta,
+                    regression_deltas=dict(quick.regression_deltas),
+                )
+                row["quick_decision"] = asdict(quick)
+                row["reason"] = quick.reason
             if not quick.keep:
                 last = quick
                 trials.append(row)

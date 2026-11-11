@@ -2385,6 +2385,74 @@ def test_stacked_hunt_scores_shadow_against_the_kept_tree(
             )
 
 
+def test_one_positive_lift_task_does_not_reach_full_dev(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {
+        task_id: ScoreResult(task_id, "ok", 0.80, dataflow=flow)
+        for task_id in ("rf", "cancer", "kc2")
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def patched(task_ids, **_kwargs):
+        calls.append(tuple(task_ids))
+        scores = {"rf": 0.795, "cancer": 0.796, "kc2": 0.82}
+        return {task_id: ScoreResult(task_id, "ok", scores[task_id]) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="lone-lift",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={task_id: ("rf",) for task_id in ("rf", "cancer", "kc2")},
+        problem_by_task={task_id: "classification" for task_id in ("rf", "cancer", "kc2")},
+        lift_ids=("rf", "cancer", "kc2"),
+        protect_ids=("rf", "cancer", "kc2"),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+    )
+    try:
+        assert calls == [("rf", "cancer", "kc2")]
+        assert outcome.trials[-1]["stage"] == "quick_dev"
+        assert outcome.trials[-1]["reason"] == "single_task_lift"
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
 def test_final_regression_does_not_spend_pytest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
