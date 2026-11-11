@@ -318,14 +318,24 @@ def hunt_surface(workspace_root: Path, requested: tuple[str, ...] = ()) -> dict:
 
 
 def strongest_remembered_final(workspace_root: Path) -> dict | None:
-    """Earlier keyless FINAL keep with the largest target delta."""
+    """Best FINAL keep of the operation measured most recently.
 
-    best: dict | None = None
-    best_delta: float | None = None
+    A later operation's patch already contains the earlier keeps. The largest
+    delta is often the older rf-only patch, and republishing it drops the
+    later ``xgboost`` change. Within one operation the larger delta still wins,
+    so a weaker retry of the same estimator does not replace it.
+    """
+
+    best_by_operation: dict[str, tuple[float, dict]] = {}
+    latest_operation = ""
     runs = workspace_root / "runs"
     if not runs.is_dir():
         return None
-    for path in sorted(runs.glob("*/keyless_configuration.json")):
+    paths = sorted(
+        runs.glob("*/keyless_configuration.json"),
+        key=lambda path: (path.stat().st_mtime, path.name),
+    )
+    for path in paths:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, TypeError):
@@ -337,10 +347,16 @@ def strongest_remembered_final(workspace_root: Path) -> dict | None:
         patch = Path(str(summary.get("patch") or ""))
         if not isinstance(delta, (int, float)) or not patch.is_file():
             continue
-        if best_delta is None or float(delta) > best_delta:
-            best = summary
-            best_delta = float(delta)
-    return best
+        operation = str(summary.get("change") or "").split()[:1]
+        operation_name = operation[0] if operation else ""
+        if not operation_name:
+            continue
+        current = best_by_operation.get(operation_name)
+        if current is None or float(delta) > current[0]:
+            best_by_operation[operation_name] = (float(delta), summary)
+        latest_operation = operation_name
+    chosen = best_by_operation.get(latest_operation)
+    return chosen[1] if chosen is not None else None
 
 
 _NOT_MEASURED = {"dedup", "kept_parameter"}

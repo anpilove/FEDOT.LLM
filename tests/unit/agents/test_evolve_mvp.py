@@ -2374,6 +2374,56 @@ def test_xgboost_keep_moves_the_hunt_to_logit(tmp_path: Path):
     assert "rf" in surface["protect"]
 
 
+def test_later_operation_keep_survives_a_larger_earlier_delta(tmp_path: Path):
+    import os
+
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        strongest_remembered_final,
+    )
+
+    work = tmp_path / "work"
+    rf = work / "runs" / "20261111-220000-rf"
+    xgb = work / "runs" / "20261111-230000-xgb"
+    rf.mkdir(parents=True)
+    xgb.mkdir(parents=True)
+    rf_patch = rf / "kept_configuration.patch"
+    xgb_patch = xgb / "kept_configuration.patch"
+    rf_patch.write_text("rf-only\n", encoding="utf-8")
+    xgb_patch.write_text("rf-and-xgboost\n", encoding="utf-8")
+    (rf / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(rf_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (xgb / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "xgboost reg_lambda None -> 10.0",
+                    "final_keep": True,
+                    "final_target_delta": 0.0164,
+                    "patch": str(xgb_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(rf / "keyless_configuration.json", (1_700_000_000, 1_700_000_000))
+    os.utime(xgb / "keyless_configuration.json", (1_700_000_100, 1_700_000_100))
+    chosen = strongest_remembered_final(work)
+    assert chosen is not None
+    assert chosen["change"] == "xgboost reg_lambda None -> 10.0"
+    assert Path(chosen["patch"]).read_text(encoding="utf-8") == "rf-and-xgboost\n"
+
+
 def test_hunt_materializes_the_improved_fedot_tree(tmp_path: Path):
     import difflib
 
