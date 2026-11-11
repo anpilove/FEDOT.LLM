@@ -587,6 +587,29 @@ def test_broad_surface_tries_each_parameter_before_a_second_scale():
     assert params.index("reg_alpha") < second_leaf_support
 
 
+def test_second_scale_precedes_a_historical_refinement():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterVariant,
+        spread_first_parameter_values,
+    )
+
+    ordered = spread_first_parameter_values(
+        [
+            ParameterVariant(
+                "lgbm",
+                "num_leaves",
+                7,
+                31,
+                "execution-guided refinement: slightly farther in the promising direction",
+            ),
+            ParameterVariant("lgbm", "reg_lambda", 0.01, 0.0, "mild L2"),
+            ParameterVariant("lgbm", "reg_lambda", 0.1, 0.0, "stronger L2"),
+        ]
+    )
+    values = [(row.parameter, row.value) for row in ordered]
+    assert values.index(("reg_lambda", 0.1)) < values.index(("num_leaves", 7))
+
+
 def test_variant_budget_includes_the_first_value_of_extra_trees():
     from fedotllm.agents.evolve.commands.configuration_search import (
         configuration_variant_budget,

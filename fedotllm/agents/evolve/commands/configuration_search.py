@@ -952,15 +952,17 @@ def spread_first_parameter_values(
     A broad boosting surface otherwise spends the whole budget on two scales of
     the first knob. The second scale stays queued, after the other parameters.
     A historical near-miss refinement is a second look at a parameter that
-    already had a trial, so it waits with those later scales.
+    already had a trial. It waits behind the second generic scale, which is
+    the untried alternative rather than a neighborhood of a miss.
     """
 
     first: list[ParameterVariant | ParameterBundle] = []
     rest: list[ParameterVariant | ParameterBundle] = []
+    refinements: list[ParameterVariant | ParameterBundle] = []
     seen: set[tuple[str, str]] = set()
     for variant in variants:
         if _REFINEMENT_MARKER in variant.rationale:
-            rest.append(variant)
+            refinements.append(variant)
             continue
         if isinstance(variant, ParameterBundle):
             first.append(variant)
@@ -971,7 +973,7 @@ def spread_first_parameter_values(
         else:
             seen.add(key)
             first.append(variant)
-    return [*first, *rest]
+    return [*first, *rest, *refinements]
 
 
 def _value_key(value: Any) -> str:
