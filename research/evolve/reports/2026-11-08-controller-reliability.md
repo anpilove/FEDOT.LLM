@@ -45,6 +45,10 @@ The control arm of the fixture smoke records control_score_pairs=3 and control_s
 
 GOLEM `GraphVerifier.verify` returns false when a rule returns `False` or raises `ValueError`. A rule that returns `None` does not reject the graph. Any other exception leaves `verify`. `compare_pack` used to raise `KeyError` when a requested lift or protect id was absent from the stock or patch map, which stopped the campaign before the next hypothesis. That gap is now `keep=False`, `infrastructure_error=True`, reason `missing_measurement <task_id>`. A measured gain on another dataset in the same pack does not KEEP.
 
+## Doctor import diagnosis
+
+A doctor run on pinned commit `8990f28b0664c99f7eb2fddcee3931151fe16e79` failed while importing the checkout. The snippet worker imported `fedot` before the preflight script, so the probe died as `process exited 1` and the dask check was reported before dask had been measured. The worker now emits `EVOLVE_PREFLIGHT` with `dask` and `import_error` when that import fails. Doctor keeps the record and puts the exception on the path check. The same run now reports `ModuleNotFoundError: No module named 'dask'` and `dask.importable=false`.
+
 ## Not claimed
 
 Full OpenML registry KEEP was not run. Identical smoke repeats and reserved split counts are measurement bookkeeping only.

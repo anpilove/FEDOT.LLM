@@ -25,12 +25,12 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
-import fedot
 payload = {
-    "fedot_file": str(Path(fedot.__file__).resolve()),
     "dask": importlib.util.find_spec("dask") is not None,
 }
 try:
+    import fedot
+    payload["fedot_file"] = str(Path(fedot.__file__).resolve())
     from fedot.api.main import Fedot
     payload["parameters"] = sorted(inspect.signature(Fedot.__init__).parameters)
 except Exception as exc:
@@ -126,6 +126,10 @@ def dependency_checks(
 
     if static["imports_dask"] and dask_importable:
         dask_detail = "checkout imports dask and the worker interpreter can import it"
+    elif static["imports_dask"] and runtime is None and import_error:
+        dask_detail = (
+            "preflight probe failed before dask was measured: " + import_error
+        )
     elif static["imports_dask"]:
         dask_detail = (
             "checkout imports dask but the worker interpreter cannot import it"
