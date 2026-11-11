@@ -608,6 +608,7 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
     """Prove generic runtime-surface search, without loading a canonical patch."""
 
     from fedotllm.agents.evolve.commands.configuration_search import (
+        measured_trial_rows,
         search_configuration_variants,
     )
 
@@ -632,7 +633,7 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
         lift_ids=tasks,
         protect_ids=tasks,
         baseline_tests=baseline_tests,
-        max_trials=2,
+        max_trials=3,
         dev_seed=42,
     )
     if outcome.candidate is None or outcome.experiment is None:
@@ -670,6 +671,7 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
             "final_task_deltas": final.regression_deltas,
             "final_keep": final.keep,
             "patch": str(outcome.patch_path or ""),
+            "measured": measured_trial_rows(outcome.trials),
         }
         checks = {
             "generated_without_canonical_patch": outcome.candidate.candidate_id.startswith(

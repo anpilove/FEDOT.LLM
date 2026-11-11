@@ -86,6 +86,26 @@ class ConfigurationSearchOutcome:
 KEPT_CONFIGURATION_PATCH = "kept_configuration.patch"
 
 
+def measured_trial_rows(trials: list[dict]) -> list[dict]:
+    """Compact record of every default the search actually scored."""
+
+    rows: list[dict] = []
+    for row in trials:
+        variant = row.get("variant") or {}
+        decision = row.get("full_decision") or row.get("quick_decision") or {}
+        rows.append(
+            {
+                "parameter": variant.get("parameter"),
+                "from": variant.get("current_value"),
+                "to": variant.get("value"),
+                "stage": row.get("stage"),
+                "dev_target_delta": decision.get("target_delta"),
+                "reason": row.get("reason") or decision.get("reason"),
+            }
+        )
+    return rows
+
+
 def write_kept_configuration_patch(
     workspace: Path,
     candidate: PatchCandidate,

@@ -942,6 +942,121 @@ def test_configuration_search_keeps_the_stronger_later_variant(
             )
 
 
+def test_configuration_search_measures_the_next_parameter_and_keeps_the_better(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+
+    def fake_patched(task_ids, **kwargs):
+        text = (
+            Path(kwargs["checkout"])
+            / "fedot/core/repository/data/default_operation_params.json"
+        ).read_text(encoding="utf-8")
+        if '"min_samples_split": 4' in text:
+            score = 0.84
+        elif '"min_samples_leaf": 4' in text:
+            score = 0.93
+        else:
+            score = 0.85
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", fake_patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(
+        judge, "measure_fedot_tests", lambda *args, **kwargs: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop, "compare_behavior_probe", lambda *args, **kwargs: {"status": "changed"}
+    )
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="configuration-next-parameter",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=3,
+    )
+    try:
+        assert [row["variant"]["parameter"] for row in outcome.trials] == [
+            "min_samples_leaf",
+            "min_samples_leaf",
+            "min_samples_split",
+        ]
+        assert [row["variant"]["value"] for row in outcome.trials] == [2, 4, 4]
+        assert [row["stage"] for row in outcome.trials] == [
+            "dev_keep",
+            "dev_keep",
+            "dev_keep_not_better",
+        ]
+        assert outcome.decision.target_delta == pytest.approx(0.13)
+        text = (workspace / "kept_configuration.patch").read_text(encoding="utf-8")
+        assert '"min_samples_leaf": 4' in text
+        assert "min_samples_split" not in text
+        from fedotllm.agents.evolve.commands.configuration_search import (
+            measured_trial_rows,
+        )
+
+        measured = measured_trial_rows(
+            [
+                {
+                    "variant": {
+                        "parameter": "min_samples_split",
+                        "current_value": 2,
+                        "value": 4,
+                    },
+                    "stage": "quick_dev",
+                    "quick_decision": {
+                        "reason": "regression rf delta -0.0115",
+                        "target_delta": 0.00545,
+                    },
+                }
+            ]
+        )
+        assert measured[0]["reason"] == "regression rf delta -0.0115"
+        assert measured[0]["dev_target_delta"] == 0.00545
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
 def test_configuration_search_durable_dedup_does_not_consume_new_trial_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
