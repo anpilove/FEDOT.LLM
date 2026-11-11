@@ -1791,6 +1791,36 @@ def search_configuration_variants(
                 append_journal(workspace / "configuration_trials.jsonl", row)
                 continue
 
+            # Shadow and FINAL are different splits. A shadow keep can still
+            # regress on FINAL, so score that split before the pytest suite.
+            final_stock = measure_stock(
+                affected,
+                checkout=proposal_source or source,
+                split="final",
+                seed=dev_seed,
+            )
+            final_patched = measure_patched(
+                affected,
+                checkout=experiment,
+                split="final",
+                seed=dev_seed,
+            )
+            final = verdict(
+                final_stock,
+                final_patched,
+                lift_ids=affected,
+                protect_ids=affected,
+            )
+            row["final_decision"] = asdict(final)
+            row["final_scores"] = _score_rows(final_patched)
+            if not final.keep:
+                last = final
+                row["stage"] = "final"
+                row["reason"] = final.reason
+                trials.append(row)
+                append_journal(workspace / "configuration_trials.jsonl", row)
+                continue
+
             first_tests = normalize_test_result(measure_fedot_tests(experiment))
             after_tests, blocked, test_attempts = confirm_candidate_tests(
                 baseline_tests,

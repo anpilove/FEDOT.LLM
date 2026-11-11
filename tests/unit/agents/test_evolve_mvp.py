@@ -2334,6 +2334,77 @@ def test_stacked_hunt_scores_shadow_against_the_kept_tree(
             )
 
 
+def test_final_regression_does_not_spend_pytest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+    test_calls = {"n": 0}
+
+    def patched(task_ids, *, split="dev", **_kwargs):
+        score = 0.70 if split == "final" else 0.90
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    def run_tests(*_args, **_kwargs):
+        test_calls["n"] += 1
+        return TestResult("passed", 0)
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", run_tests)
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="final-before-pytest",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+    )
+    try:
+        assert test_calls["n"] == 0
+        assert outcome.trials[-1]["stage"] == "final"
+        assert "regression" in outcome.trials[-1]["reason"]
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
 def test_stacked_configuration_search_scores_against_the_kept_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
