@@ -631,9 +631,12 @@ def benchmark_configuration_search(
     operation_hints = {
         task_id: tuple(spec.nodes) for task_id, spec in specs.items()
     }
+    # A stacked hunt clones experiments from the kept tree. Score that tree,
+    # not the bare pin, or an older default shows up as a lift of the new one.
+    baseline = proposal_source or source
     stock = measure_stock(
         measured,
-        checkout=source,
+        checkout=baseline,
         split="dev",
         seed=42,
         collect_coverage=True,
@@ -669,7 +672,7 @@ def benchmark_configuration_search(
         }
     try:
         finalists = outcome.dev_keeps or []
-        final_stock = measure_stock(measured, checkout=source, split="final", seed=42)
+        final_stock = measure_stock(measured, checkout=baseline, split="final", seed=42)
         finals = [
             verdict(
                 final_stock,

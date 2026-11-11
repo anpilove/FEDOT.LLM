@@ -2056,6 +2056,94 @@ def test_keyless_hunt_moves_to_the_next_fedot_operation_after_an_rf_keep(
     assert payload["fedot_operation"] == "lgbm"
 
 
+def test_measured_second_scale_moves_the_hunt_to_catboost(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import hunt_surface
+
+    work = tmp_path / "work"
+    previous = work / "runs" / "previous"
+    previous.mkdir(parents=True)
+    patch = previous / "kept_configuration.patch"
+    patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    journal = previous / "configuration_trials.jsonl"
+    journal.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {
+                    "stage": "quick_dev",
+                    "variant": {
+                        "operation": "lgbm",
+                        "parameter": "reg_lambda",
+                        "value": 0.01,
+                    },
+                },
+                {
+                    "stage": "quick_dev",
+                    "variant": {
+                        "operation": "lgbm",
+                        "parameter": "reg_lambda",
+                        "value": 0.1,
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    surface = hunt_surface(work)
+    assert surface["operation"] == "catboost"
+    assert surface["lift"] == ("catboost", "cancer->catboost", "kc2->catboost")
+    assert "lgbm" in surface["protect"]
+    assert "rf" in surface["protect"]
+
+    one_scale = tmp_path / "one-scale" / "runs" / "previous"
+    one_scale.mkdir(parents=True)
+    one_patch = one_scale / "kept_configuration.patch"
+    one_patch.write_text("leaf-4\n", encoding="utf-8")
+    (one_scale / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(one_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (one_scale / "configuration_trials.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "quick_dev",
+                "variant": {
+                    "operation": "lgbm",
+                    "parameter": "reg_lambda",
+                    "value": 0.01,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    still_lgbm = hunt_surface(tmp_path / "one-scale")
+    assert still_lgbm["operation"] == "lgbm"
+
+
 def test_hunt_materializes_the_improved_fedot_tree(tmp_path: Path):
     import difflib
 
@@ -2168,6 +2256,127 @@ def test_configuration_search_stacks_the_next_parameter_on_a_kept_default(
             discard_experiment_checkout(
                 outcome.experiment, workspace=workspace, source=proposal
             )
+
+
+def test_stacked_hunt_scores_shadow_against_the_kept_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    proposal = tmp_path / "proposal"
+    proposal.mkdir()
+    proposal_defaults = proposal / defaults_rel
+    proposal_defaults.parent.mkdir(parents=True)
+    proposal_defaults.write_text(
+        json.dumps({"rf": {"min_samples_leaf": 4, "n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for name in ("__init__.py", "a.py", "b.py"):
+        target = proposal / "fedot" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((source / "fedot" / name).read_text(encoding="utf-8"), encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+    shadow_checkouts: list[Path] = []
+
+    def stock_scores(task_ids, *, checkout, split="dev", **_kwargs):
+        if split == "shadow":
+            shadow_checkouts.append(Path(checkout))
+        return {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", lambda task_ids, **_kwargs: {
+        task_id: ScoreResult(task_id, "ok", 0.90) for task_id in task_ids
+    })
+    monkeypatch.setattr(judge, "measure_stock", stock_scores)
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="shadow-baseline",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+        proposal_source=proposal,
+    )
+    try:
+        assert shadow_checkouts
+        assert shadow_checkouts[0] == proposal
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=proposal
+            )
+
+
+def test_stacked_configuration_search_scores_against_the_kept_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.benchmark.runner import benchmark_configuration_search
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ConfigurationSearchOutcome,
+    )
+
+    source = tmp_path / "pin"
+    source.mkdir()
+    proposal = tmp_path / "kept"
+    proposal.mkdir()
+    seen: list[Path] = []
+
+    def stock(task_ids, *, checkout, **_kwargs):
+        seen.append(Path(checkout))
+        return {task_id: ScoreResult(task_id, "ok", 0.8) for task_id in task_ids}
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.measure_stock",
+        stock,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.measure_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.configuration_search.search_configuration_variants",
+        lambda *_a, **_k: ConfigurationSearchOutcome(
+            decision=Decision(False, "no_configuration_keep", None)
+        ),
+    )
+    benchmark_configuration_search(
+        source,
+        tmp_path / "work",
+        tasks=("rf",),
+        proposal_source=proposal,
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+    )
+    assert seen
+    assert seen[0] == proposal
 
 
 def test_retained_dev_keeps_include_a_passing_trial_that_lost_the_dev_race(

@@ -172,15 +172,73 @@ HUNT_SURFACES: tuple[dict[str, tuple[str, ...] | str], ...] = (
             "kc2",
         ),
     },
+    {
+        "operation": "catboost",
+        "lift": ("catboost", "cancer->catboost", "kc2->catboost"),
+        "protect": (
+            "catboost",
+            "cancer->catboost",
+            "kc2->catboost",
+            "lgbm",
+            "cancer->lgbm",
+            "kc2->lgbm",
+            "rf",
+            "cancer",
+            "kc2",
+        ),
+    },
 )
+
+
+_MEASURED_STAGES = frozenset({"quick_dev", "full_dev", "shadow_dev", "final"})
+
+
+def operation_reached_second_scale(workspace_root: Path, operation: str) -> bool:
+    """True when one parameter of this operation already has two measured values.
+
+    The queue measures every parameter's first value before a second scale, so
+    a repeated parameter means that first pass is finished. Without a FINAL
+    keep the hunt should move on instead of spending later runs on refinements.
+    """
+
+    runs = workspace_root / "runs"
+    if not runs.is_dir():
+        return False
+    seen: dict[str, set[str]] = {}
+    for path in runs.glob("*/configuration_trials.jsonl"):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("stage") not in _MEASURED_STAGES:
+                continue
+            variant = row.get("variant")
+            if not isinstance(variant, dict) or "variants" in variant:
+                continue
+            if variant.get("operation") != operation:
+                continue
+            parameter = str(variant.get("parameter") or "")
+            if not parameter or "value" not in variant:
+                continue
+            values = seen.setdefault(parameter, set())
+            values.add(json.dumps(variant.get("value"), sort_keys=True))
+            if len(values) >= 2:
+                return True
+    return False
 
 
 def hunt_surface(workspace_root: Path, requested: tuple[str, ...] = ()) -> dict:
     """Next FEDOT operation a keyless hunt should measure.
 
-    An explicit task list stays on that list. Otherwise a FINAL keep for an
-    operation moves the hunt to the next operation, and the previous tasks stay
-    protected so the new default cannot give back the earlier FEDOT improvement.
+    An explicit task list stays on that list. Otherwise a FINAL keep, or a
+    finished first pass with no keep, moves the hunt to the next operation.
+    The previous tasks stay protected so the new default cannot give back the
+    earlier FEDOT improvement.
     """
 
     if requested:
@@ -202,12 +260,16 @@ def hunt_surface(workspace_root: Path, requested: tuple[str, ...] = ()) -> dict:
             if operation:
                 kept.add(operation)
     for surface in HUNT_SURFACES:
-        if surface["operation"] not in kept:
-            return {
-                "operation": surface["operation"],
-                "lift": surface["lift"],
-                "protect": surface["protect"],
-            }
+        operation = str(surface["operation"])
+        if operation in kept:
+            continue
+        if operation_reached_second_scale(workspace_root, operation):
+            continue
+        return {
+            "operation": surface["operation"],
+            "lift": surface["lift"],
+            "protect": surface["protect"],
+        }
     last = HUNT_SURFACES[-1]
     return {
         "operation": last["operation"],
@@ -545,7 +607,7 @@ def measure_discarded_early_stopping(
         lift = tuple(lift_ids)
         protect = tuple(protect_ids)
         measured_ids = tuple(dict.fromkeys((*lift, *protect)))
-        stock = measure_stock(measured_ids, checkout=source, split="dev", seed=dev_seed)
+        stock = measure_stock(measured_ids, checkout=base, split="dev", seed=dev_seed)
         quick = verdict(
             {task_id: stock[task_id] for task_id in lift},
             measure_patched(lift, checkout=experiment, split="dev", seed=dev_seed),
@@ -562,7 +624,7 @@ def measure_discarded_early_stopping(
         )
         if not full.keep:
             return finish(full, "full_dev")
-        shadow_stock = measure_stock(lift, checkout=source, split="shadow", seed=dev_seed)
+        shadow_stock = measure_stock(lift, checkout=base, split="shadow", seed=dev_seed)
         shadow = verdict(
             shadow_stock,
             measure_patched(lift, checkout=experiment, split="shadow", seed=dev_seed),
@@ -580,7 +642,7 @@ def measure_discarded_early_stopping(
             return finish(failure, "tests")
         if after_tests.status != "passed":
             return finish(Decision(False, f"tests {after_tests.status}", full.target_delta), "tests")
-        final_stock = measure_stock(measured_ids, checkout=source, split="final", seed=dev_seed)
+        final_stock = measure_stock(measured_ids, checkout=base, split="final", seed=dev_seed)
         final = verdict(
             final_stock,
             measure_patched(measured_ids, checkout=experiment, split="final", seed=dev_seed),
@@ -1689,7 +1751,7 @@ def search_configuration_variants(
             # the next parameter variant instead of requiring another run.
             shadow_stock = measure_stock(
                 affected,
-                checkout=source,
+                checkout=proposal_source or source,
                 split="shadow",
                 seed=dev_seed,
             )

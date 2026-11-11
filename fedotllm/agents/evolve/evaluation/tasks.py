@@ -169,6 +169,21 @@ _seq(
     train_file="kc2/kc2.csv",
     target="problems",
 )
+_seq(
+    "cancer->catboost",
+    "catboost",
+    dataset="cancer",
+    train_file="cancer/cancer_train.csv",
+    test_file="cancer/cancer_test.csv",
+    drop=("Unnamed: 0",),
+)
+_seq(
+    "kc2->catboost",
+    "catboost",
+    dataset="kc2",
+    train_file="kc2/kc2.csv",
+    target="problems",
+)
 _rmse(
     "cholesterol",
     "ridge",
