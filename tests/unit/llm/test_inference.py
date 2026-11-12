@@ -9,7 +9,14 @@ from pydantic import BaseModel, Field, ValidationError
 from tenacity import wait_none
 
 from fedotllm.configs.schema import LLMConfig
-from fedotllm.llm import AIInference, EmptyLLMResponse, LLMRequestTimeout, _provider_retry_wait
+from fedotllm.utils.parsers import parse_json
+from fedotllm.llm import (
+    AIInference,
+    EmptyLLMResponse,
+    LLMRequestTimeout,
+    _provider_retry_wait,
+    validate_structured_payload,
+)
 
 
 def _inflight_error():
@@ -53,6 +60,63 @@ def test_provider_retry_http_headers(delay, expected):
     exc = SimpleNamespace(response=SimpleNamespace(headers={'retry-after': delay}))
     state = SimpleNamespace(outcome=SimpleNamespace(exception=lambda: exc), attempt_number=1)
     assert _provider_retry_wait(state) == expected
+
+
+def test_structured_list_keeps_the_first_valid_object(llm_config):
+    inference = AIInference(llm_config)
+    inference.query = MagicMock(
+        return_value=(
+            '{"name": "ada", "age": 3, "email": "ada@example.com", "note": "first"}\n'
+            '{"name": "bea", "age": 4, "email": "bea@example.com", "extra": "second"}\n'
+        )
+    )
+
+    result = inference.create("request", response_model=UserModel)
+
+    assert result.name == "ada"
+    assert result.age == 3
+    assert inference.query.call_count == 1
+
+
+def test_structured_list_skips_an_object_that_does_not_match(llm_config):
+    inference = AIInference(llm_config)
+    inference.query = MagicMock(
+        return_value=(
+            '{"status": "record"}\n'
+            '{"name": "ada", "age": 3, "email": "ada@example.com"}\n'
+        )
+    )
+
+    result = inference.create("request", response_model=UserModel)
+
+    assert result.name == "ada"
+    assert inference.query.call_count == 1
+
+
+def test_structured_list_still_asks_for_a_correction_when_none_match(llm_config):
+    inference = AIInference(llm_config)
+    inference.query = MagicMock(
+        side_effect=[
+            '{"status": "record"}\n{"name": "ada"}\n',
+            '{"name": "ada", "age": 3, "email": "ada@example.com"}',
+        ]
+    )
+
+    result = inference.create("request", response_model=UserModel)
+
+    assert result.name == "ada"
+    assert inference.query.call_count == 2
+
+
+def test_concatenated_json_objects_validate_as_the_first_match():
+    raw = (
+        '{"name": "ada", "age": 3, "email": "ada@example.com"}\n'
+        '{"status": "record", "note": "extra"}\n'
+    )
+    parsed = parse_json(raw)
+    result = validate_structured_payload(parsed, UserModel)
+    assert result.name == "ada"
+    assert result.age == 3
 
 
 class UserModel(BaseModel):
