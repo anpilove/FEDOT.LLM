@@ -58,6 +58,15 @@ def test_invalid_refinement_fails_closed(source, kwargs):
         resolve_verification_target(source, lead(), **kwargs)
 
 
+def test_unqualified_method_name_matches_the_enclosing_line(source):
+    _, target = resolve_verification_target(source, lead(), line=4, symbol="save")
+    assert target["symbol"] == "Output.save"
+    _, target = resolve_verification_target(
+        source, lead(), line=4, symbol="pkg.Output.save",
+    )
+    assert target["symbol"] == "Output.save"
+
+
 def test_module_path_matches_the_enclosing_symbol(source):
     _, target = resolve_verification_target(
         source, lead(), line=4, symbol="fedot.a.Output.save",

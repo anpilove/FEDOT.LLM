@@ -512,6 +512,25 @@ def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
     return "more than two unique values" in detail and "never added" in detail
 
 
+def _union_symbol_unresolved(row: dict[str, Any]) -> bool:
+    """The short union name was rejected before any mixed-table probe ran.
+
+    ``ImputationImplementation._categorical_numerical_union`` is the qualified
+    symbol. A proposal that names only ``_categorical_numerical_union`` on that
+    function's line is the same target. The 07:47 Europe/Moscow run was the
+    third recorded inconclusive, which would close the line without a probe.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "inconclusive":
+        return False
+    if "symbol and source line disagree" not in str(reproduction.get("observed") or ""):
+        return False
+    lead = row.get("lead") or {}
+    text = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    return "_categorical_numerical_union" in text
+
+
 def _all_nan_union_unproved(row: dict[str, Any]) -> bool:
     """A reject that treats a silent narrower array as disproof of the union.
 
@@ -708,7 +727,11 @@ def _correctness_resume_plan(
             proven.append((_correctness_site(key, proven_row), proven_row))
             continue
         reproduction = row.get("reproduction") or {}
-        if _stale_binary_key_unproved(row) or _all_nan_union_unproved(row):
+        if (
+            _stale_binary_key_unproved(row)
+            or _all_nan_union_unproved(row)
+            or _union_symbol_unresolved(row)
+        ):
             open_probes.append((_correctness_site(key, row), None))
             continue
         if reproduction.get("status") == "rejected":
@@ -1078,7 +1101,11 @@ def closed_correctness_sites(
         )
         if healthy_without_target:
             continue
-        if _stale_binary_key_unproved(row) or _all_nan_union_unproved(row):
+        if (
+            _stale_binary_key_unproved(row)
+            or _all_nan_union_unproved(row)
+            or _union_symbol_unresolved(row)
+        ):
             continue
         if outcome in {
             "correctness_keep",
