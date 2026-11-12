@@ -702,7 +702,12 @@ def verify_lead(
     missed_target_retried = False
     unreached_target_retried = False
     syntax_probe_retried = False
-    import_probe_retried = False
+    import_probe_retried = 0
+    import_probe_limit = (
+        2
+        if "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+        else 1
+    )
     target_disagree_retried = False
     binary_reject_retried = False
     all_nan_reject_retried = False
@@ -1113,10 +1118,12 @@ def verify_lead(
                         " A syntax error is not evidence. Return one corrected "
                         "reproduction_code that parses."
                     )
-                elif detail == "probe must import FEDOT" and not import_probe_retried:
+                elif detail == "probe must import FEDOT" and import_probe_retried < import_probe_limit:
                     # The 06:49 Moscow binary-feature probe never ran. One
                     # rewrite keeps that rejection from ending the lead.
-                    import_probe_retried = True
+                    # The 07:37 union probe missed the import again after that
+                    # rewrite, so the union lead gets a second one.
+                    import_probe_retried += 1
                     step_budget += 1
                     output += (
                         " The probe never ran. Return one reproduction_code that "

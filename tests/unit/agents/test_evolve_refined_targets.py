@@ -443,6 +443,41 @@ def test_symbol_line_disagree_gets_one_rewrite(source):
     assert "_categorical_numerical_union" in prompts[1]
 
 
+def test_union_lead_gets_a_second_import_rewrite(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) < 3:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code="assert True\n",
+                )
+            return schema(action="reject", why="stop after the second import rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="width mismatch in _categorical_numerical_union",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 3
+    assert "imports fedot" in prompts[1]
+    assert "imports fedot" in prompts[2]
+
+
 def test_all_nan_union_reject_gets_one_mixed_table_correction(source):
     prompts: list[str] = []
 
