@@ -845,6 +845,29 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _one_hot_frame_branch_unexecuted(parsed: SiteProposal) -> bool:
+    """The one-hot DataFrame branch has no measured hits.
+
+    The 09:54 Europe/Moscow catalog picked ``categorical_encoders.py:102`` and
+    described the ``iloc`` branch at lines 105-106. That branch has zero hits.
+    The ndarray branch receives columns that preprocessing already cast to
+    strings, and unseen categories become zero rows under
+    ``handle_unknown='ignore'``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"DataFrame branch", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(r"all-zero|astype\(str\)|numeric categorical", text, re.IGNORECASE)
+        is not None
+    )
+
+
 def _empty_categorical_index_is_replaced(parsed: SiteProposal) -> bool:
     """Obligatory preprocessing replaces the empty binary index.
 
@@ -982,6 +1005,16 @@ def _first_pick_rejection(
             "test_data_with_mixed_types_per_column_processed_correctly expects "
             "7 importances. Do not gate that heuristic on integrality. Pick a "
             "different executed line or skip",
+        )
+    if _one_hot_frame_branch_unexecuted(parsed):
+        return (
+            "one_hot_frame_branch_unexecuted",
+            "The measured trace executes the ndarray branch of "
+            "_apply_one_hot_encoding. The DataFrame iloc branch has no hits. "
+            "Categorical columns are already strings before that encoder, and "
+            "unseen categories become zero rows under handle_unknown='ignore' "
+            "(test_one_hot_encoding_new_category_in_test). Pick a different "
+            "executed line or skip",
         )
     if _empty_categorical_index_is_replaced(parsed):
         return (
