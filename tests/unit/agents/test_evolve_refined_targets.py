@@ -357,6 +357,54 @@ def test_binary_accumulation_reject_without_a_probe_gets_one_correction(source):
     assert "does not delete a key" in prompts[1]
 
 
+def test_operation_info_crash_names_imputation_implementation(source, monkeypatch):
+    prompts: list[str] = []
+
+    def crashed(*_args, **_kwargs):
+        return SnippetResult(
+            status="runtime_error",
+            code="probe",
+            stderr="AssertionError: 'NoneType' object has no attribute 'operation_info_by_id'\n",
+            exit_code=1,
+            target_reached=False,
+        )
+
+    monkeypatch.setattr(verifier, "run_fedot_snippet", crashed)
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code=(
+                        "from fedot.a import Output\n"
+                        "assert Output().save() == [1, 2]\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the constructor hint")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="self.ids_binary_integer_features accumulates across transform",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "ImputationImplementation()" in prompts[1]
+
+
 def test_correctness_probe_constructor_error_gets_one_correction(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     prompts: list[str] = []

@@ -1136,6 +1136,16 @@ def verify_lead(
                             " Use PipelineBuilder.add_node or PipelineNode with an operation name, "
                             "not an unconfigured base Operation object."
                         )
+                    if (
+                        "operation_info_by_id" in exception_line
+                        and "ids_binary_integer_features" in (lead.why or "")
+                    ):
+                        detail += (
+                            " Construct ImputationImplementation() directly. Fit once, "
+                            "transform a two-value numeric column, then transform that "
+                            "same instance when the column has more than two unique "
+                            "values. Do not build an Operation."
+                        )
                     if not unreached_target_retried:
                         unreached_target_retried = True
                         step_budget += 1

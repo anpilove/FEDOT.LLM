@@ -524,6 +524,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "not import fedot. The next reproduction must import fedot and assert "
             "the claimed behavior on the same fitted object."
         ).strip()
+    if (
+        "operation_info_by_id" in observed
+        and "ImputationImplementation()" not in why
+    ):
+        why = (
+            f"{why} The previous probe built an Operation and crashed with "
+            "operation_info_by_id. Construct ImputationImplementation() directly. "
+            "Fit once, transform a two-value numeric column, then transform that "
+            "same instance when the column has more than two unique values."
+        ).strip()
     if _stale_binary_key_unproved(row) and "does not delete a key" not in why:
         why = (
             f"{why} dict.update does not delete a key from an earlier transform. "

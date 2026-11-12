@@ -859,3 +859,28 @@ def test_unproved_binary_snap_reject_stays_open(tmp_path):
     closed = replay.closed_correctness_sites(findings)
     assert ("fedot/sklearn_transformations.py", 391) not in closed
     assert ("fedot/categorical.py", 28) in closed
+
+
+def test_operation_info_resume_names_imputation_implementation(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 391,
+            "hypothesis_kind": "correctness",
+            "why": "binary ids accumulate across transform",
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": (
+                "The probe stopped at: AssertionError: "
+                "'NoneType' object has no attribute 'operation_info_by_id'"
+            ),
+            "detail": "probe did not execute the claimed target method",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert resumed[0].line == 391
+    assert "ImputationImplementation()" in resumed[0].why
