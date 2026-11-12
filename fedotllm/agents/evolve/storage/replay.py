@@ -621,11 +621,11 @@ def _correctness_resume_plan(
         reproduction = row.get("reproduction") or {}
         if reproduction.get("status") == "rejected":
             continue
-        if (
-            _probe_missed_target(row)
-            and 1 <= missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS
-        ):
-            open_probes.append((_correctness_site(key, row), None))
+        if _probe_missed_target(row):
+            # An older real inconclusive must not resume a line whose latest
+            # probe still missed the method after the open-attempt cap.
+            if 1 <= missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS:
+                open_probes.append((_correctness_site(key, row), None))
             continue
         if (
             row.get("outcome") == "unverified_no_patch"

@@ -497,6 +497,21 @@ def test_probes_that_never_reach_the_target_stay_open_for_one_more_attempt(tmp_p
         findings, source_hash="src",
     )
     assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    earlier = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "outcome": "unverified_no_patch",
+        "lead": lead,
+        "reproduction": {
+            "status": "inconclusive",
+            "detail": "contract support inconclusive: crash before the assertion",
+        },
+    }
+    findings.write_text("\n".join(json.dumps(item) for item in [earlier, *([row] * 5)]))
+    assert ("fedot/categorical_encoders.py", 100) in replay.closed_correctness_sites(
+        findings, source_hash="src",
+    )
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
 
 
 def test_healthy_contract_rejection_stays_open_until_the_target_ran(tmp_path):
