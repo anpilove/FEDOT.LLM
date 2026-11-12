@@ -636,6 +636,67 @@ def _correctness_resume_plan(
     return [*proven, *open_probes]
 
 
+def narrow_datetime_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """One more fixer pass for a queued pure-datetime dtype branch.
+
+    The 05:47 Moscow logit probe moved from 0.000 to 0.958 on a single
+    datetime64 column. A mixed table never enters that branch. Resume once,
+    with feedback that asks for a column-wise conversion.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import narrow_datetime_revision
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+    for key, row in reversed(list(latest.items())):
+        reason = str((row.get("dev") or {}).get("reason") or "")
+        if reason != "queued_for_fedot_quality":
+            continue
+        if "single datetime64 column" in str(row.get("feedback") or ""):
+            continue
+        edits = row.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "") for item in edits if isinstance(item, dict)
+        )
+        note = narrow_datetime_revision(row.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = row["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
 def unfinished_correctness_leads(
     findings_path: Path | None,
     *,

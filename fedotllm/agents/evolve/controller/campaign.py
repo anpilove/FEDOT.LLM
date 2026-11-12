@@ -81,6 +81,7 @@ from fedotllm.agents.evolve.storage.replay import (
     closed_hunt_sites,
     proven_correctness_replay,
     unfinished_correctness_leads,
+    narrow_datetime_resume,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.storage.scoreboard import append_attempt
@@ -107,6 +108,7 @@ from fedotllm.agents.evolve.controller.probes import (
     compare_behavior_probe as run_behavior_probe,
     compare_with_prior_probe,
     infrastructure_probe_decision,
+    narrow_datetime_revision,
 )
 from fedotllm.agents.evolve.controller.finalization import (
     record_final,
@@ -649,6 +651,14 @@ def run_once(
                     "violations": len(contract_leads),
                 },
             )
+        narrow_site: MatchSite | None = None
+        narrow_note = ""
+        if resume_lead is None:
+            resumed_narrow = narrow_datetime_resume(
+                findings_path, source_hash=source_hash
+            )
+            if resumed_narrow is not None:
+                narrow_site, narrow_note = resumed_narrow
         if resume_lead is not None:
             sites = [resume_lead]
             leads = [resume_lead]
@@ -658,6 +668,16 @@ def run_once(
             pending_unverified = unfinished_correctness_leads(
                 findings_path, limit=cap
             )
+            if narrow_site is not None:
+                pending_unverified = [
+                    narrow_site,
+                    *[
+                        item
+                        for item in pending_unverified
+                        if (item.file_path, item.line)
+                        != (narrow_site.file_path, narrow_site.line)
+                    ],
+                ]
             trace["resumed_unverified_leads"] = [
                 {"file_path": item.file_path, "line": item.line}
                 for item in pending_unverified
@@ -1321,7 +1341,13 @@ def run_once(
                 _record_final_skipped(journal, reason=last.reason)
                 return finish(last)
             continue
-        initial_feedback = resume_feedback if i == 1 else ""
+        site_note = (
+            narrow_note
+            if narrow_site is not None
+            and (lead.file_path, lead.line) == (narrow_site.file_path, narrow_site.line)
+            else ""
+        )
+        initial_feedback = resume_feedback if i == 1 and resume_feedback.strip() else site_note
         feedback_history = [initial_feedback] if initial_feedback.strip() else []
         feedback = _revision_feedback_context(feedback_history)
         verification_record = {
@@ -1954,6 +1980,42 @@ def run_once(
                         return finish(blocked)
                     grant_safety_extension("pytest", candidate, last.reason)
                     if advance_revision(last.reason):
+                        continue
+                    break
+
+                patch_body = "\n".join(
+                    edit.new_code for edit in candidate.edits
+                )
+                datetime_note = narrow_datetime_revision(behavior_probe, patch_body)
+                if datetime_note:
+                    # A pure datetime64 column made logit accuracy jump from
+                    # 0 to 0.958, but a mixed table never takes this branch.
+                    grant_safety_extension(
+                        "narrow_probe", candidate, "single-column datetime probe"
+                    )
+                    feedback = push_feedback(datetime_note)
+                    last = Decision(
+                        False,
+                        "narrow_datetime_probe",
+                        None,
+                        stage="dev",
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        tests=after_tests,
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if advance_revision("narrow_datetime_probe"):
                         continue
                     break
 

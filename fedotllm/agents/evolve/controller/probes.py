@@ -146,6 +146,77 @@ def infrastructure_probe_decision(result: dict, *, experiment_id: str = "") -> D
     )
 
 
+def _single_column_stack(code: str) -> bool:
+    """True when ``column_stack([...])`` has one argument at the top level.
+
+    A dtype such as ``datetime64[ns]`` contains brackets, so a character class
+    cannot see the comma that would mark a second column.
+    """
+
+    marker = "column_stack("
+    start = code.find(marker)
+    if start < 0:
+        return False
+    index = start + len(marker)
+    while index < len(code) and code[index].isspace():
+        index += 1
+    if index >= len(code) or code[index] != "[":
+        return False
+    depth = 0
+    parens = 0
+    saw_comma = False
+    for char in code[index:]:
+        if char == "(":
+            parens += 1
+        elif char == ")":
+            if parens == 0:
+                break
+            parens -= 1
+        elif char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0 and parens == 0:
+                return not saw_comma
+        elif char == "," and depth == 1 and parens == 0:
+            saw_comma = True
+    return False
+
+
+def whole_array_dtype_branch(probe_code: str, patch_text: str) -> bool:
+    """A one-column datetime probe cannot see a whole-array dtype branch.
+
+    ``np.column_stack`` of a datetime column and a float column is object
+    dtype, so ``issubdtype(..., datetime64)`` is false and the old millisecond
+    conversion still runs.
+    """
+
+    code = probe_code or ""
+    patch = patch_text or ""
+    if "datetime64" not in code or "datetime64" not in patch or "issubdtype" not in patch:
+        return False
+    return _single_column_stack(code)
+
+
+def narrow_datetime_revision(behavior_probe: dict | None, patch_text: str) -> str:
+    """Feedback for a gain that only exists on a pure datetime64 matrix."""
+
+    probe = behavior_probe or {}
+    if str(probe.get("status") or "") != "changed":
+        return ""
+    if not whole_array_dtype_branch(str(probe.get("code") or ""), patch_text):
+        return ""
+    stock = str((probe.get("stock") or {}).get("observation") or "")
+    patched = str((probe.get("patched") or {}).get("observation") or "")
+    return (
+        f"The probe moved from {stock} to {patched} on a single datetime64 column. "
+        "Real tables put a numeric column beside the dates. np.issubdtype on the "
+        "whole array is then false, so np_datetime_to_numeric still emits epoch "
+        "milliseconds and the gain disappears. Change that helper column by column, "
+        "and probe a two-column table of datetime64 values plus a float column."
+    )
+
+
 def _behavior_probe_blocks_candidate(result: dict) -> bool:
     """Cheap technical filter only. Toy no_change is not a quality veto.
 

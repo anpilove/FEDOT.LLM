@@ -317,6 +317,127 @@ def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch
     ]
 
 
+def test_single_column_datetime_probe_gets_one_mixed_table_revision(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "datetime scale", hypothesis_kind="quality")
+    probe = (
+        "import numpy as np\n"
+        "features = np.column_stack([dates.astype('datetime64[ns]')])\n"
+        "print('EVOLVE_OBSERVATION=0.000')\n"
+    )
+    patch = (
+        "if np.issubdtype(np.asarray(data.features).dtype, np.datetime64):\n"
+        "    data.features = data.features.astype('datetime64[D]')\n"
+    )
+    feedback_seen: list[str] = []
+
+    def fake_fix(*_args, **kwargs):
+        feedback_seen.append(kwargs.get("feedback") or "")
+        if len(feedback_seen) == 1:
+            return PatchCandidate(
+                "datetime-days",
+                edits=[PatchEdit("fedot/a.py", "return 1", patch)],
+                file_path="fedot/a.py",
+                behavior_probe=probe,
+            )
+        return None
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fake_fix)
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {
+            "status": "changed",
+            "code": probe,
+            "stock": {"observation": "0.000"},
+            "patched": {"observation": "0.958"},
+        },
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: {"catboost": ScoreResult("catboost", "ok", 0.8)},
+    )
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    workspace = tmp_path / "work"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+
+    assert len(feedback_seen) == 2
+    assert "0.000" in feedback_seen[1] and "0.958" in feedback_seen[1]
+    assert "np_datetime_to_numeric" in feedback_seen[1]
+    assert decision.reason != "queued_for_fedot_quality"
+    assert not (workspace / "quality_queue").exists()
+    rows = [
+        json.loads(line)
+        for line in (workspace / "journal.jsonl").read_text().splitlines()
+    ]
+    extension = [row for row in rows if row.get("event") == "targeted_revision_extension"]
+    assert len(extension) == 1
+    assert extension[0]["gate"] == "narrow_probe"
+
+
+def test_queued_single_column_datetime_lead_resumes_once(tmp_path):
+    from fedotllm.agents.evolve.storage.replay import narrow_datetime_resume
+
+    probe = "features = np.column_stack([dates.astype('datetime64[ns]')])\n"
+    patch = "if np.issubdtype(np.asarray(data.features).dtype, np.datetime64):\n    pass\n"
+    row = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "outcome": "rejected",
+        "lead": {
+            "file_path": "fedot/preprocessing/preprocessing.py",
+            "line": 197,
+            "hypothesis_kind": "quality",
+            "why": "day counts",
+        },
+        "dev": {"reason": "queued_for_fedot_quality"},
+        "edits": [{"new_code": patch}],
+        "behavior_probe": {
+            "status": "changed",
+            "code": probe,
+            "stock": {"observation": "0.000"},
+            "patched": {"observation": "0.958"},
+        },
+    }
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps(row) + "\n")
+    resumed = narrow_datetime_resume(findings, source_hash="src")
+    assert resumed is not None
+    site, note = resumed
+    assert (site.file_path, site.line) == ("fedot/preprocessing/preprocessing.py", 197)
+    assert site.hypothesis_kind == "quality"
+    assert "single datetime64 column" in note
+    row["feedback"] = note
+    findings.write_text(json.dumps(row) + "\n")
+    assert narrow_datetime_resume(findings, source_hash="src") is None
+
+
 def test_enqueue_writes_campaign_root_not_run_subdir(tmp_path):
     from fedotllm.agents.evolve.controller.quality_queue import enqueue_quality_job
     from fedotllm.agents.evolve.types import PatchCandidate
