@@ -538,6 +538,27 @@ def _empty_categorical_index_unproved(row: dict[str, Any]) -> bool:
     )
 
 
+def _numerical_min_uniques_is_docs_only(row: dict[str, Any]) -> bool:
+    """The name ``numerical_min_uniques`` is not a runtime parameter.
+
+    The 10:14 Europe/Moscow lead said ``TableTypesCorrector`` silently drops
+    that setting. The name is only in ``data_preprocessing.rst``. The test
+    helper takes ``categorical_max_uniques_th`` and raises ``TypeError`` on
+    the documented keyword. An empty model response left the lead inconclusive.
+    """
+
+    lead = row.get("lead") or {}
+    if not isinstance(lead, dict):
+        return False
+    text = " ".join(
+        str(lead.get(part) or "")
+        for part in ("why", "mechanism", "proposed_change")
+    )
+    if "numerical_min_uniques" not in text:
+        return False
+    return re.search(r"silently|never reads|hardcod", text, re.IGNORECASE) is not None
+
+
 def _string_domain_upcast_unproved(row: dict[str, Any]) -> bool:
     """An equal string-set reject that fit the ints through a float upcast.
 
@@ -885,6 +906,8 @@ def _correctness_resume_plan(
             proven.append((_correctness_site(key, proven_row), proven_row))
             continue
         reproduction = row.get("reproduction") or {}
+        if _numerical_min_uniques_is_docs_only(row):
+            continue
         if (
             _stale_binary_key_unproved(row)
             or _all_nan_union_unproved(row)
@@ -1261,6 +1284,9 @@ def closed_correctness_sites(
             and (row.get("reproduction") or {}).get("target_reached") is not True
         )
         if healthy_without_target:
+            continue
+        if _numerical_min_uniques_is_docs_only(row):
+            closed.add(key)
             continue
         if (
             _stale_binary_key_unproved(row)

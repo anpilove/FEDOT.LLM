@@ -845,6 +845,29 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _numerical_min_uniques_is_docs_only(parsed: SiteProposal) -> bool:
+    """``numerical_min_uniques`` is a documentation name, not a parameter.
+
+    The 10:14 Europe/Moscow catalog picked ``data_types.py:44`` and said
+    ``TableTypesCorrector`` silently drops that public setting. The name
+    appears in ``data_preprocessing.rst``. The runnable helper is the test
+    function ``correct_preprocessing_params``, whose parameter is
+    ``categorical_max_uniques_th``. Passing ``numerical_min_uniques`` raises
+    ``TypeError``. A fresh corrector always starts at 13.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "numerical_min_uniques" not in text:
+        return False
+    return (
+        re.search(r"silently|never reads|hardcod", text, re.IGNORECASE) is not None
+    )
+
+
 def _nan_scan_counts_dropped_target_rows(parsed: SiteProposal) -> bool:
     """NaNs on rows with a missing target change which columns survive.
 
@@ -1053,6 +1076,16 @@ def _first_pick_rejection(
             "unseen categories become zero rows under handle_unknown='ignore' "
             "(test_one_hot_encoding_new_category_in_test). Pick a different "
             "executed line or skip",
+        )
+    if _numerical_min_uniques_is_docs_only(parsed):
+        return (
+            "numerical_min_uniques_is_docs_only",
+            "numerical_min_uniques appears only in data_preprocessing.rst. "
+            "The runnable helper is the test function "
+            "correct_preprocessing_params, and its parameter is "
+            "categorical_max_uniques_th. Passing numerical_min_uniques raises "
+            "TypeError. TableTypesCorrector() always starts at 13. Pick a "
+            "different executed line or skip",
         )
     if _nan_scan_counts_dropped_target_rows(parsed):
         return (
