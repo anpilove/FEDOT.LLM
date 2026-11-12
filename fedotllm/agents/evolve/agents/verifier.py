@@ -1185,6 +1185,14 @@ def verify_lead(
                             "reading .size on that value crashes in fit before the encoder. "
                             "transform accepts only one InputData."
                         )
+                    elif "'list' object has no attribute 'size'" in (
+                        exception_line + (stock.stderr or "")
+                    ):
+                        detail += (
+                            " categorical_idx and numerical_idx must be numpy arrays. "
+                            "A Python list has no size attribute and crashes in fit "
+                            "before the union."
+                        )
                     elif "Operation(" in code and "Implementation(" not in code:
                         detail += (
                             " Use PipelineBuilder.add_node or PipelineNode with an operation name, "

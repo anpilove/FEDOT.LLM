@@ -571,6 +571,15 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "same instance when the column has more than two unique values."
         ).strip()
     if (
+        "'list' object has no attribute 'size'" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "must be numpy arrays" not in why
+    ):
+        why = (
+            f"{why} categorical_idx and numerical_idx must be numpy arrays. "
+            "A Python list has no size attribute and crashes in fit before the union."
+        ).strip()
+    if (
         "add_operation" in observed
         and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
         and "has no add_operation" not in why
@@ -1105,6 +1114,11 @@ def closed_correctness_sites(
             _stale_binary_key_unproved(row)
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
+        ):
+            continue
+        if (
+            _probe_missed_target(row)
+            and missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS
         ):
             continue
         if outcome in {

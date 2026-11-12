@@ -906,6 +906,67 @@ def test_symbol_line_disagree_resume_names_the_union(tmp_path):
     assert "columns=self.non_categorical_ids" in resumed[0].why
 
 
+def test_list_idx_resume_names_numpy_arrays(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 432,
+            "hypothesis_kind": "correctness",
+            "why": "crash in _categorical_numerical_union",
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": (
+                "probe did not execute the claimed target method. "
+                "The probe stopped at: AssertionError: valid supported call "
+                "(fit) crashed: 'list' object has no attribute 'size'"
+            ),
+            "detail": "verification step budget exhausted",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert "must be numpy arrays" in resumed[0].why
+
+
+def test_later_missed_target_stays_open_after_three_inconclusive(tmp_path):
+    lead = {
+        "file_path": "fedot/sklearn_transformations.py",
+        "line": 432,
+        "hypothesis_kind": "correctness",
+        "why": "crash in _categorical_numerical_union",
+    }
+    plain = {
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": lead,
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": "probe must import FEDOT",
+            "detail": "verification step budget exhausted",
+        },
+    }
+    missed = {
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": lead,
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": "probe did not execute the claimed target method",
+            "detail": "verification step budget exhausted",
+        },
+    }
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("".join(json.dumps(plain) + "\n" for _ in range(3)) + json.dumps(missed) + "\n")
+    assert ("fedot/sklearn_transformations.py", 432) not in replay.closed_correctness_sites(findings)
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/sklearn_transformations.py", 432),
+    ]
+
+
 def test_union_short_symbol_stays_open_after_three_inconclusive(tmp_path):
     findings = tmp_path / "findings.jsonl"
     row = {
