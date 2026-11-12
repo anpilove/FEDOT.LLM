@@ -787,6 +787,29 @@ def _advanced_index_claimed_as_view(parsed: SiteProposal) -> bool:
     return _ADVANCED_INDEX_VIEW.search(text) is not None
 
 
+_CONSTRUCTOR_OMITS_CATEGORICAL = re.compile(
+    r"(?:from_numpy|array_to_input_data).{0,220}without populating categorical_features",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _constructor_omits_categorical_features(parsed: SiteProposal) -> bool:
+    """``array_to_input_data`` copies the categorical block when the index is set.
+
+    The 07:24 Moscow catalog claimed ``from_numpy`` leaves
+    ``categorical_features`` empty. The constructor assigns
+    ``features[:, categorical_idx]`` when that index is non-empty, and the
+    verifier then spent the campaign rejecting the claim.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _CONSTRUCTOR_OMITS_CATEGORICAL.search(text) is not None
+
+
 def _first_pick_rejection(
     parsed: SiteProposal,
     picked: MatchSite,
@@ -814,6 +837,13 @@ def _first_pick_rejection(
             "advanced_index_is_copy",
             "NumPy advanced indexing already returns a copy, so that slice does not "
             "write back into the caller; pick a different executed line or skip",
+        )
+    if _constructor_omits_categorical_features(parsed):
+        return (
+            "constructor_fills_categorical_features",
+            "array_to_input_data copies features[:, categorical_idx] into "
+            "categorical_features when the index is non-empty; pick a different "
+            "executed line or skip",
         )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
