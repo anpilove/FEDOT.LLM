@@ -726,6 +726,14 @@ def discover_leads(
                     "mechanism": item.mechanism,
                     "proposed_change": item.proposed_change,
                     "expected_metric_effect": item.expected_metric_effect,
+                    "sites": [
+                        {
+                            "file_path": site.file_path,
+                            "line": site.line,
+                            "role": site.role,
+                        }
+                        for site in item.sites
+                    ],
                 }
                 for item in found
             ]
@@ -738,6 +746,14 @@ def discover_leads(
                     "mechanism": first.mechanism,
                     "proposed_change": first.proposed_change,
                     "expected_metric_effect": first.expected_metric_effect,
+                    "sites": [
+                        {
+                            "file_path": site.file_path,
+                            "line": site.line,
+                            "role": site.role,
+                        }
+                        for site in first.sites
+                    ],
                 }
         for picked in reversed(found):
             if not _metric_path(picked.file_path):
@@ -755,6 +771,7 @@ def discover_leads(
                         proposed_change=picked.proposed_change,
                         expected_metric_effect=picked.expected_metric_effect,
                         hypothesis_kind=picked.hypothesis_kind,
+                        sites=picked.sites,
                     )
                     break
             pooled = _unique([picked] + pooled)

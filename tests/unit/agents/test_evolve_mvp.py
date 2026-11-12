@@ -10335,7 +10335,7 @@ def test_scout_searches_one_metric_linked_change_without_preclassified_mode(
     )
     picked = next(lead for lead in leads if lead.channel == "llm")
     assert "classify the lead in advance" in inference.prompt
-    assert "primary goal is one source change" in inference.prompt
+    assert "primary goal is one causal hypothesis" in inference.prompt
     assert "workload family=classification" in inference.prompt
     assert "evaluation objective withheld during discovery" in inference.prompt
     assert "metric=holdout_roc_auc" not in inference.prompt

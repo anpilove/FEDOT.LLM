@@ -2043,6 +2043,97 @@ def test_fixer_prompt_does_not_leak_known_pca_case():
     assert "numeric-projection" not in prompt
 
 
+def test_multi_site_hypothesis_becomes_one_patch(tmp_path: Path):
+    from fedotllm.agents.evolve.agents.propose import (
+        PatchHunk,
+        PatchProposal,
+        build_prompt,
+        propose_patch,
+    )
+    from fedotllm.agents.evolve.discovery.context import context_from_lead
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, discover_leads
+
+    package = tmp_path / "fedot"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "a.py").write_text("def fit_rule():\n    return 1\n", encoding="utf-8")
+    (package / "b.py").write_text(
+        "def predict_rule():\n    return 2\n", encoding="utf-8"
+    )
+
+    class _Scout:
+        def create(self, prompt, _schema):
+            assert "one causal hypothesis" in prompt
+            return SiteProposal(
+                status="pick",
+                file_path="fedot/a.py",
+                line=1,
+                change_line=1,
+                why="fit and predict must share one rule",
+                mechanism="the fitted value is what predict returns",
+                proposed_change="change the fit rule and the predict rule together",
+                expected_metric_effect="predictions follow the fitted rule",
+                hypothesis_kind="quality",
+                sites=[
+                    {
+                        "file_path": "fedot/b.py",
+                        "change_line": 1,
+                        "role": "predict applies the fitted rule",
+                    },
+                    {
+                        "file_path": "fedot/missing.py",
+                        "change_line": 1,
+                        "role": "this file is not in the checkout",
+                    },
+                ],
+            )
+
+    leads = discover_leads(tmp_path, inference=_Scout(), limit=4, max_picks=1)
+    picked = next(lead for lead in leads if lead.channel == "llm")
+    assert [(site.file_path, site.line) for site in picked.sites] == [
+        ("fedot/a.py", 1),
+        ("fedot/b.py", 1),
+    ]
+    assert picked.sites[1].role == "predict applies the fitted rule"
+
+    context = context_from_lead(picked, tmp_path, max_chars=20_000)
+    assert "Hypothesis sites" in context
+    assert "def predict_rule" in context
+    assert "fedot/missing.py" not in context
+    prompt = build_prompt(context, max_edits=1).lower()
+    assert "do not return cannot_fix only because" in prompt
+    assert "coordinated edits in two places" not in prompt
+
+    class _Fixer:
+        def create(self, prompt, _schema):
+            assert "hypothesis sites" in prompt.lower()
+            return PatchProposal(
+                file_path="fedot/a.py",
+                status="patch",
+                edits=[
+                    PatchHunk(
+                        file_path="fedot/a.py",
+                        old_code="return 1",
+                        new_code="return 3",
+                    ),
+                    PatchHunk(
+                        file_path="fedot/b.py",
+                        old_code="return 2",
+                        new_code="return 3",
+                    ),
+                ],
+                rationale="one rule in fit and predict",
+                behavior_probe="print('EVOLVE_OBSERVATION=3')",
+            )
+
+    candidate = propose_patch(inference=_Fixer(), context=context, max_edits=1)
+    assert candidate is not None
+    assert {(edit.file_path, edit.new_code) for edit in candidate.edits} == {
+        ("fedot/a.py", "return 3"),
+        ("fedot/b.py", "return 3"),
+    }
+
+
 def test_llm_pick_rejects_file_outside_shown_context(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, discover_leads
 
