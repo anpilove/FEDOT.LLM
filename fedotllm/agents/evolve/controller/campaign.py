@@ -78,6 +78,7 @@ from fedotllm.agents.evolve.storage.replay import (
     solved_lift_tasks_from_findings,
     tried_patch_hashes_from_findings,
     tried_sites,
+    proven_correctness_replay,
     unfinished_correctness_leads,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
@@ -1137,6 +1138,7 @@ def run_once(
         path.write_text(text, encoding="utf-8")
         return path
 
+    proven_replay = proven_correctness_replay(findings_path)
     for i, lead in enumerate(leads, start=1):
         safety_extension_granted = False
         prior_behavior_probe: tuple[str, str] | None = None
@@ -1168,8 +1170,12 @@ def run_once(
         )
         observed_crash = verification_from_observed_crash(lead)
         observed_contract = verification_from_contract_lead(lead)
+        replayed = proven_replay.get((lead.file_path, lead.line))
+        replay_candidate = None
         if i == 1 and resume_verification is not None:
             verification = resume_verification
+        elif replayed is not None:
+            verification, replay_candidate = replayed
         elif observed_contract is not None:
             verification = observed_contract
         elif observed_crash is not None:
@@ -1382,7 +1388,9 @@ def run_once(
                         hypothesis_id=hypothesis.id,
                         saved_candidate=(
                             resume_candidate
-                            if i == 1 and revision == 1
+                            if i == 1 and revision == 1 and resume_candidate is not None
+                            else replay_candidate
+                            if revision == 1
                             else retry_saved_candidate
                         ),
                     )

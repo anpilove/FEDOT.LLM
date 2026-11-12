@@ -515,21 +515,29 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
     )
 
 
-def unfinished_correctness_leads(
+def _supersedes_proven_patch(row: dict[str, Any]) -> bool:
+    """A later decisive result replaces a patch that was only dropped on a crash."""
+
+    reproduction = row.get("reproduction") or {}
+    if reproduction.get("status") == "rejected":
+        return True
+    outcome = str(row.get("outcome") or "")
+    if outcome in {
+        "rejected",
+        "correctness_keep",
+        "correctness_keep_with_metric_signal",
+    }:
+        return True
+    tests = row.get("tests") or {}
+    return isinstance(tests, dict) and tests.get("status") not in {None, "", "passed"}
+
+
+def _correctness_resume_plan(
     findings_path: Path | None,
-    *,
-    limit: int = 2,
-) -> list[MatchSite]:
-    """Return correctness leads that still deserve a patch attempt.
+) -> list[tuple[MatchSite, dict[str, Any] | None]]:
+    """Proven shared-crash patches first, then still-open inconclusive probes."""
 
-    A verified patch dropped on one shared protect crash is resumed first.
-    A second drop of the same kind is not resumed. One or two inconclusive
-    attempts follow, behind that proven patch. A verifier rejection is
-    finished even when the outcome field is still ``unverified_no_patch``.
-    A third inconclusive attempt for the same line is not resumed.
-    """
-
-    if findings_path is None or not findings_path.is_file() or limit <= 0:
+    if findings_path is None or not findings_path.is_file():
         return []
     rows: list[dict[str, Any]] = []
     for raw in findings_path.read_text(encoding="utf-8").splitlines():
@@ -544,6 +552,8 @@ def unfinished_correctness_leads(
     latest: dict[tuple[str, int], dict[str, Any]] = {}
     inconclusive_counts: dict[tuple[str, int], int] = {}
     shared_crash_counts: dict[tuple[str, int], int] = {}
+    proven_rows: dict[tuple[str, int], dict[str, Any]] = {}
+    superseded: set[tuple[str, int]] = set()
     for row in rows:
         lead = row.get("lead")
         if not isinstance(lead, dict) or not lead.get("file_path"):
@@ -563,22 +573,113 @@ def unfinished_correctness_leads(
             inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
         if _shared_protect_crash(row):
             shared_crash_counts[key] = shared_crash_counts.get(key, 0) + 1
-    proven: list[MatchSite] = []
-    open_probes: list[MatchSite] = []
+            proven_rows[key] = row
+            superseded.discard(key)
+        elif key in proven_rows and _supersedes_proven_patch(row):
+            superseded.add(key)
+    proven: list[tuple[MatchSite, dict[str, Any]]] = []
+    open_probes: list[tuple[MatchSite, None]] = []
     for key, row in reversed(list(latest.items())):
+        proven_row = proven_rows.get(key)
+        if (
+            proven_row is not None
+            and shared_crash_counts.get(key) == 1
+            and key not in superseded
+        ):
+            proven.append((_correctness_site(key, proven_row), proven_row))
+            continue
         reproduction = row.get("reproduction") or {}
         if reproduction.get("status") == "rejected":
-            continue
-        if _shared_protect_crash(row) and shared_crash_counts.get(key) == 1:
-            proven.append(_correctness_site(key, row))
             continue
         if (
             row.get("outcome") == "unverified_no_patch"
             and reproduction.get("status") == "inconclusive"
             and 1 <= inconclusive_counts.get(key, 0) <= 2
         ):
-            open_probes.append(_correctness_site(key, row))
-    return [*proven, *open_probes][:limit]
+            open_probes.append((_correctness_site(key, row), None))
+    return [*proven, *open_probes]
+
+
+def unfinished_correctness_leads(
+    findings_path: Path | None,
+    *,
+    limit: int = 2,
+) -> list[MatchSite]:
+    """Return correctness leads that still deserve a patch attempt.
+
+    A verified patch dropped on one shared protect crash is resumed first,
+    even when a later inconclusive probe was recorded for the same line.
+    A second drop of the same kind is not resumed. One or two inconclusive
+    attempts follow, behind that proven patch. A verifier rejection is
+    finished even when the outcome field is still ``unverified_no_patch``.
+    A third inconclusive attempt for the same line is not resumed.
+    """
+
+    if limit <= 0:
+        return []
+    return [site for site, _row in _correctness_resume_plan(findings_path)[:limit]]
+
+
+def _replay_pair(
+    row: dict[str, Any],
+) -> tuple[VerificationResult, PatchCandidate] | None:
+    edits: list[PatchEdit] = []
+    for item in row.get("edits") or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("file_path") or "")
+        old_code = str(item.get("old_code") or "")
+        new_code = str(item.get("new_code") or "")
+        if file_path and old_code and new_code and old_code != new_code:
+            edits.append(PatchEdit(file_path, old_code, new_code))
+    reproduction = row.get("reproduction") or {}
+    code = str(reproduction.get("code") or "")
+    if not edits or not code:
+        return None
+    alternatives = reproduction.get("alternatives_considered") or ()
+    risks = reproduction.get("risks") or ()
+    verification = VerificationResult(
+        "verified_bug",
+        claim=str(reproduction.get("claim") or ""),
+        expected=str(reproduction.get("expected") or ""),
+        observed=str(reproduction.get("observed") or ""),
+        reproduction_code=code,
+        detail="replayed a verified patch dropped on a shared protect crash",
+        current_approach=str(reproduction.get("current_approach") or ""),
+        proposed_approach=str(reproduction.get("proposed_approach") or ""),
+        alternatives_considered=tuple(str(item) for item in alternatives),
+        generality=str(reproduction.get("generality") or ""),
+        risks=tuple(str(item) for item in risks),
+    )
+    candidate = PatchCandidate(
+        candidate_id=str(row.get("candidate_id") or "replayed-correctness"),
+        edits=edits,
+        rationale=(
+            "Replay the verified patch. The previous drop was a protect crash "
+            "that stock already had."
+        ),
+    )
+    return verification, candidate
+
+
+def proven_correctness_replay(
+    findings_path: Path | None,
+) -> dict[tuple[str, int], tuple[VerificationResult, PatchCandidate]]:
+    """Reapply a verified patch instead of spending another verifier budget.
+
+    The returned candidate is the exact edit from the finding. The verifier
+    result carries the probe that already showed stock failing and the patch
+    resolving it, so the campaign can rerun that probe on the replayed edit.
+    """
+
+    replayed: dict[tuple[str, int], tuple[VerificationResult, PatchCandidate]] = {}
+    for site, row in _correctness_resume_plan(findings_path):
+        if row is None:
+            continue
+        pair = _replay_pair(row)
+        if pair is not None:
+            replayed[(site.file_path, site.line)] = pair
+    return replayed
 
 
 def recent_completed_sites_from_findings(
@@ -784,7 +885,11 @@ def tried_patch_hashes_from_findings(
             source_hash=source_hash,
             evaluation_protocol_hash=evaluation_protocol_hash,
         )
-        if not _probe_only_rejection(row) and not _cheap_screen_not_quality_verdict(row)
+        if (
+            not _probe_only_rejection(row)
+            and not _cheap_screen_not_quality_verdict(row)
+            and not _shared_protect_crash(row)
+        )
     }
 
 

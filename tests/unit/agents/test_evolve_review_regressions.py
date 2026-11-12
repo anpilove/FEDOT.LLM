@@ -304,6 +304,56 @@ def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
     assert [(item.file_path, item.line) for item in resumed] == [
         ("fedot/core/data/data_split.py", 198),
     ]
+    proven = next(row for row in rows if row.get("outcome") == "infrastructure_error")
+    proven.update({
+        "candidate_id": "seed-patch",
+        "patch_hash": "seed-hash",
+        "source_hash": "src",
+        "evaluation_protocol_hash": "proto",
+        "edits": [{
+            "file_path": "fedot/core/data/data_split.py",
+            "old_code": "random_seed or 42",
+            "new_code": "42 if random_seed is None else random_seed",
+        }],
+        "reproduction": {
+            "status": "verified_bug",
+            "code": "assert seed == 0",
+            "claim": "seed 0 is aliased",
+        },
+    })
+    rows.append({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": parked,
+        "reproduction": {"status": "inconclusive"},
+    })
+    rows.append({
+        "record_type": "finding",
+        "outcome": "rejected",
+        "patch_hash": "kept-hash",
+        "source_hash": "src",
+        "evaluation_protocol_hash": "proto",
+        "lead": {
+            "file_path": "fedot/other.py",
+            "line": 1,
+            "hypothesis_kind": "quality_hypothesis",
+        },
+        "dev": {"reason": "tests_regressed"},
+    })
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/core/data/data_split.py", 198),
+    ]
+    verification, candidate = replay.proven_correctness_replay(findings)[
+        ("fedot/core/data/data_split.py", 198)
+    ]
+    assert verification.status == "verified_bug"
+    assert verification.reproduction_code == "assert seed == 0"
+    assert "is None" in candidate.new_code
+    assert replay.tried_patch_hashes_from_findings(
+        findings, source_hash="src", evaluation_protocol_hash="proto",
+    ) == {"kept-hash"}
     rows.append({
         "record_type": "finding",
         "outcome": "infrastructure_error",
