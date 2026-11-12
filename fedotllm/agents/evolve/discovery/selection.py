@@ -821,6 +821,30 @@ _DATETIME_NAT_AS_NAN = re.compile(
 )
 
 
+_INTEGRAL_CATEGORICAL_GATE = re.compile(
+    r"(?:integer-valued|integrality).{0,240}(?:categorical|nunique|unique values)"
+    r"|(?:continuous float).{0,180}remain numeric",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
+    """Low-cardinality numeric columns become strings, including non-integers.
+
+    The 08:56 Europe/Moscow catalog wanted an integrality gate so continuous
+    floats with few unique values stay numeric. ``test_column_types_converting_correctly``
+    requires those columns to become ``str``, and the mixed-type pipeline
+    expects seven importances.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
+
+
 def _datetime_integer_contract_forbids_nan(parsed: SiteProposal) -> bool:
     """``np_datetime_to_numeric`` documents an integer millisecond conversion.
 
@@ -898,6 +922,15 @@ def _first_pick_rejection(
             "SimpleImputer add_indicator appends columns that are not in "
             "col_type_ids['features']; reduce_mem_usage then raises IndexError, "
             "and the preprocessing tests require the original width. Pick a "
+            "different executed line or skip",
+        )
+    if _integrality_gate_on_categorical_heuristic(parsed):
+        return (
+            "low_cardinality_floats_stay_categorical",
+            "test_column_types_converting_correctly requires the low-cardinality "
+            "numeric columns to become str, and "
+            "test_data_with_mixed_types_per_column_processed_correctly expects "
+            "7 importances. Do not gate that heuristic on integrality. Pick a "
             "different executed line or skip",
         )
     if _datetime_integer_contract_forbids_nan(parsed):

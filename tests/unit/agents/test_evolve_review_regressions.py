@@ -222,6 +222,32 @@ def test_annotated_int_or_recognizes_a_zero_seed():
     assert annotated_int_or_coerces_zero(untouched, 2) == ""
 
 
+def test_integrality_gate_pytest_does_not_open_another_revision():
+    from fedotllm.agents.evolve.controller.campaign import categorical_integrality_locked
+
+    candidate = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit(
+            "fedot/preprocessing/data_types.py",
+            "num_df = num_df.loc[:, (2 < nuniques)]",
+            "is_integral = num_df.apply(lambda s: np.all(np.mod(s.dropna(), 1) == 0))\n"
+            "num_df = num_df.loc[:, (2 < nuniques) & is_integral]",
+        )],
+    )
+    reason = (
+        "fedot_tests_regressed "
+        "test/unit/preprocessing/test_preprocessors.py::test_column_types_converting_correctly, "
+        "test/unit/preprocessing/test_pipeline_preprocessing.py::"
+        "test_data_with_mixed_types_per_column_processed_correctly"
+    )
+    assert categorical_integrality_locked(candidate, reason)
+    other = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit("fedot/a.py", "x = 1", "x = 2")],
+    )
+    assert not categorical_integrality_locked(other, reason)
+
+
 def test_indicator_width_crash_skips_another_revision():
     from fedotllm.agents.evolve.controller.campaign import indicator_width_crash
 

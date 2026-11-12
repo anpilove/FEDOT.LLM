@@ -221,6 +221,24 @@ def _render_candidate_patch(*args, **kwargs) -> str:
     )
 
 
+def categorical_integrality_locked(candidate: PatchCandidate, reason: str) -> bool:
+    """The categorical heuristic tests reject an integer-only gate.
+
+    The 08:56 Europe/Moscow patch kept only integer-valued columns. Pytest
+    failed ``test_column_types_converting_correctly`` and
+    ``test_data_with_mixed_types_per_column_processed_correctly``. The repair
+    revision produced no edit.
+    """
+
+    edits = "\n".join(edit.new_code for edit in candidate.edits)
+    if "is_integral" not in edits and "np.mod" not in edits:
+        return False
+    return (
+        "test_column_types_converting_correctly" in reason
+        and "test_data_with_mixed_types_per_column_processed_correctly" in reason
+    )
+
+
 def indicator_width_crash(candidate: PatchCandidate, behavior_probe: dict) -> bool:
     """An ``add_indicator`` edit that makes ``reduce_mem_usage`` index past ids.
 
@@ -2088,6 +2106,7 @@ def run_once(
                         "and all existing FEDOT contracts before DEV evaluation."
                     )
                     tie = tied_named_metric(behavior_probe)
+                    locked = categorical_integrality_locked(candidate, blocked.reason)
                     if tie:
                         # auc stayed 0.540 while the magnitude fell. Another
                         # revision then deleted the helper and left the call.
@@ -2095,6 +2114,16 @@ def run_once(
                             f"The probe scored {tie} on both sides, so the metric "
                             "did not move. A tied score does not get another "
                             "source revision.\n"
+                            + feedback
+                        )
+                    elif locked:
+                        feedback = (
+                            "test_column_types_converting_correctly requires the "
+                            "low-cardinality numeric columns to become str, and "
+                            "test_data_with_mixed_types_per_column_processed_correctly "
+                            "expects 7 importances. An integrality gate removes "
+                            "columns those tests convert. Do not gate the heuristic "
+                            "on integrality.\n"
                             + feedback
                         )
                     feedback = push_feedback(feedback)
@@ -2114,7 +2143,7 @@ def run_once(
                     if blocked.infrastructure_error:
                         _record_final_skipped(journal, reason=blocked.reason)
                         return finish(blocked)
-                    if tie:
+                    if tie or locked:
                         break
                     grant_safety_extension("pytest", candidate, last.reason)
                     if advance_revision(last.reason):
