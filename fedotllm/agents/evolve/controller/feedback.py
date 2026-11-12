@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from fedotllm.agents.evolve.evaluation.compare import candidate_failed
+from fedotllm.agents.evolve.evaluation.tasks import all_tasks
 from fedotllm.agents.evolve.types import (
     Decision,
     PatchCandidate,
@@ -391,6 +392,142 @@ def _candidate_confirmation_scope(
     affected.update(direct_tasks)
     scope = tuple(task_id for task_id in exam_ids if task_id in affected)
     return scope or None
+
+
+_OPERATION_CLASS = re.compile(
+    r"""['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*:\s*([A-Za-z_][A-Za-z0-9_]*)"""
+)
+_SIBLING_DELTA = re.compile(
+    r"regression\s+\S+\s+delta\s+(-?(?:\d+(?:\.\d*)?|\.\d+))"
+)
+
+
+def _shared_owner(source: Path, candidate: PatchCandidate) -> str | None:
+    """Return the class name when every edit sits in one class that has subclasses."""
+
+    owner_name = ""
+    for edit in candidate.edits:
+        path = source / edit.file_path
+        try:
+            text = path.read_text(encoding="utf-8")
+            if text.count(edit.old_code) != 1:
+                return None
+            tree = ast.parse(text, filename=str(path))
+        except (OSError, SyntaxError, UnicodeError):
+            return None
+        line = text.count("\n", 0, text.index(edit.old_code)) + 1
+        classes = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and node.lineno <= line <= (node.end_lineno or node.lineno)
+        ]
+        if not classes:
+            return None
+        owner = min(
+            classes,
+            key=lambda node: (node.end_lineno or node.lineno) - node.lineno,
+        )
+        subclasses = [
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and any(
+                (isinstance(base, ast.Name) and base.id == owner.name)
+                or (isinstance(base, ast.Attribute) and base.attr == owner.name)
+                for base in node.bases
+            )
+        ]
+        if not subclasses:
+            return None
+        if owner_name and owner_name != owner.name:
+            return None
+        owner_name = owner.name
+    return owner_name or None
+
+
+def shared_base_sibling_scope(
+    source: Path,
+    candidate: PatchCandidate,
+    lift_ids: tuple[str, ...],
+    *,
+    known_tasks: dict[str, tuple[str, ...]] | None = None,
+) -> tuple[str, ...] | None:
+    """Lift tasks that execute a subclass of the edited shared base.
+
+    The ordinary confirmation scope stays empty for a shared base. These ids
+    are the lift task that names the operation plus the same operation on the
+    other lift datasets, such as ``lgbm``, ``cancer->lgbm``, and ``kc2->lgbm``.
+    """
+
+    owner = _shared_owner(source, candidate)
+    if owner is None:
+        return None
+    subclass_names = set()
+    for edit in candidate.edits:
+        path = source / edit.file_path
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError, UnicodeError):
+            return None
+        subclass_names.update(
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and any(
+                (isinstance(base, ast.Name) and base.id == owner)
+                or (isinstance(base, ast.Attribute) and base.attr == owner)
+                for base in node.bases
+            )
+        )
+    subclass_names.add(owner)
+    operations: set[str] = set()
+    for path in source.rglob("*.py"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if not any(name in text for name in subclass_names):
+            continue
+        for operation, class_name in _OPERATION_CLASS.findall(text):
+            if class_name in subclass_names:
+                operations.add(operation)
+    if not operations:
+        return None
+    if known_tasks is None:
+        known_tasks = {spec.task_id: tuple(spec.nodes) for spec in all_tasks()}
+    direct = [
+        task_id
+        for task_id in lift_ids
+        if any(operation in (known_tasks.get(task_id) or ()) for operation in operations)
+    ]
+    composed: list[str] = []
+    for task_id in lift_ids:
+        if "->" in task_id:
+            continue
+        for operation in sorted(operations):
+            sibling = f"{task_id}->{operation}"
+            if sibling in known_tasks and sibling not in direct and sibling not in composed:
+                composed.append(sibling)
+    scope = tuple(direct + composed)
+    return scope or None
+
+
+def sibling_regression_blocks_queue(screen: dict | None) -> str:
+    """Refuse the 40-task queue when a shared-base sibling already regressed.
+
+    A crash or a timeout is not this gate. The quick screen still returns
+    passed for a numeric loss; this text is what stops the queue.
+    """
+
+    reason = str(((screen or {}).get("dev") or {}).get("reason") or "")
+    match = _SIBLING_DELTA.search(reason)
+    if match is None or float(match.group(1)) >= 0:
+        return ""
+    return (
+        "Shared-base lift sibling regression blocks the 40-task queue: "
+        f"{reason}. Revise the same operation or skip it."
+    )
 
 
 def _blocking_lift_crash_ids(

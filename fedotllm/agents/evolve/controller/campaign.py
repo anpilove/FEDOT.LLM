@@ -99,6 +99,8 @@ from fedotllm.agents.evolve.controller.feedback import (
     _revision_feedback_context,
     _runtime_operation_evidence,
     _test_result_diagnostics,
+    shared_base_sibling_scope,
+    sibling_regression_blocks_queue,
 )
 from fedotllm.agents.evolve.controller.confirmation import (
     affected_metric_moved,
@@ -2224,6 +2226,81 @@ def run_once(
                     and verification.status == "quality_hypothesis"
                     and not config.metric_only
                 ):
+                    if quick_scope is None:
+                        sibling_scope = shared_base_sibling_scope(
+                            source, candidate, lift_ids
+                        )
+                        if sibling_scope:
+                            missing = tuple(
+                                task_id
+                                for task_id in sibling_scope
+                                if task_id not in stock
+                            )
+                            if missing:
+                                stock.update(
+                                    measure_stock(
+                                        missing,
+                                        checkout=source,
+                                        seed=config.dev_seed,
+                                    )
+                                )
+                            _sibling_passed, sibling_screen = _quick_quality_screen(
+                                experiment,
+                                sibling_scope,
+                                sibling_scope,
+                                sibling_scope,
+                                stock,
+                                seed=config.dev_seed,
+                            )
+                            append_journal(
+                                workspace / "trace.jsonl",
+                                {
+                                    "event": "sibling_lift_screen",
+                                    "candidate": candidate.candidate_id,
+                                    "tasks": list(sibling_scope),
+                                    **sibling_screen,
+                                },
+                            )
+                            block = sibling_regression_blocks_queue(sibling_screen)
+                            if block:
+                                last = Decision(
+                                    False,
+                                    "sibling_lift_regression",
+                                    sibling_screen.get("target_delta"),
+                                    stage="dev",
+                                    experiment_id=experiment_id,
+                                )
+                                feedback = push_feedback(
+                                    block
+                                    + "\n"
+                                    + json.dumps(
+                                        sibling_screen,
+                                        ensure_ascii=False,
+                                        default=str,
+                                    )[:5_000]
+                                )
+                                record_attempt(
+                                    lead,
+                                    candidate,
+                                    {
+                                        task_id: stock[task_id]
+                                        for task_id in sibling_scope
+                                        if task_id in stock
+                                    },
+                                    None,
+                                    last,
+                                    revision,
+                                    diff=_candidate_diff(
+                                        experiment, source, candidate
+                                    ),
+                                    patch_hash=patch_hash,
+                                    feedback=feedback,
+                                    reproduction=reproduction,
+                                    behavior_probe=behavior_probe,
+                                )
+                                if advance_revision("sibling_lift_regression"):
+                                    continue
+                                break
                     probe_status = str((behavior_probe or {}).get("status") or "")
                     toy_moved = str(quick_result.get("reason") or "") == "early_gain"
                     priority = queue_priority(
