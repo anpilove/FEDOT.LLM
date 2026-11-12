@@ -58,6 +58,21 @@ def test_invalid_refinement_fails_closed(source, kwargs):
         resolve_verification_target(source, lead(), **kwargs)
 
 
+def test_module_path_matches_the_enclosing_symbol(source):
+    _, target = resolve_verification_target(
+        source, lead(), line=4, symbol="fedot.a.Output.save",
+    )
+    assert target["symbol"] == "Output.save"
+    _, target = resolve_verification_target(
+        source, lead(), line=7, symbol="pkg.unrelated",
+    )
+    assert target["symbol"] == "unrelated"
+    with pytest.raises(ValueError, match="disagree"):
+        resolve_verification_target(
+            source, lead(), line=4, symbol="fedot.a.unrelated",
+        )
+
+
 def test_trace_uses_actual_refined_method_in_child_process(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     code = "from fedot.a import Output\nassert Output().save() == [1, 2], 'row order'"

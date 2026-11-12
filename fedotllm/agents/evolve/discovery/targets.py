@@ -34,7 +34,10 @@ def resolve_verification_target(checkout: Path, lead: MatchSite, *, file_path: s
     if not matches:
         raise ValueError("verification target line is outside any source class/function")
     _, _, qualified = max(matches)
-    if symbol.strip() and symbol.strip() != qualified:
+    offered = symbol.strip()
+    # A verifier often names the import path. That still identifies the
+    # enclosing function; a different function at the same line does not.
+    if offered and offered != qualified and not offered.endswith("." + qualified):
         raise ValueError("verification target symbol and source line disagree")
     relative = path.relative_to(root).as_posix()
     target = {
