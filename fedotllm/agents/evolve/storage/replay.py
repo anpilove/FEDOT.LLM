@@ -512,6 +512,25 @@ def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
     return "more than two unique values" in detail and "never added" in detail
 
 
+def _discarded_callback_unproved(row: dict[str, Any]) -> bool:
+    """A reject that treats the dropped early-stopping callback as undocumented.
+
+    ``update_callbacks`` calls ``lgbm_early_stopping`` and returns ``[]``.
+    ``fit`` passes that list as ``callbacks=``. The 08:10 Europe/Moscow audit
+    saw the empty return and rejected it because the method has no docstring.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    return "lgbm_early_stopping" in why and (
+        "returns []" in text or "empty list" in text or "callbacks=[]" in text
+    )
+
+
 def _union_symbol_unresolved(row: dict[str, Any]) -> bool:
     """The short union name was rejected before any mixed-table probe ran.
 
@@ -569,6 +588,14 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "operation_info_by_id. Construct ImputationImplementation() directly. "
             "Fit once, transform a two-value numeric column, then transform that "
             "same instance when the column has more than two unique values."
+        ).strip()
+    if _discarded_callback_unproved(row) and "passes that list as callbacks=" not in why:
+        why = (
+            f"{why} The returned list is the contract. fit passes that list as "
+            "callbacks=. lgbm_early_stopping's result is discarded, so the list "
+            "stays empty. Assert that update_callbacks returns a non-empty list "
+            "when early_stopping_rounds is an int. Do not require the fitted "
+            "tree count to change."
         ).strip()
     if (
         "'list' object has no attribute 'size'" in observed
@@ -740,6 +767,7 @@ def _correctness_resume_plan(
             _stale_binary_key_unproved(row)
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
+            or _discarded_callback_unproved(row)
         ):
             open_probes.append((_correctness_site(key, row), None))
             continue
@@ -1114,6 +1142,7 @@ def closed_correctness_sites(
             _stale_binary_key_unproved(row)
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
+            or _discarded_callback_unproved(row)
         ):
             continue
         if (

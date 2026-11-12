@@ -310,6 +310,71 @@ def annotated_int_or_coerces_zero(source: str, line: int) -> str:
     return ""
 
 
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def discarded_callback_return(source: str, line: int) -> str:
+    """Return why an early-stopping callback is built and then dropped.
+
+    ``update_callbacks`` assigns ``callback = []``, calls
+    ``lgbm_early_stopping`` as a statement, and returns that empty list.
+    ``fit`` passes the list as ``callbacks=``. The 08:10 Europe/Moscow audit
+    called this inconclusive because the method has no docstring.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    owner: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+
+    def walk(node: ast.AST) -> None:
+        nonlocal owner
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end:
+                owner = node
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(tree)
+    if owner is None:
+        return ""
+    empty_names = {
+        node.targets[0].id
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.List)
+        and not node.value.elts
+    }
+    returns_empty = any(
+        isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in empty_names
+        for node in ast.walk(owner)
+    )
+    discarded = any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and _call_name(node.value).endswith("early_stopping")
+        for node in ast.walk(owner)
+    )
+    if not (empty_names and returns_empty and discarded):
+        return ""
+    return (
+        "update_callbacks builds an early-stopping callback and returns the "
+        "empty list instead. fit passes that list as callbacks=."
+    )
+
+
 def _audit_contract_support(
     checkout: Path,
     lead: MatchSite,
@@ -711,6 +776,7 @@ def verify_lead(
     target_disagree_retried = False
     binary_reject_retried = False
     all_nan_reject_retried = False
+    callback_reject_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1083,6 +1149,33 @@ def verify_lead(
                     f"Step {step} action={action.value} output:\n```\n{output}\n```"
                 )
                 continue
+            history_text = "\n".join(tool_history)
+            if (
+                correctness_only
+                and not callback_reject_retried
+                and "lgbm_early_stopping" in claim_text
+                and (
+                    "empty list" in history_text
+                    or "returns []" in history_text
+                    or "callbacks=[]" in history_text
+                )
+            ):
+                # The 08:10 Moscow audit saw the empty return and still
+                # rejected it as metric-adjacent. The list is the contract.
+                callback_reject_retried = True
+                step_budget += 1
+                output = (
+                    "The returned list is the contract. fit passes that list "
+                    "as callbacks=. lgbm_early_stopping's result is discarded, "
+                    "so the list stays empty. Assert that update_callbacks "
+                    "returns a non-empty list when early_stopping_rounds is an "
+                    "int. Do not require the fitted tree count to change."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
             result = VerificationResult(
                 "rejected",
                 claim=parsed.claim or lead.why,
@@ -1255,7 +1348,7 @@ def verify_lead(
                             _write_verification(workspace, lead, result)
                             return result
                         if (
-                            support_audit.verdict == "inconclusive"
+                            support_audit.verdict != "supported"
                             and "AssertionError" in (stock.stderr or "")
                         ):
                             try:
@@ -1264,9 +1357,15 @@ def verify_lead(
                                 ).read_text(encoding="utf-8")
                             except OSError:
                                 source_text = ""
-                            coerced = annotated_int_or_coerces_zero(
-                                source_text, target_lead.line
-                            )
+                            coerced = ""
+                            if support_audit.verdict == "inconclusive":
+                                coerced = annotated_int_or_coerces_zero(
+                                    source_text, target_lead.line
+                                )
+                            if not coerced:
+                                coerced = discarded_callback_return(
+                                    source_text, target_lead.line
+                                )
                             if coerced:
                                 support_audit = ContractSupportAudit(
                                     verdict="supported",

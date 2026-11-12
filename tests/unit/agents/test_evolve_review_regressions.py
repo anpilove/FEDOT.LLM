@@ -222,6 +222,49 @@ def test_annotated_int_or_recognizes_a_zero_seed():
     assert annotated_int_or_coerces_zero(untouched, 2) == ""
 
 
+def test_discarded_early_stopping_callback_is_a_contract():
+    from fedotllm.agents.evolve.agents.verifier import discarded_callback_return
+
+    source = (
+        "def update_callbacks(self):\n"
+        "    callback = []\n"
+        "    esr = self.params.get('early_stopping_rounds')\n"
+        "    if isinstance(esr, int):\n"
+        "        lgbm_early_stopping(esr, verbose=self.params.get('verbose'))\n"
+        "    return callback\n"
+        "\n"
+        "def fit(self):\n"
+        "    return 1\n"
+    )
+    assert "callbacks=" in discarded_callback_return(source, 5)
+    assert discarded_callback_return(source, 9) == ""
+
+
+def test_discarded_callback_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/boostings_implementations.py",
+            "line": 220,
+            "hypothesis_kind": "correctness",
+            "why": "lgbm_early_stopping result is discarded",
+        },
+        "reproduction": {
+            "status": "rejected",
+            "observed": "update_callbacks returns [] while early_stopping_rounds=30",
+            "detail": "not a documented public functional contract",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/boostings_implementations.py", 220),
+    ]
+    assert "passes that list as callbacks=" in resumed[0].why
+    assert ("fedot/boostings_implementations.py", 220) not in replay.closed_correctness_sites(findings)
+
+
 def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
     seed = {
         "file_path": "fedot/core/data/data_split.py",
