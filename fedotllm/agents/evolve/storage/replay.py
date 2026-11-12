@@ -743,6 +743,52 @@ def closed_correctness_sites(
     return closed
 
 
+def closed_hunt_sites(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> set[tuple[str, int]]:
+    """Sites already judged on this source, including failed quality patches.
+
+    A line whose patch failed the unit tests, or that the fixer refused, is
+    not offered to the next catalog. Correctness keeps and exhausted probes
+    stay closed as well.
+    """
+
+    closed = set(closed_correctness_sites(findings_path, source_hash=source_hash))
+    if findings_path is None or not findings_path.is_file():
+        return closed
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        tests = (row.get("tests") or {}).get("status")
+        outcome = str(row.get("outcome") or "")
+        reason = str((row.get("dev") or {}).get("reason") or "")
+        if (
+            tests == "test_failures"
+            or outcome == "rejected_tests"
+            or reason.startswith(("fedot_tests_regressed", "duplicate_patch", "cannot_fix"))
+            or reason == "cannot_fix"
+        ):
+            closed.add(key)
+    return closed
+
+
 def recent_completed_sites_from_findings(
     findings_path: Path | None, **filters
 ) -> set[tuple[str, int]]:

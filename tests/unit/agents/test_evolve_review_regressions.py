@@ -411,6 +411,33 @@ def test_finished_correctness_sites_stay_out_of_the_next_catalog(tmp_path):
         ("fedot/core/data/data_split.py", 198),
         ("fedot/sklearn_transformations.py", 390),
     }
+    rows.append({
+        "record_type": "finding",
+        "source_hash": "src",
+        "outcome": "rejected_tests",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 316,
+            "hypothesis_kind": "quality_hypothesis",
+        },
+        "tests": {"status": "test_failures"},
+        "dev": {"reason": "fedot_tests_regressed test_imputation_with_binary_correct"},
+    })
+    rows.append({
+        "record_type": "finding",
+        "source_hash": "src",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 316,
+            "hypothesis_kind": "quality_hypothesis",
+        },
+        "dev": {"reason": "cannot_fix"},
+    })
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    assert ("fedot/sklearn_transformations.py", 316) in replay.closed_hunt_sites(
+        findings, source_hash="src"
+    )
     workspace = tmp_path / "run"
     patch_dir = workspace / "correctness_fixes"
     patch_dir.mkdir(parents=True)

@@ -78,7 +78,7 @@ from fedotllm.agents.evolve.storage.replay import (
     solved_lift_tasks_from_findings,
     tried_patch_hashes_from_findings,
     tried_sites,
-    closed_correctness_sites,
+    closed_hunt_sites,
     proven_correctness_replay,
     unfinished_correctness_leads,
 )
@@ -665,7 +665,7 @@ def run_once(
             resumed_sites = {
                 (item.file_path, item.line) for item in pending_unverified
             }
-            closed_sites = closed_correctness_sites(
+            closed_sites = closed_hunt_sites(
                 findings_path, source_hash=source_hash
             )
             remaining_picks = max(0, cap - len(pending_unverified))
