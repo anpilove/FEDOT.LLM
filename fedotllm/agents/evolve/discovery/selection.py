@@ -787,6 +787,28 @@ def _advanced_index_claimed_as_view(parsed: SiteProposal) -> bool:
     return _ADVANCED_INDEX_VIEW.search(text) is not None
 
 
+def _sentinel_assignment_stays_on_the_copy(parsed: SiteProposal) -> bool:
+    """The NaN substitution at line 41 writes the advanced-index copy.
+
+    The 11:07 Europe/Moscow catalog picked ``categorical.py:41`` and said the
+    sentinel is stored permanently in ``input_data.features``. ``features[:,
+    categorical_idx].T`` is a copy. A four-level column with one missing value
+    still has zero ``FEDOT_STR_NAN`` cells after ``fit``, and ``categorical_idx``
+    stays ``[1]``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "FEDOT_STR_NAN" not in text and re.search(r"sentinel", text, re.IGNORECASE) is None:
+        return False
+    if re.search(r"in-place|permanently|input_data\.features|write-back", text, re.IGNORECASE) is None:
+        return False
+    return re.search(r"non-binary|categorical_idx|line 41", text, re.IGNORECASE) is not None
+
+
 _CONSTRUCTOR_OMITS_CATEGORICAL = re.compile(
     r"(?:from_numpy|array_to_input_data).{0,220}without populating categorical_features",
     re.IGNORECASE | re.DOTALL,
@@ -1130,6 +1152,15 @@ def _first_pick_rejection(
             "advanced_index_is_copy",
             "NumPy advanced indexing already returns a copy, so that slice does not "
             "write back into the caller; pick a different executed line or skip",
+        )
+    if _sentinel_assignment_stays_on_the_copy(parsed):
+        return (
+            "sentinel_assignment_stays_on_copy",
+            "features[:, categorical_idx].T is a copy, so the FEDOT_STR_NAN "
+            "assignment at line 41 does not reach input_data.features. A "
+            "four-level column with one missing value still has 0 sentinel "
+            "cells after fit, the raw NaN remains, and categorical_idx stays "
+            "[1]. Pick a different executed line or skip",
         )
     if _constructor_omits_categorical_features(parsed):
         return (
