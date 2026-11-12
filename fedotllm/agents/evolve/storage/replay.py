@@ -653,6 +653,10 @@ def _subset_index_unproved(row: dict[str, Any]) -> bool:
     )
     if "index 2 is out of bounds" in observed:
         return False
+    # The 13:14 Europe/Moscow audit saw the IndexError and cited the
+    # subset_features docstring. That contract decision closes the line.
+    if "only promises a subset of features" in observed:
+        return False
     return (
         "no documented evidence of a failure" in observed
         or not str(reproduction.get("code") or "").strip()

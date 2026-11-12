@@ -1039,6 +1039,30 @@ def _one_hot_float32_follows_memory_downcast(parsed: SiteProposal) -> bool:
     )
 
 
+def _subset_features_docstring_is_the_subset(parsed: SiteProposal) -> bool:
+    """``subset_features`` documents a feature subset, not local type indices.
+
+    The 13:14 Europe/Moscow audit saw ``convert_to_dataframe`` raise after
+    the categorical subset. The docstring only promises a subset of features
+    based on ``feature_ids``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "subset_features" not in text and "setdiff" not in text:
+        return False
+    if re.search(
+        r"re-?bas|local (?:subset )?coord|local subset|convert_to_dataframe",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    return "categorical_idx" in text or "IndexError" in text
+
+
 def _mixed_unique_outside_string_contract(parsed: SiteProposal) -> bool:
     """A mixed int/str column is outside the binary-string contract.
 
@@ -1303,6 +1327,16 @@ def _first_pick_rejection(
             "are fully observed). Predict still returns labels, and the stored "
             "feature list is applied at fit and predict. That changes which "
             "columns survive. Pick a different executed line or skip",
+        )
+    if _subset_features_docstring_is_the_subset(parsed):
+        return (
+            "subset_features_docstring_is_the_subset",
+            "subset_features documents a subset of features based on "
+            "feature_ids. It does not require categorical_idx or "
+            "numerical_idx to be re-based to local coordinates. "
+            "convert_to_dataframe on that subset can raise IndexError: "
+            "index 2 is out of bounds, and that call is not the method's "
+            "contract. Pick a different executed line or skip",
         )
     if _mixed_unique_outside_string_contract(parsed):
         return (

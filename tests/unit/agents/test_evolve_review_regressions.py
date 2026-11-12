@@ -649,6 +649,33 @@ def test_mixed_int_str_unique_stays_outside_the_string_contract():
     ) == ""
 
 
+def test_subset_features_docstring_reject_closes_the_line(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/core/data/data.py",
+            "line": 643,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_to_dataframe raises IndexError: index 2 is out of "
+                "bounds for axis 0 with size 2"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "code": "",
+            "detail": (
+                "The docstring of subset_features only promises a subset of "
+                "features based on feature_ids"
+            ),
+        },
+    }) + "\n")
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/core/data/data.py", 643) in replay.closed_correctness_sites(findings)
+
+
 def test_subset_index_reject_without_the_call_stays_open(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({
