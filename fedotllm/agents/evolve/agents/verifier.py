@@ -778,6 +778,7 @@ def verify_lead(
     all_nan_reject_retried = False
     callback_reject_retried = False
     string_domain_reject_retried = False
+    string_domain_upcast_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1172,6 +1173,34 @@ def verify_lead(
                     "with values 0, 1, 2, 3. Predict the same values as floats. "
                     "Print both string sets. Reject only after those sets match. "
                     "The preprocessing docs are not that comparison."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            verdict_text = f"{parsed.observed}\n{parsed.why}".lower()
+            if (
+                correctness_only
+                and not string_domain_upcast_retried
+                and "convert_num_column_into_string_array" in claim_text
+                and "sets equal" in verdict_text
+                and "column_stack" in history_text
+                and "dtype=object" not in history_text
+            ):
+                # The 09:27 Moscow comparison stacked ints with floats, so the
+                # ints were float64 before fit and both sets printed '0.0'.
+                string_domain_upcast_retried = True
+                step_budget += 1
+                output = (
+                    "np.column_stack of an int column and a float column "
+                    "promotes the ints to float64 before fit, so both sets "
+                    "print '0.0'. That is not a disproof. Build features as an "
+                    "object array. Put Python ints 0, 1, 2, 3 in the categorical "
+                    "column and a float in the other. Predict the same "
+                    "categorical values as Python floats. Print both string "
+                    "sets. Reject only when that object-array fit set equals "
+                    "the predict set."
                 )
                 last_detail = output
                 tool_history.append(

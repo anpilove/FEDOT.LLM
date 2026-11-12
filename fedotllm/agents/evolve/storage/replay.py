@@ -512,6 +512,29 @@ def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
     return "more than two unique values" in detail and "never added" in detail
 
 
+def _string_domain_upcast_unproved(row: dict[str, Any]) -> bool:
+    """An equal string-set reject that fit the ints through a float upcast.
+
+    ``np.column_stack`` of an int column and a float column promotes the ints
+    to float64 before fit, so both sets print ``'0.0'``. An object array of
+    Python ints fits as ``'0'`` and predicts the same floats as ``'0.0'``. The
+    09:27 Europe/Moscow reject used the upcast and called the sets equal.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "convert_num_column_into_string_array" not in why:
+        return False
+    if "object array" in why:
+        return False
+    observed = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    lowered = observed.lower()
+    return "sets equal" in lowered and "0.0" in observed
+
+
 def _string_domain_unproved(row: dict[str, Any]) -> bool:
     """A docs reject after the string-domain probe died on target shape.
 
@@ -635,6 +658,15 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "EarlyStoppingCallback; the class is _EarlyStoppingCallback. Keep "
             "callback.append(lgbm_early_stopping(...)). The contract is a list of "
             "length 1 whose stopping_rounds equals early_stopping_rounds."
+        ).strip()
+    if _string_domain_upcast_unproved(row) and "object array" not in why:
+        why = (
+            f"{why} np.column_stack of an int column and a float column promotes "
+            "the ints to float64 before fit, so both sets print '0.0'. Build "
+            "features as an object array. Put Python ints 0, 1, 2, 3 in the "
+            "categorical column and a float in the other. Predict the same "
+            "categorical values as Python floats. Print both string sets. Reject "
+            "only when that object-array fit set equals the predict set."
         ).strip()
     if _string_domain_unproved(row) and "Reshape the target to (-1, 1)" not in why:
         why = (
@@ -824,6 +856,7 @@ def _correctness_resume_plan(
             or _union_symbol_unresolved(row)
             or _discarded_callback_unproved(row)
             or _string_domain_unproved(row)
+            or _string_domain_upcast_unproved(row)
         ):
             open_probes.append((_correctness_site(key, row), None))
             continue
@@ -1200,6 +1233,7 @@ def closed_correctness_sites(
             or _union_symbol_unresolved(row)
             or _discarded_callback_unproved(row)
             or _string_domain_unproved(row)
+            or _string_domain_upcast_unproved(row)
         ):
             continue
         if (
