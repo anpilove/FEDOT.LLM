@@ -548,6 +548,14 @@ Prefer reject over an API preference, cosmetic issue, or untested story.
 Do not import evaluator, datasets, benchmark cases, scorer or task catalogs."""
 
 
+def _probe_exception_line(stderr: str) -> str:
+    for line in reversed((stderr or "").splitlines()):
+        text = line.strip()
+        if text and ("Error" in text or text.endswith("Exception")):
+            return text[:300]
+    return ""
+
+
 def _probe_is_meaningful(code: str) -> tuple[bool, str]:
     lowered = (code or "").lower()
     if "import fedot" not in lowered and "from fedot" not in lowered:
@@ -691,6 +699,7 @@ def verify_lead(
     last_target_reached: bool | None = None
     missed_target_retried = False
     unreached_target_retried = False
+    syntax_probe_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
     step_budget = min(
@@ -1032,6 +1041,18 @@ def verify_lead(
                     valid, detail = False, f"unresolved verification target: {exc}"
             if not valid:
                 output = f"Probe rejected: {detail}"
+                if (
+                    str(detail).startswith("probe syntax error")
+                    and not syntax_probe_retried
+                ):
+                    # A missing colon produces no evidence. One rewrite
+                    # keeps that turn from ending the lead.
+                    syntax_probe_retried = True
+                    step_budget += 1
+                    output += (
+                        " A syntax error is not evidence. Return one corrected "
+                        "reproduction_code that parses."
+                    )
             else:
                 symbol = resolved_target.get("symbol", "")
                 trace_target = {"file_path": target_lead.file_path, "symbol": symbol} if symbol else None
@@ -1049,12 +1070,29 @@ def verify_lead(
                 reproduced = asserted_failure or grounded_exception
                 if reproduced and trace_target and stock.target_reached is not True:
                     reproduced = False
+                    exception_line = _probe_exception_line(stock.stderr)
                     detail = (
                         "probe did not execute the claimed target method; an earlier setup failure "
                         "or assertion about another component is not evidence for this lead. "
-                        "Use PipelineBuilder.add_node or PipelineNode with an operation name, "
-                        "not an unconfigured base Operation object"
                     )
+                    if exception_line:
+                        detail += f"The probe stopped at: {exception_line}. "
+                    detail += (
+                        "Repair that setup and call the claimed method on the same object. "
+                        "Do not replace the class under test with a mock."
+                    )
+                    code = parsed.reproduction_code or ""
+                    if "NoneType" in exception_line and "size" in exception_line:
+                        detail += (
+                            " InputData.categorical_idx stays None unless you pass it; "
+                            "reading .size on that value crashes in fit before the encoder. "
+                            "transform accepts only one InputData."
+                        )
+                    elif "Operation(" in code and "Implementation(" not in code:
+                        detail += (
+                            " Use PipelineBuilder.add_node or PipelineNode with an operation name, "
+                            "not an unconfigured base Operation object."
+                        )
                     if not unreached_target_retried:
                         unreached_target_retried = True
                         step_budget += 1

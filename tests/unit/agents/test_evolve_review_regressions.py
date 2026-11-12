@@ -458,6 +458,42 @@ def test_finished_correctness_sites_stay_out_of_the_next_catalog(tmp_path):
     assert "is None" in report["diff"]
 
 
+def test_probes_that_never_reach_the_target_stay_open_for_one_more_attempt(tmp_path):
+    lead = {
+        "file_path": "fedot/categorical_encoders.py",
+        "line": 100,
+        "hypothesis_kind": "correctness",
+    }
+    row = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "outcome": "unverified_no_patch",
+        "lead": lead,
+        "reproduction": {
+            "status": "inconclusive",
+            "detail": "verification step budget exhausted",
+            "observed": (
+                "Bug was not verified: probe did not execute the claimed "
+                "target method; an earlier setup failure"
+            ),
+        },
+    }
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(json.dumps(row) for _ in range(3)))
+    assert ("fedot/categorical_encoders.py", 100) not in replay.closed_correctness_sites(
+        findings, source_hash="src",
+    )
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/categorical_encoders.py", 100),
+    ]
+    findings.write_text("\n".join(json.dumps(row) for _ in range(4)))
+    assert ("fedot/categorical_encoders.py", 100) in replay.closed_correctness_sites(
+        findings, source_hash="src",
+    )
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+
+
 def test_healthy_contract_rejection_stays_open_until_the_target_ran(tmp_path):
     missed = {
         "file_path": "fedot/sklearn_transformations.py",

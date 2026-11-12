@@ -532,6 +532,31 @@ def _supersedes_proven_patch(row: dict[str, Any]) -> bool:
     return isinstance(tests, dict) and tests.get("status") not in {None, "", "passed"}
 
 
+_MISSED_TARGET_MARKERS = (
+    "did not execute the claimed target method",
+    "without executing the claimed target method",
+    "probe syntax error",
+    "crashed before its contract assertion",
+)
+# Three misses stay open so the next catalog can use the corrected hint.
+# The fourth miss closes the line.
+_MAX_OPEN_MISSED_TARGET_ATTEMPTS = 3
+
+
+def _probe_missed_target(row: dict[str, Any]) -> bool:
+    """A probe that never executed the claimed method is not a finished test."""
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return False
+    if reproduction.get("status") != "inconclusive":
+        return False
+    if reproduction.get("target_reached") is True:
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return any(marker in text for marker in _MISSED_TARGET_MARKERS)
+
+
 def _correctness_resume_plan(
     findings_path: Path | None,
 ) -> list[tuple[MatchSite, dict[str, Any] | None]]:
@@ -551,6 +576,7 @@ def _correctness_resume_plan(
             rows.append(row)
     latest: dict[tuple[str, int], dict[str, Any]] = {}
     inconclusive_counts: dict[tuple[str, int], int] = {}
+    missed_counts: dict[tuple[str, int], int] = {}
     shared_crash_counts: dict[tuple[str, int], int] = {}
     proven_rows: dict[tuple[str, int], dict[str, Any]] = {}
     superseded: set[tuple[str, int]] = set()
@@ -570,7 +596,10 @@ def _correctness_resume_plan(
             row.get("outcome") == "unverified_no_patch"
             and reproduction.get("status") == "inconclusive"
         ):
-            inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+            if _probe_missed_target(row):
+                missed_counts[key] = missed_counts.get(key, 0) + 1
+            else:
+                inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
         if _shared_protect_crash(row):
             shared_crash_counts[key] = shared_crash_counts.get(key, 0) + 1
             proven_rows[key] = row
@@ -590,6 +619,12 @@ def _correctness_resume_plan(
             continue
         reproduction = row.get("reproduction") or {}
         if reproduction.get("status") == "rejected":
+            continue
+        if (
+            _probe_missed_target(row)
+            and 1 <= missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS
+        ):
+            open_probes.append((_correctness_site(key, row), None))
             continue
         if (
             row.get("outcome") == "unverified_no_patch"
@@ -613,6 +648,8 @@ def unfinished_correctness_leads(
     attempts follow, behind that proven patch. A verifier rejection is
     finished even when the outcome field is still ``unverified_no_patch``.
     A third inconclusive attempt for the same line is not resumed.
+    Probes that never executed the claimed method stay open for one
+    further attempt after three misses, then close.
     """
 
     if limit <= 0:
@@ -697,6 +734,7 @@ def closed_correctness_sites(
         return set()
     latest: dict[tuple[str, int], dict[str, Any]] = {}
     inconclusive_counts: dict[tuple[str, int], int] = {}
+    missed_counts: dict[tuple[str, int], int] = {}
     for raw in findings_path.read_text(encoding="utf-8").splitlines():
         if not raw.strip():
             continue
@@ -723,7 +761,10 @@ def closed_correctness_sites(
             row.get("outcome") == "unverified_no_patch"
             and reproduction.get("status") == "inconclusive"
         ):
-            inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+            if _probe_missed_target(row):
+                missed_counts[key] = missed_counts.get(key, 0) + 1
+            else:
+                inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
     closed: set[tuple[str, int]] = set()
     for key, row in latest.items():
         outcome = str(row.get("outcome") or "")
@@ -742,6 +783,8 @@ def closed_correctness_sites(
             "correctness_keep_with_metric_signal",
             "rejected",
         } or reproduction == "rejected":
+            closed.add(key)
+        elif missed_counts.get(key, 0) >= _MAX_OPEN_MISSED_TARGET_ATTEMPTS + 1:
             closed.add(key)
         elif (
             outcome == "unverified_no_patch"

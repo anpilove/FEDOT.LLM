@@ -176,6 +176,74 @@ def test_assertion_before_the_target_gets_one_correction(source, monkeypatch):
     assert "did not execute the claimed target method" in prompts[1]
 
 
+def test_unreached_implementation_probe_keeps_the_class_under_test(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            return schema(
+                action="verify_bug",
+                file_path="fedot/a.py",
+                line=4,
+                reproduction_code=(
+                    "from fedot.a import Output\n"
+                    "assert 0 == 1, \"valid supported call crashed: "
+                    "'NoneType' object has no attribute 'size'\"\n"
+                    "Output().save()\n"
+                ),
+            )
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status != "verified_bug"
+    assert len(prompts) == 2
+    assert "NoneType" in prompts[1]
+    assert "categorical_idx" in prompts[1]
+    assert "Do not replace the class under test with a mock" in prompts[1]
+    assert "not an unconfigured base Operation object" not in prompts[1]
+
+
+def test_syntax_error_probe_gets_one_rewrite(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code=(
+                        "from fedot.a import Output\n"
+                        "assert Output() == 1\n"
+                        "print('broken:\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the syntax rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "probe syntax error" in prompts[1]
+
+
 def test_correctness_probe_constructor_error_gets_one_correction(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     prompts: list[str] = []
