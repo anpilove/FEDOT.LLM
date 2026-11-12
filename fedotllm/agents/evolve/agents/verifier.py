@@ -702,6 +702,7 @@ def verify_lead(
     missed_target_retried = False
     unreached_target_retried = False
     syntax_probe_retried = False
+    import_probe_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1055,6 +1056,16 @@ def verify_lead(
                     output += (
                         " A syntax error is not evidence. Return one corrected "
                         "reproduction_code that parses."
+                    )
+                elif detail == "probe must import FEDOT" and not import_probe_retried:
+                    # The 06:49 Moscow binary-feature probe never ran. One
+                    # rewrite keeps that rejection from ending the lead.
+                    import_probe_retried = True
+                    step_budget += 1
+                    output += (
+                        " The probe never ran. Return one reproduction_code that "
+                        "imports fedot and asserts the claimed behavior on the "
+                        "same fitted object."
                     )
             else:
                 symbol = resolved_target.get("symbol", "")

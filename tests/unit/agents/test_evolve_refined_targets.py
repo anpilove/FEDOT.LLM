@@ -293,6 +293,35 @@ def test_syntax_error_probe_gets_one_rewrite(source, monkeypatch):
     assert "probe syntax error" in prompts[1]
 
 
+def test_missing_fedot_import_gets_one_rewrite(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code="assert True\n",
+                )
+            return schema(action="reject", why="stop after the import rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "imports fedot" in prompts[1]
+
+
 def test_correctness_probe_constructor_error_gets_one_correction(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     prompts: list[str] = []

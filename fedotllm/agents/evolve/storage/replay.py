@@ -501,11 +501,19 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
     lead = row["lead"]
     evidence = lead.get("evidence") or ()
     signals = lead.get("signals") or ()
+    why = str(lead.get("why") or "")
+    observed = str((row.get("reproduction") or {}).get("observed") or "")
+    if "probe must import FEDOT" in observed and "import fedot" not in why.lower():
+        why = (
+            f"{why} The previous probe was rejected before it ran because it did "
+            "not import fedot. The next reproduction must import fedot and assert "
+            "the claimed behavior on the same fitted object."
+        ).strip()
     return MatchSite(
         channel=str(lead.get("channel") or "llm"),
         file_path=key[0],
         line=key[1],
-        why=str(lead.get("why") or ""),
+        why=why,
         evidence=tuple(str(item) for item in evidence),
         signals=tuple(str(item) for item in signals),
         mechanism=str(lead.get("mechanism") or ""),

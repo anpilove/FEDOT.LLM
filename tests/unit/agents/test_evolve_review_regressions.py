@@ -793,3 +793,27 @@ def test_real_controller_decision_is_judged_by_separate_stricter_oracle(
     assert results[0]["execution_ok"] is True
     assert results[0]["false_accept"] is false_accept
     assert results[0]["confirmed_fix"] is not false_accept
+
+
+def test_importless_probe_resume_names_the_missing_import(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 391,
+            "hypothesis_kind": "correctness",
+            "why": "binary ids accumulate across transform",
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": "Probe rejected: probe must import FEDOT",
+            "detail": "verification step budget exhausted",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/sklearn_transformations.py", 391),
+    ]
+    assert "must import fedot" in resumed[0].why
