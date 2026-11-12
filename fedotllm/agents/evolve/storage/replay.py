@@ -636,6 +636,71 @@ def _correctness_resume_plan(
     return [*proven, *open_probes]
 
 
+def scored_day_count_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a queued day-count edit whose probe never scored a model.
+
+    Stop once any finding for the line already asks for that score.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import mechanism_only_day_count
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any(
+            "does not show a model improved" in str(row.get("feedback") or "")
+            for row in rows
+        ):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason != "queued_for_fedot_quality":
+            continue
+        edits = latest.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "")
+            for item in edits
+            if isinstance(item, dict)
+        )
+        note = mechanism_only_day_count(latest.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = latest["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
 def whole_scale_resume(
     findings_path: Path | None,
     *,

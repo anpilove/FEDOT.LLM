@@ -258,6 +258,35 @@ def whole_conversion_scale_revision(
     )
 
 
+def mechanism_only_day_count(behavior_probe: dict | None, patch_text: str) -> str:
+    """Feedback when a day-count edit was not scored on a model.
+
+    The 06:15 Moscow probe printed ``datetime_day_counts=True`` and
+    ``float_unchanged=True``. That shows the conversion, not that a model
+    improved. A decimal score such as ``0.958`` is already a measurement.
+    """
+
+    if "datetime64[D]" not in (patch_text or ""):
+        return ""
+    probe = behavior_probe or {}
+    if str(probe.get("status") or "") != "changed":
+        return ""
+    stock = str((probe.get("stock") or {}).get("observation") or "")
+    patched = str((probe.get("patched") or {}).get("observation") or "")
+    blob = f"{stock} {patched}"
+    if re.search(r"\d\.\d", blob):
+        return ""
+    if "datetime_day_counts" not in blob and "float_unchanged" not in blob:
+        return ""
+    return (
+        "The probe showed datetime columns became day counts and the float "
+        "column stayed. That does not show a model improved. Fit a classifier "
+        "on a two-column table of datetime64 values plus a float, through "
+        "np_datetime_to_numeric or obligatory preprocessing, and print the "
+        "score. Score stock milliseconds and patched day counts."
+    )
+
+
 def _behavior_probe_blocks_candidate(result: dict) -> bool:
     """Cheap technical filter only. Toy no_change is not a quality veto.
 

@@ -82,6 +82,7 @@ from fedotllm.agents.evolve.storage.replay import (
     proven_correctness_replay,
     unfinished_correctness_leads,
     narrow_datetime_resume,
+    scored_day_count_resume,
     whole_scale_resume,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
@@ -109,6 +110,7 @@ from fedotllm.agents.evolve.controller.probes import (
     compare_behavior_probe as run_behavior_probe,
     compare_with_prior_probe,
     infrastructure_probe_decision,
+    mechanism_only_day_count,
     narrow_datetime_revision,
     whole_conversion_scale_revision,
 )
@@ -656,17 +658,22 @@ def run_once(
         forced_site: MatchSite | None = None
         forced_note = ""
         if resume_lead is None:
-            resumed_scale = whole_scale_resume(
+            resumed_score = scored_day_count_resume(
                 findings_path, source_hash=source_hash
             )
-            if resumed_scale is not None:
-                forced_site, forced_note = resumed_scale
-            else:
-                resumed_narrow = narrow_datetime_resume(
-                    findings_path, source_hash=source_hash
-                )
-                if resumed_narrow is not None:
-                    forced_site, forced_note = resumed_narrow
+            resumed_scale = (
+                None
+                if resumed_score is not None
+                else whole_scale_resume(findings_path, source_hash=source_hash)
+            )
+            resumed_narrow = (
+                None
+                if resumed_score is not None or resumed_scale is not None
+                else narrow_datetime_resume(findings_path, source_hash=source_hash)
+            )
+            resumed = resumed_score or resumed_scale or resumed_narrow
+            if resumed is not None:
+                forced_site, forced_note = resumed
         if resume_lead is not None:
             sites = [resume_lead]
             leads = [resume_lead]
@@ -1889,6 +1896,40 @@ def run_once(
                         if advance_revision(last.reason):
                             continue
                         break
+
+                score_note = mechanism_only_day_count(
+                    behavior_probe,
+                    "\n".join(edit.new_code for edit in candidate.edits),
+                )
+                if score_note:
+                    # The 06:15 probe only checked that dates became day counts.
+                    grant_safety_extension(
+                        "scored_probe", candidate, "day-count probe has no model score"
+                    )
+                    feedback = push_feedback(score_note)
+                    last = Decision(
+                        False,
+                        "mechanism_only_day_count",
+                        None,
+                        stage="dev",
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if advance_revision("mechanism_only_day_count"):
+                        continue
+                    break
 
                 scale_note = whole_conversion_scale_revision(
                     behavior_probe,
