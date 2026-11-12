@@ -815,6 +815,31 @@ def _add_indicator_claimed_as_drop_in(parsed: SiteProposal) -> bool:
     return _ADD_INDICATOR_DROP_IN.search(text) is not None
 
 
+_DATETIME_NAT_AS_NAN = re.compile(
+    r"(?:NaT|missing timestamp).{0,240}NaN|NaN.{0,240}(?:NaT|missing timestamp)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _datetime_integer_contract_forbids_nan(parsed: SiteProposal) -> bool:
+    """``np_datetime_to_numeric`` documents an integer millisecond conversion.
+
+    The 08:48 Europe/Moscow catalog asked that function to emit NaN for NaT.
+    The result dtype is int64, so NaN is not representable, and the docstring
+    says datetimes are converted to integer. The verifier then rejected the
+    claim as an unsupported contract.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "np_datetime_to_numeric" not in text:
+        return False
+    return _DATETIME_NAT_AS_NAN.search(text) is not None
+
+
 def _constructor_omits_categorical_features(parsed: SiteProposal) -> bool:
     """``array_to_input_data`` copies the categorical block when the index is set.
 
@@ -874,6 +899,13 @@ def _first_pick_rejection(
             "col_type_ids['features']; reduce_mem_usage then raises IndexError, "
             "and the preprocessing tests require the original width. Pick a "
             "different executed line or skip",
+        )
+    if _datetime_integer_contract_forbids_nan(parsed):
+        return (
+            "datetime_contract_is_integer",
+            "np_datetime_to_numeric documents conversion to integer milliseconds. "
+            "An int64 result cannot hold NaN, and NaT stays the integer sentinel. "
+            "Pick a different executed line or skip",
         )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
