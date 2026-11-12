@@ -538,6 +538,35 @@ def _empty_categorical_index_unproved(row: dict[str, Any]) -> bool:
     )
 
 
+def _categorical_most_frequent_is_the_guard(row: dict[str, Any]) -> bool:
+    """``most_frequent`` keeps a string column off a numeric imputer strategy.
+
+    The 10:32 Europe/Moscow lead asked the user strategy to override that
+    default. Mean on a string column raises ``ValueError``. The correctness
+    check stored a quality hypothesis as inconclusive.
+    """
+
+    lead = row.get("lead") or {}
+    if not isinstance(lead, dict):
+        return False
+    text = " ".join(
+        str(lead.get(part) or "")
+        for part in ("why", "mechanism", "proposed_change")
+    )
+    if "most_frequent" not in text:
+        return False
+    if re.search(r"categorical", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"override|silently|user-supplied|user strategy|reverse the merge",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _numerical_min_uniques_is_docs_only(row: dict[str, Any]) -> bool:
     """The name ``numerical_min_uniques`` is not a runtime parameter.
 
@@ -906,6 +935,8 @@ def _correctness_resume_plan(
             proven.append((_correctness_site(key, proven_row), proven_row))
             continue
         reproduction = row.get("reproduction") or {}
+        if _categorical_most_frequent_is_the_guard(row):
+            continue
         if _numerical_min_uniques_is_docs_only(row):
             continue
         if (
@@ -1284,6 +1315,9 @@ def closed_correctness_sites(
             and (row.get("reproduction") or {}).get("target_reached") is not True
         )
         if healthy_without_target:
+            continue
+        if _categorical_most_frequent_is_the_guard(row):
+            closed.add(key)
             continue
         if _numerical_min_uniques_is_docs_only(row):
             closed.add(key)

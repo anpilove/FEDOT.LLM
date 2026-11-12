@@ -845,6 +845,37 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _categorical_most_frequent_guards_strings(parsed: SiteProposal) -> bool:
+    """Categorical imputation stays on ``most_frequent``.
+
+    The 10:32 Europe/Moscow catalog picked ``sklearn_transformations.py:315``
+    and asked the user strategy to win. The merge puts
+    ``{'strategy': 'most_frequent'}`` last. ``SimpleImputer(strategy='mean')``
+    on a string column raises ``ValueError: Cannot use mean strategy with
+    non-numeric data``. With ``strategy='mean'`` on a mixed table, the numeric
+    NaN became 3.0 and the categorical NaN became ``'a'``.
+    ``test_imputation_with_binary_correct`` expects that category fill.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "most_frequent" not in text:
+        return False
+    if re.search(r"categorical", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"override|silently|user-supplied|user strategy|reverse the merge",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _n_jobs_rewrite_is_the_contract(parsed: SiteProposal) -> bool:
     """``fit`` writes ``n_jobs`` because that argument is the job count.
 
@@ -1102,6 +1133,17 @@ def _first_pick_rejection(
             "unseen categories become zero rows under handle_unknown='ignore' "
             "(test_one_hot_encoding_new_category_in_test). Pick a different "
             "executed line or skip",
+        )
+    if _categorical_most_frequent_guards_strings(parsed):
+        return (
+            "categorical_most_frequent_guards_strings",
+            "The categorical imputer merge keeps strategy most_frequent after "
+            "the user dict. SimpleImputer(strategy='mean') on a string column "
+            "raises ValueError: Cannot use mean strategy with non-numeric data. "
+            "With strategy=mean, a mixed table fills the numeric NaN with 3.0 "
+            "and the categorical NaN with 'a'. "
+            "test_imputation_with_binary_correct expects that category fill. "
+            "Pick a different executed line or skip",
         )
     if _n_jobs_rewrite_is_the_contract(parsed):
         return (

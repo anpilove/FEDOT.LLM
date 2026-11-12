@@ -1320,6 +1320,48 @@ def test_operation_info_resume_names_imputation_implementation(tmp_path):
     assert "ImputationImplementation()" in resumed[0].why
 
 
+def test_categorical_most_frequent_inconclusive_stays_closed(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, [
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 315,
+                "hypothesis_kind": "correctness",
+                "why": (
+                    "most_frequent silently overrides a user-supplied strategy "
+                    "for the categorical imputer"
+                ),
+            },
+            "reproduction": {
+                "status": "inconclusive",
+                "detail": (
+                    "bounded correctness verification did not establish a "
+                    "public contract violation"
+                ),
+            },
+        },
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/open.py",
+                "line": 3,
+                "hypothesis_kind": "correctness",
+                "why": "an open probe",
+            },
+            "reproduction": {"status": "inconclusive"},
+        },
+    ])))
+    assert ("fedot/sklearn_transformations.py", 315) in replay.closed_correctness_sites(
+        findings
+    )
+    resumed = replay.unfinished_correctness_leads(findings, limit=2)
+    assert [(item.file_path, item.line) for item in resumed] == [("fedot/open.py", 3)]
+
+
 def test_numerical_min_uniques_inconclusive_stays_closed(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text("\n".join(map(json.dumps, [
