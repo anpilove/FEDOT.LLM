@@ -244,6 +244,72 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
     return "\n\n".join(chunks)[:14_000]
 
 
+def annotated_int_or_coerces_zero(source: str, line: int) -> str:
+    """Return why an `or` default drops the integer 0, or an empty string.
+
+    A parameter annotated ``int`` includes 0. The default applies when the
+    caller omits the argument. ``name or default`` replaces that 0.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    owner: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+
+    def walk(node: ast.AST) -> None:
+        nonlocal owner
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end:
+                owner = node
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(tree)
+    if owner is None:
+        return ""
+    domain: dict[str, int] = {}
+    positional = owner.args.args[-len(owner.args.defaults):] if owner.args.defaults else []
+    for arg, default in zip(positional, owner.args.defaults):
+        if (
+            isinstance(arg.annotation, ast.Name)
+            and arg.annotation.id == "int"
+            and isinstance(default, ast.Constant)
+            and isinstance(default.value, int)
+        ):
+            domain[arg.arg] = default.value
+    if not domain:
+        return ""
+    statement = next(
+        (
+            node
+            for node in ast.walk(owner)
+            if isinstance(node, ast.stmt) and getattr(node, "lineno", None) == line
+        ),
+        None,
+    )
+    if statement is None:
+        return ""
+    for node in ast.walk(statement):
+        if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.Or):
+            continue
+        names = {value.id for value in node.values if isinstance(value, ast.Name)}
+        constants = {
+            value.value
+            for value in node.values
+            if isinstance(value, ast.Constant) and isinstance(value.value, int)
+        }
+        for name, default in domain.items():
+            if name in names and default in constants:
+                return (
+                    f"{name} is annotated int with default {default}; "
+                    "0 is in that domain and this line replaces it with "
+                    f"`{name} or {default}`"
+                )
+    return ""
+
+
 def _audit_contract_support(
     checkout: Path,
     lead: MatchSite,
@@ -1020,6 +1086,25 @@ def verify_lead(
                             )
                             _write_verification(workspace, lead, result)
                             return result
+                        if (
+                            support_audit.verdict == "inconclusive"
+                            and "AssertionError" in (stock.stderr or "")
+                        ):
+                            try:
+                                source_text = (
+                                    checkout / target_lead.file_path
+                                ).read_text(encoding="utf-8")
+                            except OSError:
+                                source_text = ""
+                            coerced = annotated_int_or_coerces_zero(
+                                source_text, target_lead.line
+                            )
+                            if coerced:
+                                support_audit = ContractSupportAudit(
+                                    verdict="supported",
+                                    reason=coerced,
+                                    evidence=[coerced],
+                                )
                         if support_audit.verdict != "supported":
                             result = VerificationResult(
                                 "rejected" if support_audit.verdict == "unsupported" else "inconclusive",

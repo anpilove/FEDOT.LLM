@@ -203,6 +203,20 @@ def test_audit_inconclusive_propagates_through_real_verifier(source, monkeypatch
     assert "unsupported public-contract" not in result.detail
 
 
+def test_annotated_int_or_recognizes_a_zero_seed():
+    from fedotllm.agents.evolve.agents.verifier import annotated_int_or_coerces_zero
+
+    source = (
+        "def train_test_data_setup(random_seed: int = 42, shuffle: bool = False):\n"
+        "    random_seed = (random_seed or 42) if shuffle else None\n"
+        "    return random_seed\n"
+    )
+    assert "random_seed" in annotated_int_or_coerces_zero(source, 2)
+    assert annotated_int_or_coerces_zero(source, 3) == ""
+    untouched = source.replace("random_seed: int = 42", "random_seed: str = '42'")
+    assert annotated_int_or_coerces_zero(untouched, 2) == ""
+
+
 def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
     seed = {
         "file_path": "fedot/core/data/data_split.py",
@@ -218,12 +232,24 @@ def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
         "line": 4,
         "hypothesis_kind": "correctness",
     }
+    twice = {
+        "file_path": "fedot/twice.py",
+        "line": 2,
+        "hypothesis_kind": "correctness",
+        "why": "still open",
+    }
     rows = [
         {"record_type": "finding", "outcome": "unverified_no_patch", "lead": seed,
          "reproduction": {"status": "inconclusive"}},
         {"record_type": "finding", "outcome": "unverified_no_patch", "lead": repeated,
          "reproduction": {"status": "inconclusive"}},
         {"record_type": "finding", "outcome": "unverified_no_patch", "lead": repeated,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": repeated,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": twice,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": twice,
          "reproduction": {"status": "inconclusive"}},
         {"record_type": "finding", "outcome": "rejected", "lead": {
             "file_path": "fedot/done.py", "line": 9, "hypothesis_kind": "correctness",
@@ -233,10 +259,12 @@ def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
     findings.write_text("\n".join(map(json.dumps, rows)))
     resumed = replay.unfinished_correctness_leads(findings, limit=2)
     assert [(item.file_path, item.line) for item in resumed] == [
-        ("fedot/core/data/data_split.py", 198)
+        ("fedot/twice.py", 2),
+        ("fedot/core/data/data_split.py", 198),
     ]
-    assert resumed[0].hypothesis_kind == "correctness"
-    assert resumed[0].proposed_change.startswith("use None")
+    seed_lead = next(item for item in resumed if item.line == 198)
+    assert seed_lead.hypothesis_kind == "correctness"
+    assert seed_lead.proposed_change.startswith("use None")
 
 
 def test_context_failure_is_not_a_site_cooldown_or_completed_hypothesis(tmp_path):

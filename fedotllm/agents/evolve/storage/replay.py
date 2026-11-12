@@ -493,9 +493,9 @@ def unfinished_correctness_leads(
 ) -> list[MatchSite]:
     """Return correctness leads whose verifier stopped before a patch.
 
-    One inconclusive attempt is resumed ahead of a new catalog walk. A second
-    inconclusive attempt for the same line is not resumed, and a later finding
-    with a patch replaces the unfinished row.
+    One or two inconclusive attempts are resumed ahead of a new catalog walk.
+    A third inconclusive attempt for the same line is not resumed, and a later
+    finding with a patch replaces the unfinished row.
     """
 
     if findings_path is None or not findings_path.is_file() or limit <= 0:
@@ -531,7 +531,7 @@ def unfinished_correctness_leads(
             inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
     resumed: list[MatchSite] = []
     for key, row in reversed(list(latest.items())):
-        if inconclusive_counts.get(key) != 1:
+        if not 1 <= inconclusive_counts.get(key, 0) <= 2:
             continue
         if row.get("outcome") != "unverified_no_patch":
             continue
