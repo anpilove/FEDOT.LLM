@@ -533,7 +533,15 @@ def unfinished_correctness_leads(
     for key, row in reversed(list(latest.items())):
         if not 1 <= inconclusive_counts.get(key, 0) <= 2:
             continue
-        if row.get("outcome") != "unverified_no_patch":
+        outcome = row.get("outcome")
+        dev_reason = str((row.get("dev") or {}).get("reason") or "")
+        tests_passed = (row.get("tests") or {}).get("status") == "passed"
+        shared_crash = (
+            outcome == "infrastructure_error"
+            and tests_passed
+            and "timeout_or_invalid" in dev_reason
+        )
+        if outcome != "unverified_no_patch" and not shared_crash:
             continue
         lead = row["lead"]
         evidence = lead.get("evidence") or ()

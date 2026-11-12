@@ -42,6 +42,15 @@ def patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
     return stock.status == "ok" and candidate_failed(patched)
 
 
+def same_preexisting_failure(stock: ScoreResult, patched: ScoreResult) -> bool:
+    """Both sides failed the same way before this patch changed anything."""
+
+    if stock.status == "ok" or patched.status != stock.status:
+        return False
+    detail = stock.detail or ""
+    return bool(detail) and detail == (patched.detail or "")
+
+
 def _spec(
     task_id: str,
     *,
@@ -136,6 +145,8 @@ def compare_pack(
         if patched_broke(stock[task_id], patched[task_id]):
             lift_deltas[task_id] = None
             continue
+        if same_preexisting_failure(stock[task_id], patched[task_id]):
+            continue
         a = _numeric(stock[task_id])
         b = _numeric(patched[task_id])
         if a is None or b is None:
@@ -187,6 +198,8 @@ def compare_pack(
                 target_delta=best,
                 regression_deltas=regressions,
             )
+        if same_preexisting_failure(stock[task_id], patched[task_id]):
+            continue
         a = _numeric(stock[task_id])
         b = _numeric(patched[task_id])
         if a is None or b is None:

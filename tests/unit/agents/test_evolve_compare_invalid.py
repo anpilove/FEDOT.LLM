@@ -43,6 +43,32 @@ def test_return_best_mismatch_stays_infrastructure():
     assert decision.reason == "timeout_or_invalid"
 
 
+def test_shared_protect_crash_does_not_block_a_neutral_patch():
+    stock = {
+        "catboost": _row("catboost", "ok", 0.80),
+        "pca->catboost": ScoreResult(
+            "pca->catboost", "crash", 0.5, detail="IndexError: index 1 is out of bounds"
+        ),
+    }
+    patched = {
+        "catboost": _row("catboost", "ok", 0.80),
+        "pca->catboost": ScoreResult(
+            "pca->catboost", "crash", 0.5, detail="IndexError: index 1 is out of bounds"
+        ),
+    }
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("catboost",),
+        protect_ids=("catboost", "pca->catboost"),
+    )
+
+    assert decision.infrastructure_error is False
+    assert "timeout_or_invalid" not in decision.reason
+    assert decision.reason.startswith("target_delta")
+
+
 def test_protect_invalid_fit_is_a_regression_not_infrastructure():
     stock = {
         "catboost": _row("catboost", "ok", 0.80),

@@ -262,6 +262,26 @@ def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
         ("fedot/twice.py", 2),
         ("fedot/core/data/data_split.py", 198),
     ]
+    parked = {
+        "file_path": "fedot/core/data/data_split.py",
+        "line": 198,
+        "why": "seed 0 becomes 42",
+        "hypothesis_kind": "correctness",
+        "proposed_change": "use None instead of truthiness",
+    }
+    rows.append({
+        "record_type": "finding",
+        "outcome": "infrastructure_error",
+        "lead": parked,
+        "tests": {"status": "passed"},
+        "dev": {"reason": "regression pca->catboost timeout_or_invalid"},
+        "reproduction": {"status": "verified_bug"},
+    })
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    resumed = replay.unfinished_correctness_leads(findings, limit=3)
+    assert ("fedot/core/data/data_split.py", 198) in {
+        (item.file_path, item.line) for item in resumed
+    }
     seed_lead = next(item for item in resumed if item.line == 198)
     assert seed_lead.hypothesis_kind == "correctness"
     assert seed_lead.proposed_change.startswith("use None")
