@@ -742,6 +742,26 @@ def _matches_confirmed_defect_proposal(
 
 
 _DEFAULTS_GATE_STATUSES = {"unexecuted_operation_default", "inert_operation_default"}
+_INTEGER_HOLDS_INF = re.compile(
+    r"integer(?:-dtype)?\s+columns?\s+containing\s+[+\-/]*inf|"
+    r"integer(?:\s+|-)?dtype[^\n]{0,400}(?:\+/- ?inf|\binf(?:inities|inity)?\b)",
+    re.IGNORECASE,
+)
+
+
+def _impossible_integer_nonfinite(parsed: SiteProposal) -> bool:
+    """An integer array cannot store inf, so that input class is unreachable.
+
+    The 06:40 Moscow catalog claimed integer-dtype columns containing
+    infinities. The verifier then spent the campaign rejecting it.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _INTEGER_HOLDS_INF.search(text) is not None
 
 
 def _first_pick_rejection(
@@ -760,6 +780,12 @@ def _first_pick_rejection(
     semantic-site cooldowns.
     """
 
+    if _impossible_integer_nonfinite(parsed):
+        return (
+            "impossible_integer_nonfinite",
+            "an integer dtype cannot store inf, so that input class is unreachable; "
+            "pick a different executed line or skip",
+        )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
         return (
