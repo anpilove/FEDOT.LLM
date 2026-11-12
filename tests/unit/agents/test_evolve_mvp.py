@@ -9907,6 +9907,42 @@ def test_snippet_failure_recovers_wrong_module_and_actual_api(tmp_path: Path):
     assert len(feedback) <= 3_002
 
 
+def test_missing_module_rewrites_unique_nearby_file(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.research_tools import (
+        rewrite_missing_module_import,
+        snippet_failure_context,
+    )
+    from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    source = _source(tmp_path)
+    module = source / "fedot/core/repository/operation_types_repository.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("MARK = 'full'\n", encoding="utf-8")
+    (module.parent / "__init__.py").write_text("", encoding="utf-8")
+    (source / "fedot/core/__init__.py").write_text("", encoding="utf-8")
+    probe = (
+        "from fedot.core.repository.operation_types import MARK\n"
+        "print('EVOLVE_OBSERVATION=' + MARK)\n"
+    )
+    error = "ModuleNotFoundError: No module named 'fedot.core.repository.operation_types'"
+    failed = SnippetResult("runtime_error", probe, stderr=error)
+
+    recovery = snippet_failure_context(source, failed)
+    rewritten = rewrite_missing_module_import(source, probe, error)
+
+    assert "fedot/core/repository/operation_types_repository.py" in recovery
+    assert rewritten is not None
+    assert "from fedot.core.repository.operation_types_repository import MARK" in rewritten
+    ran = run_fedot_snippet(source, rewritten, timeout_s=30)
+    assert ran.status == "ok"
+    assert "EVOLVE_OBSERVATION=full" in ran.stdout
+
+    extra = module.parent / "operation_types_extra.py"
+    extra.write_text("MARK = 'other'\n", encoding="utf-8")
+    assert rewrite_missing_module_import(source, probe, error) is None
+
+
 def test_snippet_failure_recovers_inherited_constructor_fields(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.research_tools import snippet_failure_context
     from fedotllm.agents.evolve.types import SnippetResult
