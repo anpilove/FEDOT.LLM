@@ -1125,6 +1125,33 @@ def _constructor_omits_categorical_features(parsed: SiteProposal) -> bool:
     return _CONSTRUCTOR_OMITS_CATEGORICAL.search(text) is not None
 
 
+def _equal_category_mean_stays(parsed: SiteProposal) -> bool:
+    """A balanced binary gap is filled with the mean on purpose.
+
+    ``test_imputation_binary_features_with_equal_categories_correct`` asserts
+    ``0.5`` when the two categories are equally common. The 11:54
+    Europe/Moscow patch changed ``>`` to ``>=`` and that test saw ``1.0``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"midpoint|0\.5", text) is None:
+        return False
+    if re.search(r"binary", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"uncorrected|snap|strict|mean_value|out-of-domain|mean-imputed|mean fill",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _first_pick_rejection(
     parsed: SiteProposal,
     picked: MatchSite,
@@ -1207,6 +1234,15 @@ def _first_pick_rejection(
             "which stores floats that fit in float32 as float32. Skipping the "
             "line 109 cast when the block is already floating leaves that "
             "column in place. Pick a different executed line or skip",
+        )
+    if _equal_category_mean_stays(parsed):
+        return (
+            "equal_category_mean_stays",
+            "test_imputation_binary_features_with_equal_categories_correct "
+            "asserts the equal-count binary gap stays 0.5. The docstring says "
+            "there is no majority label, so the mean is inserted. Changing "
+            "the strict midpoint comparison to >= snaps that cell to 1.0 and "
+            "fails the test. Pick a different executed line or skip",
         )
     if _categorical_most_frequent_guards_strings(parsed):
         return (

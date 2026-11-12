@@ -314,8 +314,11 @@ def test_discarded_early_stopping_callback_is_a_contract():
     assert discarded_callback_return(source, 9) == ""
 
 
-def test_binary_midpoint_fill_supports_the_correction_contract():
-    from fedotllm.agents.evolve.agents.verifier import binary_midpoint_left_unchanged
+def test_equal_category_mean_is_required_by_the_frozen_test():
+    from fedotllm.agents.evolve.agents.verifier import (
+        binary_midpoint_left_unchanged,
+        equal_category_mean_is_required,
+    )
 
     source = (
         "def _correct_binary_ids_features(self, filled):\n"
@@ -328,9 +331,12 @@ def test_binary_midpoint_fill_supports_the_correction_contract():
         "AssertionError: imputed binary column contains out-of-domain values, "
         "expected only {0.0, 1.0}: [0.0, 0.5, 1.0]\n"
     )
-    assert "[0.0, 0.5, 1.0]" in binary_midpoint_left_unchanged(source, 449, stderr)
-    assert binary_midpoint_left_unchanged(source, 449, "AssertionError: other") == ""
-    assert binary_midpoint_left_unchanged("def other():\n    return 1\n", 449, stderr) == ""
+    reason = equal_category_mean_is_required(source, 449, stderr)
+    assert "test_imputation_binary_features_with_equal_categories_correct" in reason
+    assert "0.5" in reason
+    assert equal_category_mean_is_required(source, 449, "AssertionError: other") == ""
+    assert equal_category_mean_is_required("def other():\n    return 1\n", 449, stderr) == ""
+    assert binary_midpoint_left_unchanged(source, 449, stderr) == ""
 
 
 def _midpoint_source() -> str:
@@ -469,9 +475,10 @@ def test_replay_reaching_assertion_supports_the_midpoint(tmp_path, monkeypatch):
         MatchSite("llm", relative, 449, hypothesis_kind="correctness", why="midpoint"),
         {"code": "assert unique.issubset({0.0, 1.0})\n", "claim": "0.5 stays", "expected": "{0,1}"},
     )
-    assert result.status == "verified_bug"
-    assert result.proceed is True
+    assert result.status == "rejected"
+    assert result.proceed is False
     assert result.reproduction_code.startswith("assert")
+    assert "test_imputation_binary_features_with_equal_categories_correct" in result.detail
     assert "replayed stored reaching assertion" in result.detail
 
 

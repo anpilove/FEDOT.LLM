@@ -7164,6 +7164,50 @@ def test_categorical_most_frequent_claim_is_rejected_and_the_walk_continues(
     )
 
 
+def test_equal_category_mean_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "the midpoint-equality edge leaves mean-imputed binary "
+                        "cells uncorrected, so snap 0.5 with a strict comparison"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "equal-count binary gap stays 0.5" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "equal_category_mean_stays"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
 def test_one_hot_float32_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
 

@@ -319,29 +319,45 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
-def binary_midpoint_left_unchanged(source: str, line: int, stderr: str) -> str:
-    """Return why a mean fill of 0.5 survives the binary correction.
+def _binary_midpoint_assertion(source: str, stderr: str) -> bool:
+    error = stderr or ""
+    if "AssertionError" not in error or "0.5" not in error:
+        return False
+    if "filled_column > mean_value" not in source or "filled_column < mean_value" not in source:
+        return False
+    return "0.75" in source
 
-    ``_correct_binary_ids_features`` snaps values strictly above and below
-    ``(min + max) / 2``. The tip maps 0.75 onto the upper observed value.
-    Mean imputation of ``{0, 1}`` fills 0.5, which equals that midpoint, so
-    both comparisons leave it in place. The 11:25 Europe/Moscow audit saw
-    ``[0.0, 0.5, 1.0]`` and still called the contract inconclusive.
+
+def equal_category_mean_is_required(source: str, line: int, stderr: str) -> str:
+    """Return why a balanced binary gap must stay at the mean 0.5.
+
+    ``test_imputation_binary_features_with_equal_categories_correct`` says
+    equal category counts have no majority label, so the mean is inserted,
+    and asserts ``np.isclose(..., 0.5)``. The 11:54 Europe/Moscow patch
+    changed ``>`` to ``>=``. The probe then saw 1.0, and that test failed.
+    The 0.75 tip only maps values strictly above the midpoint.
     """
 
     del line
-    error = stderr or ""
-    if "AssertionError" not in error or "0.5" not in error:
-        return ""
-    if "filled_column > mean_value" not in source or "filled_column < mean_value" not in source:
-        return ""
-    if "0.75" not in source:
+    if not _binary_midpoint_assertion(source, stderr):
         return ""
     return (
-        "The binary correction uses strict inequalities around (min+max)/2. "
-        "Its tip maps 0.75 to the upper observed value. Mean imputation of "
-        "{0, 1} fills 0.5, and the stock run left [0.0, 0.5, 1.0]."
+        "test_imputation_binary_features_with_equal_categories_correct "
+        "asserts the equal-count binary gap stays 0.5. The docstring says "
+        "there is no majority label, so the mean is inserted. Strict "
+        "inequalities around (min+max)/2 leave that midpoint in place."
     )
+
+
+def binary_midpoint_left_unchanged(source: str, line: int, stderr: str) -> str:
+    """Do not treat a leftover 0.5 as a supported correctness bug.
+
+    The 11:25 audit saw ``[0.0, 0.5, 1.0]``. Snapping the midpoint failed
+    the frozen equal-category test at 11:54. That fill is the contract.
+    """
+
+    del source, line, stderr
+    return ""
 
 
 def replay_reaching_assertion(
@@ -363,16 +379,34 @@ def replay_reaching_assertion(
     except OSError:
         source = ""
     stderr = stock.stderr or ""
+    denied = ""
     coerced = ""
     if "AssertionError" in stderr:
+        denied = equal_category_mean_is_required(source, lead.line, stderr)
         coerced = (
-            binary_midpoint_left_unchanged(source, lead.line, stderr)
-            or discarded_callback_return(source, lead.line)
-            or annotated_int_or_coerces_zero(source, lead.line)
+            ""
+            if denied
+            else (
+                binary_midpoint_left_unchanged(source, lead.line, stderr)
+                or discarded_callback_return(source, lead.line)
+                or annotated_int_or_coerces_zero(source, lead.line)
+            )
         )
     marker = "replayed stored reaching assertion"
     claim = str(stored.get("claim") or lead.why)
     expected = str(stored.get("expected") or "")
+    if denied:
+        return VerificationResult(
+            "rejected",
+            claim=claim,
+            expected=expected,
+            observed=stderr[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            evidence=(denied,),
+            detail=f"{marker}: {denied}",
+            target_reached=True,
+        )
     if stock.status == "ok":
         return VerificationResult(
             "rejected",
@@ -1514,12 +1548,24 @@ def verify_lead(
                                     source_text, target_lead.line
                                 )
                             if not coerced:
+                                denied = equal_category_mean_is_required(
+                                    source_text,
+                                    target_lead.line,
+                                    stock.stderr or "",
+                                )
+                                if denied:
+                                    support_audit = ContractSupportAudit(
+                                        verdict="unsupported",
+                                        reason=denied,
+                                        evidence=[denied],
+                                    )
+                            if not coerced:
                                 coerced = binary_midpoint_left_unchanged(
                                     source_text,
                                     target_lead.line,
                                     stock.stderr or "",
                                 )
-                            if coerced:
+                            if coerced and support_audit.verdict != "unsupported":
                                 support_audit = ContractSupportAudit(
                                     verdict="supported",
                                     reason=coerced,
