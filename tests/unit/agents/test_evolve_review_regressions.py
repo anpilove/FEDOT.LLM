@@ -861,6 +861,28 @@ def test_unproved_binary_snap_reject_stays_open(tmp_path):
     assert ("fedot/categorical.py", 28) in closed
 
 
+def test_add_operation_resume_names_imputation(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 432,
+            "hypothesis_kind": "correctness",
+            "why": "crash in _categorical_numerical_union",
+            "mechanism": "width mismatch",
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": "AttributeError: 'PipelineBuilder' object has no attribute 'add_operation'",
+            "detail": "probe crashed before its contract assertion",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert "has no add_operation" in resumed[0].why
+
+
 def test_symbol_line_disagree_resume_names_the_union(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({

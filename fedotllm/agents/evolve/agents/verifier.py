@@ -1190,6 +1190,15 @@ def verify_lead(
                             " Use PipelineBuilder.add_node or PipelineNode with an operation name, "
                             "not an unconfigured base Operation object."
                         )
+                    if "add_operation" in (exception_line + (stock.stderr or "")) and (
+                        "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " PipelineBuilder has no add_operation. Do not build a "
+                            "pipeline. Construct ImputationImplementation() and call "
+                            "fit and transform on one table with a numeric all-NaN "
+                            "column and a categorical column."
+                        )
                     if (
                         "operation_info_by_id" in exception_line
                         and "ids_binary_integer_features" in (lead.why or "")
@@ -1334,6 +1343,15 @@ def verify_lead(
                         # Tell the model why the crash was not accepted as
                         # evidence (e.g. no public FEDOT entry point reached).
                         detail = f"{detail}: {exception_detail}"
+                    if "add_operation" in (stock.stderr or "") and (
+                        "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " PipelineBuilder has no add_operation. Do not build a "
+                            "pipeline. Construct ImputationImplementation() and call "
+                            "fit and transform on one table with a numeric all-NaN "
+                            "column and a categorical column."
+                        )
                     # Campaign verification is correctness-only, so the old
                     # gate never reserved the turn that already contains the
                     # recovered constructor. One correction is enough there.

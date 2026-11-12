@@ -552,6 +552,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "same instance when the column has more than two unique values."
         ).strip()
     if (
+        "add_operation" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "has no add_operation" not in why
+    ):
+        why = (
+            f"{why} PipelineBuilder has no add_operation. Do not build a pipeline. "
+            "Construct ImputationImplementation() and call fit and transform on one "
+            "table with a numeric all-NaN column and a categorical column."
+        ).strip()
+    if (
         "symbol and source line disagree" in observed
         and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
         and "columns=self.non_categorical_ids" not in why
