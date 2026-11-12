@@ -46,6 +46,10 @@ Construct tabular data with exactly these InputData fields: idx, features, targe
 task, data_type. Example:
 data = InputData(idx=np.arange(n), features=X, target=y.reshape(-1, 1), task=Task(TaskTypesEnum.classification), data_type=DataTypesEnum.table)
 Then call fit(data) and transform(data). transform accepts only that one InputData.
+Data-operation transform returns OutputData. The transformed matrix is predict.
+features on that object is still the input table, so it can still contain the original strings.
+Measure np.asarray(out.predict), not out.features. If transform already returned, correct that read.
+Do not replace the implementation class with another API.
 Do not inspect source text from the probe, import EvolveAgent evaluators, use mocks, or
 read benchmark data. Prefer PipelineBuilder/PipelineNode and valid InputData. Treat the
 runtime traceback and automatic API recovery below as ground truth."""
@@ -149,7 +153,10 @@ def repair_behavior_probe(
     correction_prompt = (
         f"{stable}\n\nThe final probe crashed. Previous tool results:\n"
         + ("\n\n".join(history)[-10_000:] or "(none)")
-        + "\n\nReturn action=run with one corrected complete probe, or "
+        + "\n\nIf the crash reads out.features after transform returned, the "
+        "transformed matrix is out.predict. features is still the input table. "
+        "Correct that read and keep the same implementation class.\n"
+        "Return action=run with one corrected complete probe, or "
         "action=cannot_fix. No more read, symbol, or docs actions are available."
     )
     parsed, _ = capture_structured_create(

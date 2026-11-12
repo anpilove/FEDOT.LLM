@@ -4280,6 +4280,8 @@ def test_probe_builder_corrects_a_crashed_final_probe_once(
     assert "unexpected keyword argument 'features_types'" in inference.prompts[-1]
     assert "data_type=DataTypesEnum.table" in inference.prompts[0]
     assert "transform(data)" in inference.prompts[0]
+    assert "out.predict" in inference.prompts[0]
+    assert "out.predict" in inference.prompts[-1]
 
 
 def test_confirmed_fixer_benchmark_uses_workload_evidence_not_provisional_files(
