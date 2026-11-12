@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -860,6 +861,182 @@ _MISSED_TARGET_MARKERS = (
 _MAX_OPEN_MISSED_TARGET_ATTEMPTS = 4
 
 
+_REPLAY_MARKER = "replayed stored reaching assertion"
+
+
+def _row_blob(row: dict[str, Any]) -> str:
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        reproduction = {}
+    return "\n".join(
+        str(reproduction.get(key) or "") for key in ("detail", "observed", "claim")
+    ) + "\n" + str(row.get("feedback") or "")
+
+
+def _reaching_probe_payload(
+    code: str,
+    stderr: str,
+    *,
+    reached: bool,
+    claim: str,
+    expected: str,
+) -> dict[str, str] | None:
+    if not code or reached is not True or "AssertionError" not in stderr:
+        return None
+    return {
+        "code": code,
+        "stderr": stderr[-1_500:],
+        "claim": claim,
+        "expected": expected,
+    }
+
+
+def _reaching_probe_from_row(row: dict[str, Any]) -> dict[str, str] | None:
+    """A stock run that executed the target and failed its assertion.
+
+    The finding often drops the probe. The run workspace still has
+    ``verifications/<stem>-<line>/verification.json``.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return None
+    claim = str(reproduction.get("claim") or "")
+    expected = str(reproduction.get("expected") or "")
+    direct = _reaching_probe_payload(
+        str(reproduction.get("code") or ""),
+        str(reproduction.get("stock_stderr") or ""),
+        reached=reproduction.get("target_reached") is True,
+        claim=claim,
+        expected=expected,
+    )
+    if direct is not None:
+        return direct
+    lead = row.get("lead") or {}
+    if not isinstance(lead, dict):
+        return None
+    workspace = str(row.get("workspace") or "")
+    file_path = str(lead.get("file_path") or "")
+    if not workspace or not file_path:
+        return None
+    try:
+        line = int(lead.get("line") or 0)
+    except (TypeError, ValueError):
+        return None
+    path = (
+        Path(workspace)
+        / "verifications"
+        / f"{Path(file_path).stem}-{line}"
+        / "verification.json"
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    probe = payload.get("stock_probe") or {}
+    if not isinstance(probe, dict):
+        probe = {}
+    return _reaching_probe_payload(
+        str(payload.get("reproduction_code") or probe.get("code") or ""),
+        str(probe.get("stderr") or ""),
+        reached=probe.get("target_reached") is True,
+        claim=claim or str(payload.get("claim") or ""),
+        expected=expected or str(payload.get("expected") or ""),
+    )
+
+
+def _latest_denies_reaching_assertion(row: dict[str, Any]) -> bool:
+    """The latest reject says no probe ever reached the asserted edge."""
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return any(
+        marker in text
+        for marker in (
+            "never demonstrated",
+            "could not produce",
+            "omits lines",
+        )
+    )
+
+
+def _site_reaching_probe(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Return a stored reaching assertion that has not been replayed."""
+
+    if any(_REPLAY_MARKER in _row_blob(row) for row in rows):
+        return None
+    if any(str(row.get("outcome") or "").startswith("correctness_keep") for row in rows):
+        return None
+    latest = rows[-1]
+    reproduction = latest.get("reproduction") or {}
+    if (
+        isinstance(reproduction, dict)
+        and reproduction.get("status") == "rejected"
+        and str(reproduction.get("detail") or "").startswith(
+            "stock satisfied the proposed healthy contract"
+        )
+        and reproduction.get("target_reached") is True
+    ):
+        return None
+    found = None
+    for row in rows:
+        probe = _reaching_probe_from_row(row)
+        if probe is not None:
+            found = probe
+    if found is None:
+        return None
+    # Only a rejection that claims the assertion never ran should spend the
+    # stored probe. An open inconclusive lead keeps its own verifier retry.
+    if not _latest_denies_reaching_assertion(latest):
+        return None
+    return found
+
+
+def reaching_assertion_replays(
+    findings_path: Path | None,
+) -> dict[tuple[str, int], dict[str, str]]:
+    """Probes to rerun before another verifier budget.
+
+    The 11:25 Europe/Moscow simple_imputation probe already asserted
+    ``[0.0, 0.5, 1.0]``. The finding dropped that code. The 11:38 resume
+    invented three probes, none of which reached the midpoint, and rejected
+    the line.
+    """
+
+    if findings_path is None or not findings_path.is_file():
+        return {}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or lead.get("hypothesis_kind") != "correctness":
+            continue
+        if not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    replayed: dict[tuple[str, int], dict[str, str]] = {}
+    for key, rows in grouped.items():
+        probe = _site_reaching_probe(rows)
+        if probe is not None:
+            replayed[key] = probe
+    return replayed
+
+
 def _probe_missed_target(row: dict[str, Any]) -> bool:
     """A probe that never executed the claimed method is not a finished test."""
 
@@ -892,6 +1069,7 @@ def _correctness_resume_plan(
         if isinstance(row, dict) and row.get("record_type") == "finding":
             rows.append(row)
     latest: dict[tuple[str, int], dict[str, Any]] = {}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
     inconclusive_counts: dict[tuple[str, int], int] = {}
     missed_counts: dict[tuple[str, int], int] = {}
     shared_crash_counts: dict[tuple[str, int], int] = {}
@@ -908,6 +1086,7 @@ def _correctness_resume_plan(
         except (TypeError, ValueError):
             continue
         latest[key] = row
+        grouped.setdefault(key, []).append(row)
         reproduction = row.get("reproduction") or {}
         if (
             row.get("outcome") == "unverified_no_patch"
@@ -948,6 +1127,20 @@ def _correctness_resume_plan(
             or _string_domain_upcast_unproved(row)
         ):
             open_probes.append((_correctness_site(key, row), None))
+            continue
+        stored_probe = _site_reaching_probe(grouped.get(key, [row]))
+        if stored_probe is not None:
+            site = _correctness_site(key, row)
+            if "stored reaching assertion" not in site.why:
+                site = replace(
+                    site,
+                    why=(
+                        f"{site.why} A stored probe already reached this target "
+                        "and failed its assertion. Replay that probe. Do not "
+                        "write a new one."
+                    ).strip(),
+                )
+            open_probes.append((site, None))
             continue
         if reproduction.get("status") == "rejected":
             continue
@@ -1271,6 +1464,7 @@ def closed_correctness_sites(
     if findings_path is None or not findings_path.is_file():
         return set()
     latest: dict[tuple[str, int], dict[str, Any]] = {}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
     inconclusive_counts: dict[tuple[str, int], int] = {}
     missed_counts: dict[tuple[str, int], int] = {}
     for raw in findings_path.read_text(encoding="utf-8").splitlines():
@@ -1294,6 +1488,7 @@ def closed_correctness_sites(
         except (TypeError, ValueError):
             continue
         latest[key] = row
+        grouped.setdefault(key, []).append(row)
         reproduction = row.get("reproduction") or {}
         if (
             row.get("outcome") == "unverified_no_patch"
@@ -1330,6 +1525,8 @@ def closed_correctness_sites(
             or _string_domain_unproved(row)
             or _string_domain_upcast_unproved(row)
         ):
+            continue
+        if _site_reaching_probe(grouped.get(key, [row])) is not None:
             continue
         if (
             _probe_missed_target(row)

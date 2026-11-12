@@ -333,6 +333,173 @@ def test_binary_midpoint_fill_supports_the_correction_contract():
     assert binary_midpoint_left_unchanged("def other():\n    return 1\n", 449, stderr) == ""
 
 
+def _midpoint_source() -> str:
+    return (
+        "def _correct_binary_ids_features(self, filled):\n"
+        "    \"\"\"Tip: [1, 1, 0.75, 0] will be transformed to [1, 1, 1, 0]\"\"\"\n"
+        "    mean_value = (max_value + min_value) / 2\n"
+        "    filled_column[filled_column > mean_value] = max_value\n"
+        "    filled_column[filled_column < mean_value] = min_value\n"
+    )
+
+
+def _reaching_then_denied(tmp_path, *, later_detail, later_observed=""):
+    workspace = tmp_path / "run"
+    folder = workspace / "verifications" / "sklearn_transformations-449"
+    folder.mkdir(parents=True)
+    (folder / "verification.json").write_text(json.dumps({
+        "status": "inconclusive",
+        "claim": "mean fill stays 0.5",
+        "expected": "domain is {0.0, 1.0}",
+        "reproduction_code": "assert unique.issubset({0.0, 1.0})\n",
+        "stock_probe": {
+            "target_reached": True,
+            "stderr": "AssertionError: [0.0, 0.5, 1.0]\n",
+            "code": "assert unique.issubset({0.0, 1.0})\n",
+        },
+    }))
+    findings = tmp_path / "findings.jsonl"
+    rows = [
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "workspace": str(workspace),
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 449,
+                "hypothesis_kind": "correctness",
+                "why": "midpoint fill stays 0.5",
+            },
+            "reproduction": {
+                "status": "inconclusive",
+                "detail": "contract support inconclusive: binary cell remains 0.5",
+            },
+        },
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 449,
+                "hypothesis_kind": "correctness",
+                "why": "midpoint fill stays 0.5",
+            },
+            "reproduction": {
+                "status": "rejected",
+                "detail": later_detail,
+                "observed": later_observed,
+            },
+        },
+    ]
+    findings.write_text("\n".join(map(json.dumps, rows)) + "\n")
+    return findings
+
+
+def test_denied_midpoint_stays_open_for_the_stored_probe(tmp_path):
+    findings = _reaching_then_denied(
+        tmp_path,
+        later_detail=(
+            "Three reproduction attempts could not produce a clean probe "
+            "that reaches the midpoint"
+        ),
+        later_observed="No stock run ever demonstrated the 0.5 midpoint edge",
+    )
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/sklearn_transformations.py", 449),
+    ]
+    assert "Replay that probe" in resumed[0].why
+    assert ("fedot/sklearn_transformations.py", 449) not in replay.closed_correctness_sites(
+        findings
+    )
+    stored = replay.reaching_assertion_replays(findings)
+    assert stored[("fedot/sklearn_transformations.py", 449)]["code"].startswith("assert")
+
+
+def test_replayed_reaching_assertion_closes_the_line(tmp_path):
+    findings = _reaching_then_denied(
+        tmp_path,
+        later_detail="replayed stored reaching assertion: contract still unsupported",
+    )
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/sklearn_transformations.py", 449) in replay.closed_correctness_sites(
+        findings
+    )
+    assert replay.reaching_assertion_replays(findings) == {}
+
+
+def test_ordinary_reject_stays_closed_without_a_reaching_probe(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/categorical.py",
+            "line": 41,
+            "hypothesis_kind": "correctness",
+            "why": "sentinel write",
+        },
+        "reproduction": {
+            "status": "rejected",
+            "detail": "advanced indexing returns a copy",
+        },
+    }) + "\n")
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/categorical.py", 41) in replay.closed_correctness_sites(findings)
+
+
+def test_replay_reaching_assertion_supports_the_midpoint(tmp_path, monkeypatch):
+    relative = "fedot/sklearn_transformations.py"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text(_midpoint_source())
+    monkeypatch.setattr(
+        verifier,
+        "run_fedot_snippet",
+        lambda checkout, code: SnippetResult(
+            "runtime_error",
+            code,
+            stderr="AssertionError: [0.0, 0.5, 1.0]\n",
+            exit_code=1,
+            target_reached=True,
+        ),
+    )
+    result = verifier.replay_reaching_assertion(
+        tmp_path,
+        MatchSite("llm", relative, 449, hypothesis_kind="correctness", why="midpoint"),
+        {"code": "assert unique.issubset({0.0, 1.0})\n", "claim": "0.5 stays", "expected": "{0,1}"},
+    )
+    assert result.status == "verified_bug"
+    assert result.proceed is True
+    assert result.reproduction_code.startswith("assert")
+    assert "replayed stored reaching assertion" in result.detail
+
+
+def test_replay_reaching_assertion_without_the_tip_stays_unsupported(tmp_path, monkeypatch):
+    relative = "fedot/other.py"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("def other():\n    return 1\n")
+    monkeypatch.setattr(
+        verifier,
+        "run_fedot_snippet",
+        lambda checkout, code: SnippetResult(
+            "runtime_error",
+            code,
+            stderr="AssertionError: [0.0, 0.5, 1.0]\n",
+            exit_code=1,
+            target_reached=True,
+        ),
+    )
+    result = verifier.replay_reaching_assertion(
+        tmp_path,
+        MatchSite("llm", relative, 10, hypothesis_kind="correctness"),
+        {"code": "assert False\n"},
+    )
+    assert result.status == "inconclusive"
+    assert result.detail == "replayed stored reaching assertion: contract still unsupported"
+
+
 def test_private_callback_class_does_not_keep_the_empty_list_failing(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.agents.verifier import replay_reproduction
     from fedotllm.agents.evolve.types import SnippetResult

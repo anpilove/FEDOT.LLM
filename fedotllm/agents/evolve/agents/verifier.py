@@ -344,6 +344,70 @@ def binary_midpoint_left_unchanged(source: str, line: int, stderr: str) -> str:
     )
 
 
+def replay_reaching_assertion(
+    checkout: Path,
+    lead: MatchSite,
+    stored: dict[str, str],
+) -> VerificationResult:
+    """Rerun a probe that already reached the target and failed its assertion.
+
+    The 11:38 Europe/Moscow resume spent seven verifier calls inventing probes
+    that never showed ``[0.0, 0.5, 1.0]``, then rejected the line. The 11:25
+    probe had already failed that assertion.
+    """
+
+    code = str(stored.get("code") or "")
+    stock = run_fedot_snippet(checkout, code)
+    try:
+        source = (checkout / lead.file_path).read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    stderr = stock.stderr or ""
+    coerced = ""
+    if "AssertionError" in stderr:
+        coerced = (
+            binary_midpoint_left_unchanged(source, lead.line, stderr)
+            or discarded_callback_return(source, lead.line)
+            or annotated_int_or_coerces_zero(source, lead.line)
+        )
+    marker = "replayed stored reaching assertion"
+    claim = str(stored.get("claim") or lead.why)
+    expected = str(stored.get("expected") or "")
+    if stock.status == "ok":
+        return VerificationResult(
+            "rejected",
+            claim=claim,
+            expected=expected,
+            observed=(stock.stdout or "")[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            detail=f"{marker}: stock satisfied the proposed healthy contract",
+            target_reached=stock.target_reached is True,
+        )
+    if coerced:
+        return VerificationResult(
+            "verified_bug",
+            claim=claim,
+            expected=expected,
+            observed=stderr[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            evidence=(coerced,),
+            detail=f"{marker}: {coerced}",
+            target_reached=True,
+        )
+    return VerificationResult(
+        "inconclusive",
+        claim=claim,
+        expected=expected,
+        observed=stderr[-1_000:],
+        reproduction_code=code,
+        stock_probe=stock,
+        detail=f"{marker}: contract still unsupported",
+        target_reached=stock.target_reached is True,
+    )
+
+
 def discarded_callback_return(source: str, line: int) -> str:
     """Return why an early-stopping callback is built and then dropped.
 

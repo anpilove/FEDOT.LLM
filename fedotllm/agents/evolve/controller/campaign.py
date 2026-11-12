@@ -80,6 +80,7 @@ from fedotllm.agents.evolve.storage.replay import (
     tried_sites,
     closed_hunt_sites,
     proven_correctness_replay,
+    reaching_assertion_replays,
     unfinished_correctness_leads,
     narrow_datetime_resume,
     scored_day_count_resume,
@@ -154,6 +155,7 @@ from fedotllm.agents.evolve.types import (
 )
 from fedotllm.agents.evolve.agents.verifier import (
     is_controller_observed_crash,
+    replay_reaching_assertion,
     replay_reproduction,
     verification_from_observed_crash,
     verification_context,
@@ -1231,6 +1233,7 @@ def run_once(
         return path
 
     proven_replay = proven_correctness_replay(findings_path)
+    stored_assertions = reaching_assertion_replays(findings_path)
     for i, lead in enumerate(leads, start=1):
         safety_extension_granted = False
         prior_behavior_probe: tuple[str, str] | None = None
@@ -1272,6 +1275,25 @@ def run_once(
             verification = observed_contract
         elif observed_crash is not None:
             verification = observed_crash
+        elif (lead.file_path, lead.line) in stored_assertions:
+            verification_checkout = create_experiment_checkout(
+                source,
+                workspace,
+                run_id=run_id,
+                candidate_id=f"replay-{i}-{uuid.uuid4().hex[:8]}",
+            )
+            try:
+                verification = replay_reaching_assertion(
+                    verification_checkout,
+                    lead,
+                    stored_assertions[(lead.file_path, lead.line)],
+                )
+            finally:
+                discard_experiment_checkout(
+                    verification_checkout,
+                    workspace=workspace,
+                    source=source,
+                )
         elif verifier_inference is None or lead.hypothesis_kind != "correctness":
             verification = VerificationResult(
                 "quality_hypothesis",
@@ -1381,6 +1403,7 @@ def run_once(
                 stage="verification",
                 infrastructure_error=verification.status == "infrastructure_error",
             )
+            stock_probe = verification.stock_probe
             reproduction = {
                 "status": verification.status,
                 "stock": None,
@@ -1389,7 +1412,15 @@ def run_once(
                 "expected": verification.expected,
                 "observed": verification.observed,
                 "detail": verification.detail,
-                "target_reached": verification.target_reached,
+                "code": verification.reproduction_code,
+                "target_reached": (
+                    verification.target_reached
+                    if verification.target_reached is not None
+                    else None if stock_probe is None else stock_probe.target_reached
+                ),
+                "stock_stderr": (
+                    "" if stock_probe is None else (stock_probe.stderr or "")[-1_500:]
+                ),
             }
             record_attempt(
                 lead,
@@ -1428,6 +1459,8 @@ def run_once(
             "generality": verification.generality,
             "risks": list(verification.risks),
             "resolved_target": verification.resolved_target,
+            "detail": verification.detail,
+            "code": verification.reproduction_code,
         }
         # One additional attempt may be unlocked only by a local KEEP that the
         # mandatory global protect suite rejects. It repairs patch scope; it is
