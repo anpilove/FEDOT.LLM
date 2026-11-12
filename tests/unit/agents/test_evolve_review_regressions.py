@@ -649,6 +649,48 @@ def test_mixed_int_str_unique_stays_outside_the_string_contract():
     ) == ""
 
 
+def test_subset_index_reject_without_the_call_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/core/data/data.py",
+            "line": 643,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_to_dataframe raises IndexError: index 2 is out of "
+                "bounds for axis 0 with size 2"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "code": "",
+            "detail": (
+                "Without documented evidence of a failure caused by the "
+                "current setdiff behavior, this proposal is unsupported"
+            ),
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/core/data/data.py", 643),
+    ]
+    assert "boostings_implementations" in resumed[0].why
+    assert ("fedot/core/data/data.py", 643) not in replay.closed_correctness_sites(
+        findings
+    )
+    reached = json.loads(findings.read_text())
+    reached["reproduction"]["observed"] = (
+        "IndexError: index 2 is out of bounds for axis 0 with size 2"
+    )
+    findings.write_text(json.dumps(reached) + "\n")
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/core/data/data.py", 643) in replay.closed_correctness_sites(
+        findings
+    )
+
+
 def test_choice_coerced_mixed_column_is_not_a_disproof():
     code = (
         "features[:, 1] = rng.choice(['a', 'b', 1], size=n)\n"

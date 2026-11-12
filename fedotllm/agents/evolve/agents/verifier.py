@@ -967,6 +967,7 @@ def verify_lead(
     )
     target_disagree_retried = False
     binary_reject_retried = False
+    subset_index_reject_retried = False
     all_nan_reject_retried = False
     callback_reject_retried = False
     string_domain_reject_retried = False
@@ -1313,6 +1314,32 @@ def verify_lead(
                     "a probe imports fedot, fits once, transforms a two-value column, "
                     "transforms that same object when the column has more than two "
                     "unique values, and shows the second result was not snapped."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
+                and not subset_index_reject_retried
+                and "convert_to_dataframe" in claim_text
+                and "index 2 is out of bounds" in claim_text
+                and not any("index 2 is out of bounds" in item for item in tool_history)
+            ):
+                # The 13:10 Moscow reject said setdiff has no documented
+                # failure. The probes never called convert_to_dataframe.
+                subset_index_reject_retried = True
+                step_budget += 1
+                output = (
+                    "Import convert_to_dataframe from "
+                    "fedot.core.operations.evaluation.operation_implementations."
+                    "models.boostings_implementations. Build InputData with "
+                    "categorical_idx [0, 1] and numerical_idx [2, 3, 4]. Call "
+                    "subset_features(np.array([0, 1])), then "
+                    "convert_to_dataframe(subset, identify_cats=True). Assert "
+                    "IndexError: index 2 is out of bounds. Reject only after "
+                    "that call."
                 )
                 last_detail = output
                 tool_history.append(

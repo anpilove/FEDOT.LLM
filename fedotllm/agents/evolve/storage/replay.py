@@ -630,6 +630,35 @@ def _choice_coerced_mixed_unique(row: dict[str, Any]) -> bool:
     )
 
 
+def _subset_index_unproved(row: dict[str, Any]) -> bool:
+    """A reject that never called ``convert_to_dataframe``.
+
+    The 13:10 Europe/Moscow audit said ``setdiff1d`` has no documented
+    failure. The probes died on imports and on an empty ``categorical_idx``.
+    None called ``convert_to_dataframe``. On a width-2 categorical subset,
+    ``numerical_idx`` stays ``[2, 3, 4]`` and that call raises
+    ``IndexError: index 2 is out of bounds``.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "convert_to_dataframe" not in why or "index 2 is out of bounds" not in why:
+        return False
+    observed = "\n".join(
+        str(reproduction.get(part) or "")
+        for part in ("detail", "observed", "stock_stderr", "code")
+    )
+    if "index 2 is out of bounds" in observed:
+        return False
+    return (
+        "no documented evidence of a failure" in observed
+        or not str(reproduction.get("code") or "").strip()
+    )
+
+
 def _string_domain_upcast_unproved(row: dict[str, Any]) -> bool:
     """An equal string-set reject that fit the ints through a float upcast.
 
@@ -785,6 +814,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "target, task, data_type=DataTypesEnum.table, categorical_idx="
             "np.array([0, 1])) for two binary string columns. Do not pass "
             "features_types. Assert the fitted categorical_idx has an integer dtype."
+        ).strip()
+    if _subset_index_unproved(row) and "boostings_implementations" not in why:
+        why = (
+            f"{why} Import convert_to_dataframe from "
+            "fedot.core.operations.evaluation.operation_implementations.models."
+            "boostings_implementations. Build InputData with categorical_idx "
+            "[0, 1] and numerical_idx [2, 3, 4]. Call "
+            "subset_features(np.array([0, 1])), then "
+            "convert_to_dataframe(subset, identify_cats=True). Assert "
+            "IndexError: index 2 is out of bounds. Reject only after that call."
         ).strip()
     if _choice_coerced_mixed_unique(row) and "stores the int as the string" not in why:
         why = (
@@ -1177,6 +1216,7 @@ def _correctness_resume_plan(
             or             _string_domain_unproved(row)
             or _string_domain_upcast_unproved(row)
             or _choice_coerced_mixed_unique(row)
+            or _subset_index_unproved(row)
         ):
             open_probes.append((_correctness_site(key, row), None))
             continue
@@ -1648,6 +1688,7 @@ def closed_correctness_sites(
             or             _string_domain_unproved(row)
             or _string_domain_upcast_unproved(row)
             or _choice_coerced_mixed_unique(row)
+            or _subset_index_unproved(row)
         ):
             continue
         if _site_reaching_probe(grouped.get(key, [row])) is not None:
