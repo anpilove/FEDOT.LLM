@@ -845,6 +845,44 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _nan_scan_counts_dropped_target_rows(parsed: SiteProposal) -> bool:
+    """NaNs on rows with a missing target change which columns survive.
+
+    The 10:02 Europe/Moscow catalog picked ``preprocessing.py:212``.
+    ``_find_features_lacking_nans`` counts the full matrix before
+    ``_drop_rows_with_nan_in_target``. A logit fit on 100 rows, with the
+    second column NaN only on 91 NaN-target rows, stored ``ids`` ``[0]``
+    even though the nine retained rows were fully observed. Predict still
+    returned labels, and the stored list is applied at both stages.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(
+        r"_find_features_lacking_nans|feature-validity|ALLOWED_NAN_PERCENT",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    if re.search(
+        r"_drop_rows_with_nan_in_target|NaN-target|soon-to-be-dropped|target is missing",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    return (
+        re.search(
+            r"reorder|removed|discard|fully observed|incorrect",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _one_hot_frame_branch_unexecuted(parsed: SiteProposal) -> bool:
     """The one-hot DataFrame branch has no measured hits.
 
@@ -1015,6 +1053,15 @@ def _first_pick_rejection(
             "unseen categories become zero rows under handle_unknown='ignore' "
             "(test_one_hot_encoding_new_category_in_test). Pick a different "
             "executed line or skip",
+        )
+    if _nan_scan_counts_dropped_target_rows(parsed):
+        return (
+            "nan_target_rows_change_width",
+            "A logit fit drops a column whose NaNs sit only on NaN-target rows "
+            "(ids [0] when 91 of 100 targets are missing and the retained rows "
+            "are fully observed). Predict still returns labels, and the stored "
+            "feature list is applied at fit and predict. That changes which "
+            "columns survive. Pick a different executed line or skip",
         )
     if _empty_categorical_index_is_replaced(parsed):
         return (
