@@ -314,6 +314,25 @@ def test_discarded_early_stopping_callback_is_a_contract():
     assert discarded_callback_return(source, 9) == ""
 
 
+def test_binary_midpoint_fill_supports_the_correction_contract():
+    from fedotllm.agents.evolve.agents.verifier import binary_midpoint_left_unchanged
+
+    source = (
+        "def _correct_binary_ids_features(self, filled):\n"
+        "    \"\"\"Tip: [1, 1, 0.75, 0] will be transformed to [1, 1, 1, 0]\"\"\"\n"
+        "    mean_value = (max_value + min_value) / 2\n"
+        "    filled_column[filled_column > mean_value] = max_value\n"
+        "    filled_column[filled_column < mean_value] = min_value\n"
+    )
+    stderr = (
+        "AssertionError: imputed binary column contains out-of-domain values, "
+        "expected only {0.0, 1.0}: [0.0, 0.5, 1.0]\n"
+    )
+    assert "[0.0, 0.5, 1.0]" in binary_midpoint_left_unchanged(source, 449, stderr)
+    assert binary_midpoint_left_unchanged(source, 449, "AssertionError: other") == ""
+    assert binary_midpoint_left_unchanged("def other():\n    return 1\n", 449, stderr) == ""
+
+
 def test_private_callback_class_does_not_keep_the_empty_list_failing(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.agents.verifier import replay_reproduction
     from fedotllm.agents.evolve.types import SnippetResult

@@ -319,6 +319,31 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
+def binary_midpoint_left_unchanged(source: str, line: int, stderr: str) -> str:
+    """Return why a mean fill of 0.5 survives the binary correction.
+
+    ``_correct_binary_ids_features`` snaps values strictly above and below
+    ``(min + max) / 2``. The tip maps 0.75 onto the upper observed value.
+    Mean imputation of ``{0, 1}`` fills 0.5, which equals that midpoint, so
+    both comparisons leave it in place. The 11:25 Europe/Moscow audit saw
+    ``[0.0, 0.5, 1.0]`` and still called the contract inconclusive.
+    """
+
+    del line
+    error = stderr or ""
+    if "AssertionError" not in error or "0.5" not in error:
+        return ""
+    if "filled_column > mean_value" not in source or "filled_column < mean_value" not in source:
+        return ""
+    if "0.75" not in source:
+        return ""
+    return (
+        "The binary correction uses strict inequalities around (min+max)/2. "
+        "Its tip maps 0.75 to the upper observed value. Mean imputation of "
+        "{0, 1} fills 0.5, and the stock run left [0.0, 0.5, 1.0]."
+    )
+
+
 def discarded_callback_return(source: str, line: int) -> str:
     """Return why an early-stopping callback is built and then dropped.
 
@@ -1423,6 +1448,12 @@ def verify_lead(
                             if not coerced:
                                 coerced = discarded_callback_return(
                                     source_text, target_lead.line
+                                )
+                            if not coerced:
+                                coerced = binary_midpoint_left_unchanged(
+                                    source_text,
+                                    target_lead.line,
+                                    stock.stderr or "",
                                 )
                             if coerced:
                                 support_audit = ContractSupportAudit(
