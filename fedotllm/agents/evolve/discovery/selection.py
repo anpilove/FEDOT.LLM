@@ -845,6 +845,32 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _n_jobs_rewrite_is_the_contract(parsed: SiteProposal) -> bool:
+    """``fit`` writes ``n_jobs`` because that argument is the job count.
+
+    The 10:25 Europe/Moscow catalog picked ``pipeline.py:196`` and asked
+    ``fit`` to restore the previous ``n_jobs`` so ``descriptive_id`` stays
+    put. ``replace_n_jobs_in_nodes`` documents that it changes the job count.
+    An rf fit with ``n_jobs=2`` leaves ``{'n_jobs': 2}`` and
+    ``/n_rf_{'n_jobs': 2}``. Predict still returns labels. A later fit with
+    the default writes 1 again.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"replace_n_jobs_in_nodes|node\.content\['params'\]", text) is None:
+        return False
+    if "n_jobs" not in text and "num_threads" not in text:
+        return False
+    return (
+        re.search(r"restore|descriptive_id|never restores", text, re.IGNORECASE)
+        is not None
+    )
+
+
 def _numerical_min_uniques_is_docs_only(parsed: SiteProposal) -> bool:
     """``numerical_min_uniques`` is a documentation name, not a parameter.
 
@@ -1076,6 +1102,16 @@ def _first_pick_rejection(
             "unseen categories become zero rows under handle_unknown='ignore' "
             "(test_one_hot_encoding_new_category_in_test). Pick a different "
             "executed line or skip",
+        )
+    if _n_jobs_rewrite_is_the_contract(parsed):
+        return (
+            "n_jobs_rewrite_is_contract",
+            "Pipeline.fit documents n_jobs as the number of threads for nodes "
+            "fitting. replace_n_jobs_in_nodes writes that value into n_jobs and "
+            "num_threads. An rf fit with n_jobs=2 leaves params {'n_jobs': 2} "
+            "and descriptive_id /n_rf_{'n_jobs': 2}; predict still returns "
+            "labels. A later fit with the default writes 1 again. Pick a "
+            "different executed line or skip",
         )
     if _numerical_min_uniques_is_docs_only(parsed):
         return (
