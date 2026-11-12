@@ -1039,6 +1039,26 @@ def _one_hot_float32_follows_memory_downcast(parsed: SiteProposal) -> bool:
     )
 
 
+def _mixed_unique_outside_string_contract(parsed: SiteProposal) -> bool:
+    """A mixed int/str column is outside the binary-string contract.
+
+    ``BinaryCategoricalPreprocessor.fit`` documents binary features that
+    have str objects. The 12:52 Europe/Moscow probe assigned Python ints
+    and strings into one object column. ``np.unique`` raised ``TypeError``.
+    The contract audit called that input out of contract: fit is not
+    required to finish on it.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "np.unique" not in text or "TypeError" not in text:
+        return False
+    return re.search(r"mixed[- ]type|mixed int|int and str|ints and str", text, re.IGNORECASE) is not None
+
+
 def _empty_categorical_index_is_replaced(parsed: SiteProposal) -> bool:
     """Obligatory preprocessing replaces the empty binary index.
 
@@ -1283,6 +1303,14 @@ def _first_pick_rejection(
             "are fully observed). Predict still returns labels, and the stored "
             "feature list is applied at fit and predict. That changes which "
             "columns survive. Pick a different executed line or skip",
+        )
+    if _mixed_unique_outside_string_contract(parsed):
+        return (
+            "mixed_unique_outside_string_contract",
+            "A cell-wise object column of Python int and str makes np.unique "
+            "raise TypeError. BinaryCategoricalPreprocessor.fit documents "
+            "binary features that \"has str objects\", so fit is not required "
+            "to complete on it. Pick a different executed line or skip",
         )
     if _empty_categorical_index_is_replaced(parsed):
         return (

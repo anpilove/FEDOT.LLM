@@ -625,6 +625,30 @@ def test_empty_categorical_index_setup_stays_open(tmp_path):
     )
 
 
+def test_mixed_int_str_unique_stays_outside_the_string_contract():
+    source = (
+        "def fit(self, input_data):\n"
+        "    \"\"\"Binary features and at the same time has str objects.\"\"\"\n"
+        "    return len(np.unique(col))\n"
+    )
+    code = (
+        "features[:, 1] = [1, 'x', 2, 'y', 3, 'z']\n"
+        "assert caught is None, f'valid supported call crashed: {caught}'\n"
+    )
+    stderr = (
+        "AssertionError: valid supported call crashed: "
+        "'<' not supported between instances of 'str' and 'int'\n"
+    )
+    reason = verifier.mixed_int_str_unique_is_outside_contract(source, 31, stderr, code)
+    assert "has str objects" in reason
+    assert verifier.mixed_int_str_unique_is_outside_contract(
+        "def fit(self):\n    return 1\n", 31, stderr, code
+    ) == ""
+    assert verifier.mixed_int_str_unique_is_outside_contract(
+        source, 31, "AssertionError: other", code
+    ) == ""
+
+
 def test_choice_coerced_mixed_column_is_not_a_disproof():
     code = (
         "features[:, 1] = rng.choice(['a', 'b', 1], size=n)\n"

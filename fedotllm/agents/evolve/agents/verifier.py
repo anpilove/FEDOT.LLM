@@ -368,6 +368,35 @@ def choice_coerced_mixed_column(code: str, stderr: str) -> str:
     )
 
 
+def mixed_int_str_unique_is_outside_contract(
+    source: str, line: int, stderr: str, code: str
+) -> str:
+    """A mixed int/str column is not a fit-completes input.
+
+    The 12:52 Europe/Moscow probe assigned ``[1, 'x', 2, 'y', 3, 'z']`` and
+    asserted ``caught is None``. Stock raised ``'<' not supported between
+    instances of 'str' and 'int'``. ``fit`` documents binary features that
+    have str objects, so that crash is not a contract violation.
+    """
+
+    del line
+    error = stderr or ""
+    if "not supported between instances" not in error:
+        return ""
+    if "int" not in error or "str" not in error:
+        return ""
+    if "caught is None" not in (code or ""):
+        return ""
+    if "has str objects" not in (source or ""):
+        return ""
+    return (
+        "A cell-wise object column of Python int and str makes np.unique "
+        "raise TypeError. BinaryCategoricalPreprocessor.fit documents "
+        "binary features that \"has str objects\", so fit is not required "
+        "to complete on it."
+    )
+
+
 def equal_category_mean_is_required(source: str, line: int, stderr: str) -> str:
     """Return why a balanced binary gap must stay at the mean 0.5.
 
@@ -1624,6 +1653,24 @@ def verify_lead(
                                     reason=stringified,
                                     evidence=[stringified],
                                 )
+                        try:
+                            contract_source = (
+                                checkout / target_lead.file_path
+                            ).read_text(encoding="utf-8")
+                        except OSError:
+                            contract_source = ""
+                        outside = mixed_int_str_unique_is_outside_contract(
+                            contract_source,
+                            target_lead.line,
+                            stock.stderr or "",
+                            parsed.reproduction_code or "",
+                        )
+                        if outside:
+                            support_audit = ContractSupportAudit(
+                                verdict="unsupported",
+                                reason=outside,
+                                evidence=[outside],
+                            )
                         if support_audit.verdict != "supported":
                             if (
                                 support_audit.verdict == "inconclusive"
