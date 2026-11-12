@@ -259,6 +259,21 @@ def indicator_width_crash(candidate: PatchCandidate, behavior_probe: dict) -> bo
     return "IndexError" in stderr and "reduce_mem_usage" in stderr
 
 
+def indicator_width_pytest(candidate: PatchCandidate, output: str) -> bool:
+    """An ``add_indicator`` edit whose pytest run dies in ``reduce_mem_usage``.
+
+    The 12:21 Europe/Moscow categorical imputer probe widened the matrix from
+    2 columns to 3 and stayed green. Pytest then raised ``IndexError: list
+    index out of range`` inside ``reduce_mem_usage``. A later source revision
+    keeps the extra columns and hits the same traceback.
+    """
+
+    edits = "\n".join(edit.new_code for edit in candidate.edits)
+    if "add_indicator" not in edits:
+        return False
+    return "IndexError" in output and "reduce_mem_usage" in output
+
+
 def scout_action_limit_for(max_actions: int) -> int:
     """Cover a second catalog file when the action budget can hold it.
 
@@ -2142,6 +2157,7 @@ def run_once(
                     )
                     tie = tied_named_metric(behavior_probe)
                     locked = categorical_integrality_locked(candidate, blocked.reason)
+                    width = indicator_width_pytest(candidate, after_tests.output)
                     if tie:
                         # auc stayed 0.540 while the magnitude fell. Another
                         # revision then deleted the helper and left the call.
@@ -2161,6 +2177,15 @@ def run_once(
                             "on integrality.\n"
                             + feedback
                         )
+                    elif width:
+                        feedback = (
+                            "add_indicator appends columns that are not in "
+                            "col_type_ids['features']. reduce_mem_usage then raises "
+                            "IndexError: list index out of range. The preprocessing "
+                            "tests require the original width. Do not add indicator "
+                            "columns. This failure does not get another source revision.\n"
+                            + feedback
+                        )
                     feedback = push_feedback(feedback)
                     record_attempt(
                         lead,
@@ -2178,7 +2203,7 @@ def run_once(
                     if blocked.infrastructure_error:
                         _record_final_skipped(journal, reason=blocked.reason)
                         return finish(blocked)
-                    if tie or locked:
+                    if tie or locked or width:
                         break
                     grant_safety_extension("pytest", candidate, last.reason)
                     if advance_revision(last.reason):

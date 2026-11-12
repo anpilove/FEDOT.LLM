@@ -275,6 +275,31 @@ def test_indicator_width_crash_skips_another_revision():
     assert not indicator_width_crash(other, crash)
 
 
+def test_indicator_width_pytest_does_not_open_another_revision():
+    from fedotllm.agents.evolve.controller.campaign import indicator_width_pytest
+
+    candidate = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit(
+            "fedot/a.py",
+            "self.imputer_cat = SimpleImputer(**self.params_cat)",
+            "self.imputer_cat = SimpleImputer(**self.params_cat, add_indicator=True)",
+        )],
+    )
+    output = (
+        "fedot/utilities/memory.py:69: in reduce_mem_usage\n"
+        "    df[col] = df[col].astype(types_array[index])\n"
+        "E   IndexError: list index out of range\n"
+    )
+    assert indicator_width_pytest(candidate, output)
+    assert not indicator_width_pytest(candidate, "AssertionError: 3 == 4")
+    other = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit("fedot/a.py", "x = 1", "x = 2")],
+    )
+    assert not indicator_width_pytest(other, output)
+
+
 def test_dict_params_resume_names_operation_parameters(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({
