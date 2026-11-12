@@ -779,6 +779,7 @@ def verify_lead(
     callback_reject_retried = False
     string_domain_reject_retried = False
     string_domain_upcast_retried = False
+    empty_index_setup_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1515,6 +1516,30 @@ def verify_lead(
                             "FedotLightGBMClassificationImplementation(params="
                             "OperationParameters(early_stopping_rounds=30, "
                             "use_eval_set=True))."
+                        )
+                    history_text = "\n".join(tool_history)
+                    if (
+                        not empty_index_setup_retried
+                        and "array([], dtype=float64)" in history_text
+                        and (
+                            "features_types" in (stock.stderr or "")
+                            or "missing 3 required positional arguments" in (stock.stderr or "")
+                            or "missing 1 required positional argument" in (stock.stderr or "")
+                        )
+                    ):
+                        # The 09:39 Moscow diagnostic already printed the empty
+                        # float64 index. Later probes rebuilt InputData.
+                        empty_index_setup_retried = True
+                        step_budget += 1
+                        detail += (
+                            " The diagnostic already printed categorical_idx "
+                            "array([], dtype=float64) and IndexError: arrays "
+                            "used as indices must be of integer (or boolean) "
+                            "type. Reuse that InputData: idx, features, target, "
+                            "task, data_type=DataTypesEnum.table, "
+                            "categorical_idx=np.array([0, 1]). Do not pass "
+                            "features_types. Assert the fitted categorical_idx "
+                            "has an integer dtype."
                         )
                     if "add_operation" in (stock.stderr or "") and (
                         "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))

@@ -512,6 +512,32 @@ def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
     return "more than two unique values" in detail and "never added" in detail
 
 
+def _empty_categorical_index_unproved(row: dict[str, Any]) -> bool:
+    """The empty binary-index probe died in ``InputData`` setup.
+
+    ``np.array([])`` is float64. A fit of ``BinaryCategoricalPreprocessor`` on
+    two binary string columns printed ``array([], dtype=float64)`` and
+    ``IndexError: arrays used as indices must be of integer``. Later probes
+    passed ``features_types`` or omitted ``idx``, ``task``, and ``data_type``,
+    and the 09:39 Europe/Moscow budget ended.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "inconclusive":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "categorical_idx" not in why or "float64" not in why:
+        return False
+    if "Do not pass features_types" in why:
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return (
+        "verification step budget exhausted" in text
+        or "public FEDOT entry point" in text
+    )
+
+
 def _string_domain_upcast_unproved(row: dict[str, Any]) -> bool:
     """An equal string-set reject that fit the ints through a float upcast.
 
@@ -658,6 +684,15 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "EarlyStoppingCallback; the class is _EarlyStoppingCallback. Keep "
             "callback.append(lgbm_early_stopping(...)). The contract is a list of "
             "length 1 whose stopping_rounds equals early_stopping_rounds."
+        ).strip()
+    if _empty_categorical_index_unproved(row) and "Do not pass features_types" not in why:
+        why = (
+            f"{why} A diagnostic fit already printed categorical_idx "
+            "array([], dtype=float64) and IndexError: arrays used as indices "
+            "must be of integer (or boolean) type. Reuse InputData(idx, features, "
+            "target, task, data_type=DataTypesEnum.table, categorical_idx="
+            "np.array([0, 1])) for two binary string columns. Do not pass "
+            "features_types. Assert the fitted categorical_idx has an integer dtype."
         ).strip()
     if _string_domain_upcast_unproved(row) and "object array" not in why:
         why = (

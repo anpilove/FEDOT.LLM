@@ -374,6 +374,39 @@ def test_unresolved_callback_patch_stays_open(tmp_path):
     assert ("fedot/boostings_implementations.py", 220) not in replay.closed_correctness_sites(findings)
 
 
+def test_empty_categorical_index_setup_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/categorical.py",
+            "line": 58,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "line 58 converts an empty categorical_idx list to np.array "
+                "without a dtype, so the empty result is float64"
+            ),
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": (
+                "probe crashed before its contract assertion: "
+                "probe did not use a public FEDOT entry point"
+            ),
+            "detail": "verification step budget exhausted",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/categorical.py", 58),
+    ]
+    assert "Do not pass features_types" in resumed[0].why
+    assert ("fedot/preprocessing/categorical.py", 58) not in replay.closed_correctness_sites(
+        findings
+    )
+
+
 def test_upcast_string_set_reject_stays_open(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({
