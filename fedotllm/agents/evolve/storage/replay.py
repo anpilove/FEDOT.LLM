@@ -512,6 +512,26 @@ def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
     return "more than two unique values" in detail and "never added" in detail
 
 
+def _string_domain_unproved(row: dict[str, Any]) -> bool:
+    """A docs reject after the string-domain probe died on target shape.
+
+    ``convert_num_column_into_string_array`` uses ``astype(str)``. Fit on ints
+    stores ``'1'``. Predict on the same values as floats stores ``'1.0'``. The
+    09:19 Europe/Moscow probe passed a 1-D target and died unpacking its shape.
+    The reject then cited the preprocessing docs and never printed the sets.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    text = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "convert_num_column_into_string_array" not in text:
+        return False
+    observed = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return "1-D target" in observed or "not enough values to unpack" in observed
+
+
 def _discarded_callback_unproved(row: dict[str, Any]) -> bool:
     """A reject that treats the dropped early-stopping callback as undocumented.
 
@@ -615,6 +635,14 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "EarlyStoppingCallback; the class is _EarlyStoppingCallback. Keep "
             "callback.append(lgbm_early_stopping(...)). The contract is a list of "
             "length 1 whose stopping_rounds equals early_stopping_rounds."
+        ).strip()
+    if _string_domain_unproved(row) and "Reshape the target to (-1, 1)" not in why:
+        why = (
+            f"{why} The previous probe died on a 1-D target in "
+            "_check_columns_vs_types_number before any string set was printed. "
+            "Reshape the target to (-1, 1). Fit TableTypesCorrector on an int "
+            "column with values 0, 1, 2, 3, then predict the same values as "
+            "floats. Print both string sets. Reject only after those sets match."
         ).strip()
     if _discarded_callback_unproved(row) and "passes that list as callbacks=" not in why:
         why = (
@@ -795,6 +823,7 @@ def _correctness_resume_plan(
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
             or _discarded_callback_unproved(row)
+            or _string_domain_unproved(row)
         ):
             open_probes.append((_correctness_site(key, row), None))
             continue
@@ -1170,6 +1199,7 @@ def closed_correctness_sites(
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
             or _discarded_callback_unproved(row)
+            or _string_domain_unproved(row)
         ):
             continue
         if (

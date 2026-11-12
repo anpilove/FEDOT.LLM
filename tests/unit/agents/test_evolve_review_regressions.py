@@ -374,6 +374,39 @@ def test_unresolved_callback_patch_stays_open(tmp_path):
     assert ("fedot/boostings_implementations.py", 220) not in replay.closed_correctness_sites(findings)
 
 
+def test_string_domain_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/data_types.py",
+            "line": 473,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_num_column_into_string_array turns int 1 into '1' "
+                "and float 1.0 into '1.0'"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "observed": (
+                "the attempted direct probe failed on probe setup "
+                "(1-D target shape)"
+            ),
+            "detail": "preprocessing docs convert predict data to fit-time types",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/data_types.py", 473),
+    ]
+    assert "Reshape the target to (-1, 1)" in resumed[0].why
+    assert ("fedot/preprocessing/data_types.py", 473) not in replay.closed_correctness_sites(
+        findings
+    )
+
+
 def test_discarded_callback_reject_stays_open(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({

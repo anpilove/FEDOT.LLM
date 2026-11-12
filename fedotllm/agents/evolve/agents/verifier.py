@@ -777,6 +777,7 @@ def verify_lead(
     binary_reject_retried = False
     all_nan_reject_retried = False
     callback_reject_retried = False
+    string_domain_reject_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1150,6 +1151,33 @@ def verify_lead(
                 )
                 continue
             history_text = "\n".join(tool_history)
+            if (
+                correctness_only
+                and not string_domain_reject_retried
+                and "convert_num_column_into_string_array" in claim_text
+                and ("1.0" in claim_text or "astype(str)" in claim_text)
+                and "category sets match" not in history_text
+                and "'0.0'" not in history_text
+            ):
+                # The 09:19 Moscow probe died unpacking a 1-D target. The
+                # reject cited the preprocessing docs and never printed the
+                # fit and predict string sets.
+                string_domain_reject_retried = True
+                step_budget += 1
+                output = (
+                    "A 1-D target dies in _check_columns_vs_types_number with "
+                    "not enough values to unpack before any string set is "
+                    "printed. Predict calls convert_num_column_into_string_array "
+                    "again. Reshape the target to (-1, 1). Fit on an int column "
+                    "with values 0, 1, 2, 3. Predict the same values as floats. "
+                    "Print both string sets. Reject only after those sets match. "
+                    "The preprocessing docs are not that comparison."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
             if (
                 correctness_only
                 and not callback_reject_retried
