@@ -861,6 +861,30 @@ def test_unproved_binary_snap_reject_stays_open(tmp_path):
     assert ("fedot/categorical.py", 28) in closed
 
 
+def test_all_nan_union_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 432,
+            "hypothesis_kind": "correctness",
+            "why": "union width",
+        },
+        "reproduction": {
+            "status": "rejected",
+            "detail": "a legal fit_transform with an all-NaN column completed without error",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/sklearn_transformations.py", 432),
+    ]
+    assert "indices imply" in resumed[0].why
+    assert ("fedot/sklearn_transformations.py", 432) not in replay.closed_correctness_sites(findings)
+
+
 def test_operation_info_resume_names_imputation_implementation(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({

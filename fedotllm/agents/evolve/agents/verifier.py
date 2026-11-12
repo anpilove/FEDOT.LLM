@@ -704,6 +704,7 @@ def verify_lead(
     syntax_probe_retried = False
     import_probe_retried = False
     binary_reject_retried = False
+    all_nan_reject_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1045,6 +1046,31 @@ def verify_lead(
                     "a probe imports fedot, fits once, transforms a two-value column, "
                     "transforms that same object when the column has more than two "
                     "unique values, and shows the second result was not snapped."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
+                and not all_nan_reject_retried
+                and "keep_empty_features" in claim_text
+                and "_categorical_numerical_union" in claim_text
+                and not any("indices imply" in item for item in tool_history)
+            ):
+                # The 07:29 Moscow reject treated a numerical-only call that
+                # returned without error as disproof. The union raises when a
+                # categorical column is present.
+                all_nan_reject_retried = True
+                step_budget += 1
+                output = (
+                    "SimpleImputer drops an all-NaN column. A numerical-only "
+                    "transform can return a narrower array without raising, and "
+                    "that does not disprove the union. Construct "
+                    "ImputationImplementation(), fit and transform one table with "
+                    "a numeric all-NaN column and a categorical column, and assert "
+                    "the ValueError whose message contains indices imply."
                 )
                 last_detail = output
                 tool_history.append(

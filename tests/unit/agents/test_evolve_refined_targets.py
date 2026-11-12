@@ -405,6 +405,39 @@ def test_operation_info_crash_names_imputation_implementation(source, monkeypatc
     assert "ImputationImplementation()" in prompts[1]
 
 
+def test_all_nan_union_reject_gets_one_mixed_table_correction(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="reject",
+                    why="a legal fit_transform with an all-NaN column completed without error",
+                )
+            return schema(action="reject", why="stop after the mixed table")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="keep_empty_features drops a column before _categorical_numerical_union",
+            mechanism="SimpleImputer keep_empty_features=False changes the width at _categorical_numerical_union",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "categorical column" in prompts[1]
+
+
 def test_correctness_probe_constructor_error_gets_one_correction(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     prompts: list[str] = []

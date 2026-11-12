@@ -512,6 +512,23 @@ def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
     return "more than two unique values" in detail and "never added" in detail
 
 
+def _all_nan_union_unproved(row: dict[str, Any]) -> bool:
+    """A reject that treats a silent narrower array as disproof of the union.
+
+    sklearn 1.3 SimpleImputer drops an all-NaN column. A numerical-only
+    transform returns that narrower array without raising. The union with a
+    categorical column raises ``ValueError: Shape of passed values is (4, 1),
+    indices imply (4, 2)``. The 07:29 Europe/Moscow reject stopped on the
+    numerical-only call.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    detail = str(reproduction.get("detail") or "")
+    return "all-NaN column completed without error" in detail
+
+
 def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
     lead = row["lead"]
     evidence = lead.get("evidence") or ()
@@ -533,6 +550,15 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "operation_info_by_id. Construct ImputationImplementation() directly. "
             "Fit once, transform a two-value numeric column, then transform that "
             "same instance when the column has more than two unique values."
+        ).strip()
+    if _all_nan_union_unproved(row) and "indices imply" not in why:
+        why = (
+            f"{why} SimpleImputer drops an all-NaN column. A numerical-only "
+            "transform can return a narrower array without raising, and that "
+            "does not disprove the union. Construct ImputationImplementation(), "
+            "fit and transform one table with a numeric all-NaN column and a "
+            "categorical column, and assert the ValueError whose message contains "
+            "indices imply."
         ).strip()
     if _stale_binary_key_unproved(row) and "does not delete a key" not in why:
         why = (
@@ -662,7 +688,7 @@ def _correctness_resume_plan(
             proven.append((_correctness_site(key, proven_row), proven_row))
             continue
         reproduction = row.get("reproduction") or {}
-        if _stale_binary_key_unproved(row):
+        if _stale_binary_key_unproved(row) or _all_nan_union_unproved(row):
             open_probes.append((_correctness_site(key, row), None))
             continue
         if reproduction.get("status") == "rejected":
@@ -1032,7 +1058,7 @@ def closed_correctness_sites(
         )
         if healthy_without_target:
             continue
-        if _stale_binary_key_unproved(row):
+        if _stale_binary_key_unproved(row) or _all_nan_union_unproved(row):
             continue
         if outcome in {
             "correctness_keep",
