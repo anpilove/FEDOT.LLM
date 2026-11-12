@@ -221,6 +221,21 @@ def _render_candidate_patch(*args, **kwargs) -> str:
     )
 
 
+def scout_action_limit_for(max_actions: int) -> int:
+    """Cover a second catalog file when the action budget can hold it.
+
+    Half of the budget stays available for later repair. The 07:17 Moscow
+    walk used the catalog plan plus five turns on the first file and stopped
+    at action 8 while the second file was still open. Eleven actions are the
+    plan plus two five-step file decisions.
+    """
+
+    limit = max(1, max_actions // 2)
+    if max_actions >= 11:
+        limit = max(limit, 11)
+    return limit
+
+
 def run_once(
     *,
     checkout: Path | None = None,
@@ -494,9 +509,7 @@ def run_once(
     signal_confirmations_used = 0
     pool_n = max(cap * 8, 40)
     trace: dict = {}
-    # Reserve half the campaign budget for repairs, but let a larger explicit
-    # budget expand source exploration instead of silently stopping at 20.
-    scout_action_limit = max(1, max_actions // 2)
+    scout_action_limit = scout_action_limit_for(max_actions)
     logger.info("evolve run stock+pick cap=%s tasks=%s", cap, len(exam_ids))
     scout_checkout = create_experiment_checkout(
         source, workspace, run_id=run_id, candidate_id="scout"
