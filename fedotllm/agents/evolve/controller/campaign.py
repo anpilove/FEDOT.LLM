@@ -82,6 +82,7 @@ from fedotllm.agents.evolve.storage.replay import (
     proven_correctness_replay,
     unfinished_correctness_leads,
     narrow_datetime_resume,
+    whole_scale_resume,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.storage.scoreboard import append_attempt
@@ -109,6 +110,7 @@ from fedotllm.agents.evolve.controller.probes import (
     compare_with_prior_probe,
     infrastructure_probe_decision,
     narrow_datetime_revision,
+    whole_conversion_scale_revision,
 )
 from fedotllm.agents.evolve.controller.finalization import (
     record_final,
@@ -651,14 +653,20 @@ def run_once(
                     "violations": len(contract_leads),
                 },
             )
-        narrow_site: MatchSite | None = None
-        narrow_note = ""
+        forced_site: MatchSite | None = None
+        forced_note = ""
         if resume_lead is None:
-            resumed_narrow = narrow_datetime_resume(
+            resumed_scale = whole_scale_resume(
                 findings_path, source_hash=source_hash
             )
-            if resumed_narrow is not None:
-                narrow_site, narrow_note = resumed_narrow
+            if resumed_scale is not None:
+                forced_site, forced_note = resumed_scale
+            else:
+                resumed_narrow = narrow_datetime_resume(
+                    findings_path, source_hash=source_hash
+                )
+                if resumed_narrow is not None:
+                    forced_site, forced_note = resumed_narrow
         if resume_lead is not None:
             sites = [resume_lead]
             leads = [resume_lead]
@@ -668,14 +676,14 @@ def run_once(
             pending_unverified = unfinished_correctness_leads(
                 findings_path, limit=cap
             )
-            if narrow_site is not None:
+            if forced_site is not None:
                 pending_unverified = [
-                    narrow_site,
+                    forced_site,
                     *[
                         item
                         for item in pending_unverified
                         if (item.file_path, item.line)
-                        != (narrow_site.file_path, narrow_site.line)
+                        != (forced_site.file_path, forced_site.line)
                     ],
                 ]
             trace["resumed_unverified_leads"] = [
@@ -1342,9 +1350,9 @@ def run_once(
                 return finish(last)
             continue
         site_note = (
-            narrow_note
-            if narrow_site is not None
-            and (lead.file_path, lead.line) == (narrow_site.file_path, narrow_site.line)
+            forced_note
+            if forced_site is not None
+            and (lead.file_path, lead.line) == (forced_site.file_path, forced_site.line)
             else ""
         )
         initial_feedback = resume_feedback if i == 1 and resume_feedback.strip() else site_note
@@ -1881,6 +1889,41 @@ def run_once(
                         if advance_revision(last.reason):
                             continue
                         break
+
+                scale_note = whole_conversion_scale_revision(
+                    behavior_probe,
+                    "\n".join(edit.new_code for edit in candidate.edits),
+                )
+                if scale_note:
+                    # Dividing every converted column failed three API safety
+                    # tests at 06:07 Moscow. Say that before the pytest suite.
+                    grant_safety_extension(
+                        "whole_scale", candidate, "whole conversion scaled"
+                    )
+                    feedback = push_feedback(scale_note)
+                    last = Decision(
+                        False,
+                        "whole_conversion_scaled",
+                        None,
+                        stage="dev",
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if advance_revision("whole_conversion_scaled"):
+                        continue
+                    break
 
                 first_tests = normalize_test_result(measure_fedot_tests(experiment))
                 after_tests, blocked, test_attempts = confirm_candidate_tests(

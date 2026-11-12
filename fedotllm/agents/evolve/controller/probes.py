@@ -217,6 +217,47 @@ def narrow_datetime_revision(behavior_probe: dict | None, patch_text: str) -> st
     )
 
 
+_WHOLE_CONVERSION_SCALE = re.compile(
+    r"np_datetime_to_numeric\([^)]*\)\s*/\s*\d"
+)
+
+
+def divides_whole_conversion(patch_text: str) -> bool:
+    """True when the patch divides the helper's entire return value."""
+
+    return _WHOLE_CONVERSION_SCALE.search(patch_text or "") is not None
+
+
+def whole_conversion_scale_revision(
+    behavior_probe: dict | None, patch_text: str
+) -> str:
+    """Feedback for a scale applied to numeric columns and the target too.
+
+    The 06:07 Moscow revision wrote
+    ``np_datetime_to_numeric(...) / 86400000`` for features and target. The
+    probe never imported fedot, so both sides printed the same sklearn AUC,
+    and three API safety tests failed.
+    """
+
+    if not divides_whole_conversion(patch_text):
+        return ""
+    code = str((behavior_probe or {}).get("code") or "")
+    calls_fedot = "import fedot" in code or "from fedot" in code
+    detached = ""
+    if not calls_fedot:
+        detached = (
+            " The probe never imported fedot, so its observation does not "
+            "measure the patch."
+        )
+    return (
+        "Dividing the whole return of np_datetime_to_numeric scales numeric "
+        "columns and the target. Leave those values unchanged. Edit the helper "
+        "so only datetime columns become day counts, and probe that helper on "
+        "a two-column table of datetime64 values plus a float."
+        + detached
+    )
+
+
 def _behavior_probe_blocks_candidate(result: dict) -> bool:
     """Cheap technical filter only. Toy no_change is not a quality veto.
 

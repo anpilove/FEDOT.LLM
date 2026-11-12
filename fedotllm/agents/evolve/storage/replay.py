@@ -636,6 +636,87 @@ def _correctness_resume_plan(
     return [*proven, *open_probes]
 
 
+def whole_scale_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a site whose patch divided every converted column.
+
+    The dividing edit can sit on an earlier finding. The latest row is often
+    ``no_patch`` with empty edits. Resume once, until some finding already
+    records the column-wise instruction.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import (
+        divides_whole_conversion,
+        whole_conversion_scale_revision,
+    )
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any("only datetime columns" in str(row.get("feedback") or "") for row in rows):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason != "no_patch" and not reason.startswith("fedot_tests_regressed"):
+            continue
+        dividing = None
+        for row in reversed(rows):
+            edits = row.get("edits") or []
+            patch_text = "\n".join(
+                str(item.get("new_code") or "")
+                for item in edits
+                if isinstance(item, dict)
+            )
+            if divides_whole_conversion(patch_text):
+                dividing = row
+                break
+        if dividing is None:
+            continue
+        note = whole_conversion_scale_revision(
+            dividing.get("behavior_probe") or {},
+            "\n".join(
+                str(item.get("new_code") or "")
+                for item in (dividing.get("edits") or [])
+                if isinstance(item, dict)
+            ),
+        )
+        if not note:
+            continue
+        lead = latest["lead"] if isinstance(latest.get("lead"), dict) else dividing["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
 def narrow_datetime_resume(
     findings_path: Path | None,
     *,

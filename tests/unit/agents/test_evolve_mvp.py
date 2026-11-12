@@ -3999,6 +3999,44 @@ def test_fixer_corrects_ambiguous_search_after_apply_feedback(tmp_path: Path):
     assert "SEARCH occurs 2 times" in failures[0].read_text(encoding="utf-8")
 
 
+def test_fixer_asks_again_when_the_patch_response_has_no_edits(tmp_path: Path):
+    from fedotllm.agents.evolve.agents.fixer import fix_lead
+    from fedotllm.agents.evolve.agents.propose import PatchHunk, PatchProposal
+
+    source = _source(tmp_path)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, _schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return PatchProposal(status="patch", file_path="")
+            return PatchProposal(
+                status="patch",
+                file_path="fedot/a.py",
+                edits=[
+                    PatchHunk(
+                        file_path="fedot/a.py",
+                        old_code="return 1",
+                        new_code="return 3",
+                    )
+                ],
+            )
+
+    candidate = fix_lead(
+        source,
+        MatchSite("oracle", "fedot/a.py", 1, "quality-changing behavior"),
+        inference=Inference(),
+        workspace=tmp_path / "work",
+        max_edits=1,
+    )
+
+    assert candidate is not None
+    assert len(prompts) == 2
+    assert "no edits" in prompts[1]
+    assert "return 3" in (source / "fedot" / "a.py").read_text(encoding="utf-8")
+
+
 def test_fixer_repairs_invalid_behavior_probe_before_applying_patch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

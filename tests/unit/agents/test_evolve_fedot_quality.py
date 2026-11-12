@@ -438,6 +438,110 @@ def test_queued_single_column_datetime_lead_resumes_once(tmp_path):
     assert narrow_datetime_resume(findings, source_hash="src") is None
 
 
+def test_whole_conversion_scale_skips_pytest_and_revises(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "datetime scale", hypothesis_kind="quality")
+    probe = "from sklearn.linear_model import LogisticRegression\nprint('EVOLVE_OBSERVATION=1')\n"
+    patch = "data.features = np_datetime_to_numeric(data.features) / 86400000.0\n"
+    feedback_seen: list[str] = []
+    pytest_calls = {"n": 0}
+
+    def fake_fix(*_args, **kwargs):
+        feedback_seen.append(kwargs.get("feedback") or "")
+        if len(feedback_seen) == 1:
+            return PatchCandidate(
+                "scaled-all",
+                edits=[PatchEdit("fedot/a.py", "return 1", patch)],
+                file_path="fedot/a.py",
+                behavior_probe=probe,
+            )
+        return None
+
+    def count_tests(*_args, **_kwargs):
+        pytest_calls["n"] += 1
+        return TestResult("passed", 0)
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fake_fix)
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {"status": "no_change", "code": probe},
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: {"catboost": ScoreResult("catboost", "ok", 0.8)},
+    )
+    monkeypatch.setattr(loop, "measure_fedot_tests", count_tests)
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    decision = loop.run_once(
+        checkout=source,
+        workspace=tmp_path / "work",
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+
+    assert len(feedback_seen) == 2
+    assert "only datetime columns" in feedback_seen[1]
+    assert "never imported fedot" in feedback_seen[1]
+    assert pytest_calls["n"] == 1
+    assert decision.reason != "queued_for_fedot_quality"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "work" / "journal.jsonl").read_text().splitlines()
+    ]
+    extension = [row for row in rows if row.get("event") == "targeted_revision_extension"]
+    assert [row.get("gate") for row in extension] == ["whole_scale"]
+
+
+def test_whole_scale_resume_uses_the_earlier_dividing_edit(tmp_path):
+    from fedotllm.agents.evolve.storage.replay import whole_scale_resume
+
+    divided = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "lead": {"file_path": "fedot/preprocessing/preprocessing.py", "line": 197, "why": "days"},
+        "dev": {"reason": "fedot_tests_regressed test_api"},
+        "edits": [{"new_code": "data.features = np_datetime_to_numeric(data.features) / 86400000.0"}],
+        "behavior_probe": {"status": "no_change", "code": "import sklearn\n"},
+    }
+    empty = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "lead": {"file_path": "fedot/preprocessing/preprocessing.py", "line": 197, "why": "days"},
+        "dev": {"reason": "no_patch"},
+        "edits": [],
+    }
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps(divided) + "\n" + json.dumps(empty) + "\n")
+    resumed = whole_scale_resume(findings, source_hash="src")
+    assert resumed is not None
+    site, note = resumed
+    assert (site.file_path, site.line) == ("fedot/preprocessing/preprocessing.py", 197)
+    assert "only datetime columns" in note
+    assert "never imported fedot" in note
+    divided["feedback"] = note
+    findings.write_text(json.dumps(divided) + "\n" + json.dumps(empty) + "\n")
+    assert whole_scale_resume(findings, source_hash="src") is None
+
+
 def test_enqueue_writes_campaign_root_not_run_subdir(tmp_path):
     from fedotllm.agents.evolve.controller.quality_queue import enqueue_quality_job
     from fedotllm.agents.evolve.types import PatchCandidate
