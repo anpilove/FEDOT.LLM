@@ -625,6 +625,65 @@ def test_empty_categorical_index_setup_stays_open(tmp_path):
     )
 
 
+def test_choice_coerced_mixed_column_is_not_a_disproof():
+    code = (
+        "features[:, 1] = rng.choice(['a', 'b', 1], size=n)\n"
+        "assert caught is None, f'valid supported call crashed: {caught}'\n"
+        "assert isinstance(data.categorical_idx, list), "
+        "'categorical_idx must remain a list after fit'\n"
+    )
+    stderr = (
+        "AssertionError: categorical_idx must remain a list after fit\n"
+    )
+    reason = verifier.choice_coerced_mixed_column(code, stderr)
+    assert "stores the int as the string '1'" in reason
+    assert "raises TypeError" in reason
+    strings_only = code.replace("['a', 'b', 1]", "['a', 'b', '1']")
+    assert verifier.choice_coerced_mixed_column(strings_only, stderr) == ""
+    assert verifier.choice_coerced_mixed_column(code, "TypeError: '<'") == ""
+
+
+def test_choice_coerced_unique_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/categorical.py",
+            "line": 31,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "Executed line 31 uses np.unique on object arrays; "
+                "mixed-type categorical columns raise TypeError"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "code": (
+                "features[:, 1] = rng.choice(['a', 'b', 1], size=n)\n"
+                "assert caught is None\n"
+                "assert isinstance(data.categorical_idx, list)\n"
+            ),
+            "detail": (
+                "fit() completed without a TypeError, contradicting the "
+                "claim that np.unique raises"
+            ),
+            "stock_stderr": (
+                "AssertionError: categorical_idx must remain a list after fit"
+            ),
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/categorical.py", 31),
+    ]
+    assert "stores the int as the string '1'" in resumed[0].why
+    assert "raises TypeError" in resumed[0].why
+    assert ("fedot/preprocessing/categorical.py", 31) not in replay.closed_correctness_sites(
+        findings
+    )
+
+
 def test_upcast_string_set_reject_stays_open(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({

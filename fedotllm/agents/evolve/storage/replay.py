@@ -589,6 +589,47 @@ def _numerical_min_uniques_is_docs_only(row: dict[str, Any]) -> bool:
     return re.search(r"silently|never reads|hardcod", text, re.IGNORECASE) is not None
 
 
+def _choice_coerced_mixed_unique(row: dict[str, Any]) -> bool:
+    """A reject whose mixed column was built by ``np.random.choice``.
+
+    ``choice(['a', 'b', 1])`` stores the int as the string ``'1'``. The
+    12:46 Europe/Moscow probe then saw ``fit()`` complete and failed the
+    assertion that ``categorical_idx`` stays a list. ``fit`` assigns
+    ``np.array``. A cell-wise object column of ``str`` and ``int`` makes
+    ``np.unique`` raise ``TypeError``.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "np.unique" not in why:
+        return False
+    code = str(reproduction.get("code") or "")
+    if "caught is None" not in code and "remain a list" not in code:
+        return False
+    mixed = False
+    for match in re.finditer(r"\.choice\(\s*(\[[^\]]*\])", code):
+        group = match.group(1)
+        if not re.search(r"""['"][^'"]+['"]""", group):
+            continue
+        bare = re.sub(r"""['"][^'"]*['"]""", "", group)
+        if re.search(r"(?<![\w.])\d+", bare):
+            mixed = True
+            break
+    if not mixed:
+        return False
+    observed = (
+        f"{reproduction.get('detail') or ''}\n"
+        f"{reproduction.get('stock_stderr') or ''}\n"
+        f"{reproduction.get('observed') or ''}"
+    )
+    return "without a TypeError" in observed or (
+        "categorical_idx" in observed and "list" in observed
+    )
+
+
 def _string_domain_upcast_unproved(row: dict[str, Any]) -> bool:
     """An equal string-set reject that fit the ints through a float upcast.
 
@@ -744,6 +785,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "target, task, data_type=DataTypesEnum.table, categorical_idx="
             "np.array([0, 1])) for two binary string columns. Do not pass "
             "features_types. Assert the fitted categorical_idx has an integer dtype."
+        ).strip()
+    if _choice_coerced_mixed_unique(row) and "stores the int as the string" not in why:
+        why = (
+            f"{why} np.random.choice on a list that mixes strings and an int "
+            "stores the int as the string '1'. fit() then never sees a mixed "
+            "column, so a completed fit does not disprove np.unique. Build an "
+            "object array and assign each cell: strings in one column and both "
+            "str and Python int in the other. Assert that "
+            "BinaryCategoricalPreprocessor.fit raises TypeError. Do not assert "
+            "that categorical_idx stays a list: fit assigns np.array."
         ).strip()
     if _string_domain_upcast_unproved(row) and "object array" not in why:
         why = (
@@ -1123,8 +1174,9 @@ def _correctness_resume_plan(
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
             or _discarded_callback_unproved(row)
-            or _string_domain_unproved(row)
+            or             _string_domain_unproved(row)
             or _string_domain_upcast_unproved(row)
+            or _choice_coerced_mixed_unique(row)
         ):
             open_probes.append((_correctness_site(key, row), None))
             continue
@@ -1522,8 +1574,9 @@ def closed_correctness_sites(
             or _all_nan_union_unproved(row)
             or _union_symbol_unresolved(row)
             or _discarded_callback_unproved(row)
-            or _string_domain_unproved(row)
+            or             _string_domain_unproved(row)
             or _string_domain_upcast_unproved(row)
+            or _choice_coerced_mixed_unique(row)
         ):
             continue
         if _site_reaching_probe(grouped.get(key, [row])) is not None:

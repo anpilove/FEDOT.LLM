@@ -328,6 +328,46 @@ def _binary_midpoint_assertion(source: str, stderr: str) -> bool:
     return "0.75" in source
 
 
+def choice_coerced_mixed_column(code: str, stderr: str) -> str:
+    """A ``choice`` of strings and an int is not a mixed object column.
+
+    ``np.random.choice(['a', 'b', 1])`` stores every cell as ``str``,
+    including ``'1'``. The 12:46 Europe/Moscow probe then saw ``fit()``
+    complete and failed ``categorical_idx must remain a list``. ``fit``
+    assigns ``np.array``. A cell-wise object column of ``str`` and ``int``
+    makes ``np.unique`` raise ``TypeError``.
+    """
+
+    error = stderr or ""
+    if "AssertionError" not in error:
+        return ""
+    if "categorical_idx" not in error or "list" not in error:
+        return ""
+    text = code or ""
+    if "caught is None" not in text and "remain a list" not in text:
+        return ""
+    mixed = False
+    for match in re.finditer(r"\.choice\(\s*(\[[^\]]*\])", text):
+        group = match.group(1)
+        if not re.search(r"""['"][^'"]+['"]""", group):
+            continue
+        bare = re.sub(r"""['"][^'"]*['"]""", "", group)
+        if re.search(r"(?<![\w.])\d+", bare):
+            mixed = True
+            break
+    if not mixed:
+        return ""
+    return (
+        "np.random.choice on a list that mixes strings and an int stores "
+        "the int as the string '1'. fit() then never sees a mixed column, "
+        "so a completed fit does not disprove np.unique. Build an object "
+        "array and assign each cell: strings in one column and both str "
+        "and Python int in the other. Assert that "
+        "BinaryCategoricalPreprocessor.fit raises TypeError. Do not assert "
+        "that categorical_idx stays a list: fit assigns np.array."
+    )
+
+
 def equal_category_mean_is_required(source: str, line: int, stderr: str) -> str:
     """Return why a balanced binary gap must stay at the mean 0.5.
 
@@ -1571,6 +1611,19 @@ def verify_lead(
                                     reason=coerced,
                                     evidence=[coerced],
                                 )
+                            stringified = choice_coerced_mixed_column(
+                                parsed.reproduction_code or "",
+                                stock.stderr or "",
+                            )
+                            if (
+                                stringified
+                                and support_audit.verdict == "unsupported"
+                            ):
+                                support_audit = ContractSupportAudit(
+                                    verdict="inconclusive",
+                                    reason=stringified,
+                                    evidence=[stringified],
+                                )
                         if support_audit.verdict != "supported":
                             if (
                                 support_audit.verdict == "inconclusive"
@@ -1581,15 +1634,18 @@ def verify_lead(
                                 # audited as inconclusive and the lead ended.
                                 contract_audit_retried = True
                                 step_budget += 1
-                                output = (
-                                    "Contract support was inconclusive: "
-                                    f"{support_audit.reason}. "
-                                    "A crash before the behavior assertion does not "
-                                    "establish the claim. Assert the failed behavior "
-                                    "itself. If an earlier run already showed the "
-                                    "encoded block collapsed, reuse that input and "
-                                    "assert that collapse."
-                                )
+                                if "stores the int as the string" in support_audit.reason:
+                                    output = support_audit.reason
+                                else:
+                                    output = (
+                                        "Contract support was inconclusive: "
+                                        f"{support_audit.reason}. "
+                                        "A crash before the behavior assertion does not "
+                                        "establish the claim. Assert the failed behavior "
+                                        "itself. If an earlier run already showed the "
+                                        "encoded block collapsed, reuse that input and "
+                                        "assert that collapse."
+                                    )
                                 last_detail = output[:4_000]
                                 tool_history.append(
                                     f"Step {step} action={action.value} output:\n"
