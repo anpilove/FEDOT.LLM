@@ -764,6 +764,29 @@ def _impossible_integer_nonfinite(parsed: SiteProposal) -> bool:
     return _INTEGER_HOLDS_INF.search(text) is not None
 
 
+_ADVANCED_INDEX_VIEW = re.compile(
+    r"features\s*\[\s*:?\s*,\s*[^\]]+\]\s*\.T[^\n]{0,60}\bis a view\b|"
+    r"transposed view[^\n]{0,180}caller",
+    re.IGNORECASE,
+)
+
+
+def _advanced_index_claimed_as_view(parsed: SiteProposal) -> bool:
+    """NumPy advanced indexing returns a copy, so the slice cannot write back.
+
+    The 06:44 Moscow catalog claimed ``features[:, categorical_idx].T`` is a
+    view that writes ``FEDOT_STR_NAN`` into the caller's array. The verifier
+    then spent the campaign on that false premise.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _ADVANCED_INDEX_VIEW.search(text) is not None
+
+
 def _first_pick_rejection(
     parsed: SiteProposal,
     picked: MatchSite,
@@ -785,6 +808,12 @@ def _first_pick_rejection(
             "impossible_integer_nonfinite",
             "an integer dtype cannot store inf, so that input class is unreachable; "
             "pick a different executed line or skip",
+        )
+    if _advanced_index_claimed_as_view(parsed):
+        return (
+            "advanced_index_is_copy",
+            "NumPy advanced indexing already returns a copy, so that slice does not "
+            "write back into the caller; pick a different executed line or skip",
         )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
