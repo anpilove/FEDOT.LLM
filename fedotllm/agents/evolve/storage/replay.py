@@ -594,6 +594,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "same instance when the column has more than two unique values."
         ).strip()
     reproduction = row.get("reproduction") or {}
+    if (
+        "'dict' object has no attribute 'to_dict'" in observed
+        and "lgbm_early_stopping" in (why + str(lead.get("mechanism") or ""))
+        and "Pass OperationParameters" not in why
+    ):
+        why = (
+            f"{why} Pass OperationParameters, not a dict. Construct "
+            "FedotLightGBMClassificationImplementation(params=OperationParameters("
+            "early_stopping_rounds=30, use_eval_set=True))."
+        ).strip()
     probe = reproduction.get("patched_probe") or {}
     if (
         reproduction.get("patched") == "still_failing"

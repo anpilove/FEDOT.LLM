@@ -1450,6 +1450,15 @@ def verify_lead(
                         # Tell the model why the crash was not accepted as
                         # evidence (e.g. no public FEDOT entry point reached).
                         detail = f"{detail}: {exception_detail}"
+                    if "'dict' object has no attribute 'to_dict'" in (stock.stderr or "") and (
+                        "lgbm_early_stopping" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " Pass OperationParameters, not a dict. Construct "
+                            "FedotLightGBMClassificationImplementation(params="
+                            "OperationParameters(early_stopping_rounds=30, "
+                            "use_eval_set=True))."
+                        )
                     if "add_operation" in (stock.stderr or "") and (
                         "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
                     ):

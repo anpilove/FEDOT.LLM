@@ -222,6 +222,27 @@ def test_annotated_int_or_recognizes_a_zero_seed():
     assert annotated_int_or_coerces_zero(untouched, 2) == ""
 
 
+def test_dict_params_resume_names_operation_parameters(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/boostings_implementations.py",
+            "line": 220,
+            "hypothesis_kind": "correctness",
+            "why": "lgbm_early_stopping result is discarded",
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": "AttributeError: 'dict' object has no attribute 'to_dict'",
+            "detail": "probe crashed before its contract assertion",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert "Pass OperationParameters" in resumed[0].why
+
+
 def test_discarded_early_stopping_callback_is_a_contract():
     from fedotllm.agents.evolve.agents.verifier import discarded_callback_return
 
