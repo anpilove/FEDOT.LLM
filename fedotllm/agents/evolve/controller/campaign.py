@@ -221,6 +221,22 @@ def _render_candidate_patch(*args, **kwargs) -> str:
     )
 
 
+def indicator_width_crash(candidate: PatchCandidate, behavior_probe: dict) -> bool:
+    """An ``add_indicator`` edit that makes ``reduce_mem_usage`` index past ids.
+
+    The 08:32 Europe/Moscow patch widened the matrix. Stock stayed the original
+    width. The patched pipeline died in ``reduce_mem_usage`` with
+    ``IndexError: list index out of range``. A second revision kept the
+    indicator and failed the column-count tests.
+    """
+
+    edits = "\n".join(edit.new_code for edit in candidate.edits)
+    if "add_indicator" not in edits:
+        return False
+    stderr = str((behavior_probe.get("patched") or {}).get("stderr_tail") or "")
+    return "IndexError" in stderr and "reduce_mem_usage" in stderr
+
+
 def scout_action_limit_for(max_actions: int) -> int:
     """Cover a second catalog file when the action budget can hold it.
 
@@ -1715,6 +1731,13 @@ def run_once(
                                 "probe code, exit status, traceback, stdout, stderr, and "
                                 "observations from both runs follow."
                             )
+                        elif indicator_width_crash(candidate, behavior_probe):
+                            diagnosis = (
+                                "add_indicator appends columns that are not in "
+                                "col_type_ids['features']. reduce_mem_usage then raises "
+                                "IndexError. The preprocessing tests require the original "
+                                "width. Do not add indicator columns."
+                            )
                         else:
                             diagnosis = (
                                 "Stock completed the diagnostic but the patched checkout "
@@ -1746,10 +1769,15 @@ def run_once(
                             reproduction=reproduction,
                             behavior_probe=behavior_probe,
                         )
-                        if behavior_status == "patched_error":
+                        if (
+                            behavior_status == "patched_error"
+                            and not indicator_width_crash(candidate, behavior_probe)
+                        ):
                             # Stock ran the diagnostic. The patched traceback is
                             # a source regression, so one repair revision stays
-                            # available after the nominal revision limit.
+                            # available after the nominal revision limit. An
+                            # add_indicator width crash is not that repair: the
+                            # extra columns are outside the id contract.
                             grant_safety_extension("behavior_probe", candidate, reason)
                         if advance_revision(reason):
                             continue

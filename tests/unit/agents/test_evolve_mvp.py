@@ -7030,6 +7030,50 @@ def test_empty_categorical_features_claim_is_rejected_and_the_walk_continues(tmp
     )
 
 
+def test_add_indicator_drop_in_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "add_indicator is a drop-in sklearn alternative for the "
+                        "missingness pattern"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "original width" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "indicator_columns_break_ids"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
 def test_closed_catalog_line_does_not_run_and_reaches_the_next_file(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
 

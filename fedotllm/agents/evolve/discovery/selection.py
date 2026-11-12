@@ -793,6 +793,28 @@ _CONSTRUCTOR_OMITS_CATEGORICAL = re.compile(
 )
 
 
+_ADD_INDICATOR_DROP_IN = re.compile(
+    r"add_indicator.{0,180}drop-in|drop-in.{0,180}add_indicator",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _add_indicator_claimed_as_drop_in(parsed: SiteProposal) -> bool:
+    """Indicator columns are not in ``col_type_ids['features']``.
+
+    The 08:32 Europe/Moscow catalog called ``add_indicator`` a drop-in.
+    ``reduce_mem_usage`` then raised ``IndexError: list index out of range``,
+    and the repair still failed the preprocessing column-count tests.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _ADD_INDICATOR_DROP_IN.search(text) is not None
+
+
 def _constructor_omits_categorical_features(parsed: SiteProposal) -> bool:
     """``array_to_input_data`` copies the categorical block when the index is set.
 
@@ -844,6 +866,14 @@ def _first_pick_rejection(
             "array_to_input_data copies features[:, categorical_idx] into "
             "categorical_features when the index is non-empty; pick a different "
             "executed line or skip",
+        )
+    if _add_indicator_claimed_as_drop_in(parsed):
+        return (
+            "indicator_columns_break_ids",
+            "SimpleImputer add_indicator appends columns that are not in "
+            "col_type_ids['features']; reduce_mem_usage then raises IndexError, "
+            "and the preprocessing tests require the original width. Pick a "
+            "different executed line or skip",
         )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):

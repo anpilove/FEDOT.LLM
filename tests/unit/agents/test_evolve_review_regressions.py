@@ -222,6 +222,33 @@ def test_annotated_int_or_recognizes_a_zero_seed():
     assert annotated_int_or_coerces_zero(untouched, 2) == ""
 
 
+def test_indicator_width_crash_skips_another_revision():
+    from fedotllm.agents.evolve.controller.campaign import indicator_width_crash
+
+    candidate = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit(
+            "fedot/a.py",
+            "SimpleImputer(**self.params_num)",
+            "SimpleImputer(**{**self.params_num, 'add_indicator': True})",
+        )],
+    )
+    crash = {
+        "patched": {
+            "stderr_tail": (
+                "File \"fedot/utilities/memory.py\", line 69, in reduce_mem_usage\n"
+                "IndexError: list index out of range"
+            ),
+        }
+    }
+    assert indicator_width_crash(candidate, crash)
+    other = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit("fedot/a.py", "x = 1", "x = 2")],
+    )
+    assert not indicator_width_crash(other, crash)
+
+
 def test_dict_params_resume_names_operation_parameters(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({
