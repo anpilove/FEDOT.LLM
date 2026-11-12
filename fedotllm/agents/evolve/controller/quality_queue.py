@@ -271,6 +271,27 @@ def list_queued_jobs(workspace: Path) -> list[dict]:
     return jobs
 
 
+def _queued_change_line(path: Path, payload: dict) -> str:
+    """One added source line from the sibling patch, for a coding agent."""
+
+    patch = path.with_suffix(".patch")
+    named = str(payload.get("patch") or "")
+    if named and not Path(named).is_absolute():
+        sibling = path.parent / named
+        if sibling.is_file():
+            patch = sibling
+    if not patch.is_file():
+        return ""
+    try:
+        lines = patch.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        if line.startswith("+") and not line.startswith("+++") and line[1:].strip():
+            return line[1:].strip()[:180]
+    return ""
+
+
 def summarize_quality_queue(workspace: Path) -> dict:
     """Summarize terminal and pending quality proposals for run reports."""
 
@@ -300,6 +321,9 @@ def summarize_quality_queue(workspace: Path) -> dict:
                             (payload.get("hypothesis") or {}).get("id") or ""
                         ),
                         "task_count": len(payload.get("task_ids") or ()),
+                        "file_path": str(payload.get("file_path") or ""),
+                        "hint": str(payload.get("hint") or ""),
+                        "change": _queued_change_line(path, payload),
                     }
                 )
     return {

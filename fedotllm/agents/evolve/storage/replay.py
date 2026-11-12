@@ -682,6 +682,67 @@ def proven_correctness_replay(
     return replayed
 
 
+def closed_correctness_sites(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> set[tuple[str, int]]:
+    """Sites a new catalog must not pick again on this source.
+
+    A rejected reproduction, a kept correctness patch, and a third inconclusive
+    attempt are finished. One or two inconclusive attempts stay available.
+    """
+
+    if findings_path is None or not findings_path.is_file():
+        return set()
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    inconclusive_counts: dict[tuple[str, int], int] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or lead.get("hypothesis_kind") != "correctness":
+            continue
+        if not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+        reproduction = row.get("reproduction") or {}
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+        ):
+            inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+    closed: set[tuple[str, int]] = set()
+    for key, row in latest.items():
+        outcome = str(row.get("outcome") or "")
+        reproduction = str((row.get("reproduction") or {}).get("status") or "")
+        if outcome in {
+            "correctness_keep",
+            "correctness_keep_with_metric_signal",
+            "rejected",
+        } or reproduction == "rejected":
+            closed.add(key)
+        elif (
+            outcome == "unverified_no_patch"
+            and reproduction == "inconclusive"
+            and inconclusive_counts.get(key, 0) >= 3
+        ):
+            closed.add(key)
+    return closed
+
+
 def recent_completed_sites_from_findings(
     findings_path: Path | None, **filters
 ) -> set[tuple[str, int]]:

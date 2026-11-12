@@ -372,6 +372,65 @@ def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
     }
 
 
+def test_finished_correctness_sites_stay_out_of_the_next_catalog(tmp_path):
+    from fedotllm.agents.evolve.controller.session import kept_patch_report
+
+    seed = {
+        "file_path": "fedot/core/data/data_split.py",
+        "line": 198,
+        "hypothesis_kind": "correctness",
+    }
+    imputer = {
+        "file_path": "fedot/sklearn_transformations.py",
+        "line": 390,
+        "hypothesis_kind": "correctness",
+    }
+    open_lead = {
+        "file_path": "fedot/open.py",
+        "line": 3,
+        "hypothesis_kind": "correctness",
+    }
+    rows = [
+        {"record_type": "finding", "source_hash": "src", "outcome": "correctness_keep",
+         "lead": seed, "reproduction": {"status": "verified_bug"}},
+        {"record_type": "finding", "source_hash": "src", "outcome": "unverified_no_patch",
+         "lead": imputer, "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "source_hash": "src", "outcome": "unverified_no_patch",
+         "lead": imputer, "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "source_hash": "src", "outcome": "unverified_no_patch",
+         "lead": imputer, "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "source_hash": "src", "outcome": "unverified_no_patch",
+         "lead": open_lead, "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "source_hash": "other", "outcome": "rejected",
+         "lead": {"file_path": "fedot/other.py", "line": 1, "hypothesis_kind": "correctness"},
+         "reproduction": {"status": "rejected"}},
+    ]
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    assert replay.closed_correctness_sites(findings, source_hash="src") == {
+        ("fedot/core/data/data_split.py", 198),
+        ("fedot/sklearn_transformations.py", 390),
+    }
+    workspace = tmp_path / "run"
+    patch_dir = workspace / "correctness_fixes"
+    patch_dir.mkdir(parents=True)
+    patch = patch_dir / "seed.patch"
+    patch.write_text(
+        "--- stock/fedot/core/data/data_split.py\n"
+        "+++ patched/fedot/core/data/data_split.py\n"
+        "-    random_seed = (random_seed or 42) if shuffle else None\n"
+        "+    random_seed = (42 if random_seed is None else random_seed) if shuffle else None\n",
+        encoding="utf-8",
+    )
+    report = kept_patch_report(
+        workspace,
+        {"artifacts": {"correctness_patches": ["correctness_fixes/seed.patch"]}},
+    )
+    assert report["file"] == "fedot/core/data/data_split.py"
+    assert report["patch"] == str(patch)
+    assert "is None" in report["diff"]
+
+
 def test_context_failure_is_not_a_site_cooldown_or_completed_hypothesis(tmp_path):
     lead = {"file_path": "fedot/a.py", "line": 6, "mechanism": "check value"}
     rows = [

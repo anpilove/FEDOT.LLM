@@ -310,6 +310,9 @@ def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch
             "status": "queued",
             "hypothesis_id": job["hypothesis"]["id"],
             "task_count": len(job["task_ids"]),
+            "file_path": job["file_path"],
+            "hint": job["hint"],
+            "change": "",
         }
     ]
 

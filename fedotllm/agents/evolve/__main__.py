@@ -1192,6 +1192,8 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         if isinstance(summary, dict):
             summary["run_budget"] = budget_payload
             _write_json(summary_path, summary)
+    from fedotllm.agents.evolve.controller.session import kept_patch_report
+
     _print_json(
         {
             "keep_dev": decision.dev_keep,
@@ -1202,6 +1204,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "target_delta": decision.target_delta,
             "regression_deltas": decision.regression_deltas,
             "workspace": str(run_workspace),
+            "change": kept_patch_report(run_workspace, summary),
             "run_budget": budget_payload,
             "quality_queue": (summary or {}).get("quality_queue"),
         }

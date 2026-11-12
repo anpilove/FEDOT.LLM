@@ -78,6 +78,7 @@ from fedotllm.agents.evolve.storage.replay import (
     solved_lift_tasks_from_findings,
     tried_patch_hashes_from_findings,
     tried_sites,
+    closed_correctness_sites,
     proven_correctness_replay,
     unfinished_correctness_leads,
 )
@@ -664,6 +665,9 @@ def run_once(
             resumed_sites = {
                 (item.file_path, item.line) for item in pending_unverified
             }
+            closed_sites = closed_correctness_sites(
+                findings_path, source_hash=source_hash
+            )
             remaining_picks = max(0, cap - len(pending_unverified))
             try:
                 def persist_scout_picks(selected: list[MatchSite]) -> None:
@@ -686,7 +690,12 @@ def run_once(
                         trace_leads=[*contract_leads, *crash_leads, *parameter_leads],
                         max_actions=scout_action_limit,
                         max_runs_per_file=2,
-                        excluded_sites=durable_tried | recent_site_cooldown | resumed_sites,
+                        excluded_sites=(
+                            durable_tried
+                            | recent_site_cooldown
+                            | resumed_sites
+                            | closed_sites
+                        ),
                         excluded_semantic_sites=recent_semantic_cooldown,
                         prior_hypotheses=prior_hypotheses,
                         present_full_catalog=True,
