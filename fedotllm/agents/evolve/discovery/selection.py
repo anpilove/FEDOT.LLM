@@ -986,6 +986,37 @@ def _one_hot_frame_branch_unexecuted(parsed: SiteProposal) -> bool:
     )
 
 
+def _one_hot_float32_follows_memory_downcast(parsed: SiteProposal) -> bool:
+    """Line 109 is not the public float32 quantizer.
+
+    The 10:57 Europe/Moscow catalog picked ``categorical_encoders.py:109``.
+    A direct ``OneHotEncodingImplementation`` call on float64 timestamps
+    collapsed them. A pipeline of ``one_hot_encoding`` on 20 distinct values
+    around 1.7e12 plus a binary category reaches ``transform`` with that
+    column already float32 and one unique value. ``categorical_ids`` is empty,
+    so line 109 does not run. ``reduce_memory_size`` already called
+    ``reduce_mem_usage``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"float32", text, re.IGNORECASE) is None:
+        return False
+    if re.search(r"non[-_ ]categorical", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"quantiz|timestamp|wide-range|float64|already floating|precision",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _empty_categorical_index_is_replaced(parsed: SiteProposal) -> bool:
     """Obligatory preprocessing replaces the empty binary index.
 
@@ -1133,6 +1164,18 @@ def _first_pick_rejection(
             "unseen categories become zero rows under handle_unknown='ignore' "
             "(test_one_hot_encoding_new_category_in_test). Pick a different "
             "executed line or skip",
+        )
+    if _one_hot_float32_follows_memory_downcast(parsed):
+        return (
+            "one_hot_float32_follows_memory_downcast",
+            "A one_hot_encoding pipeline on 20 distinct timestamps around "
+            "1.7e12 plus a binary category reaches "
+            "OneHotEncodingImplementation.transform with that numeric column "
+            "already float32 and unique count 1. categorical_ids is empty, so "
+            "line 109 does not run. reduce_memory_size calls reduce_mem_usage, "
+            "which stores floats that fit in float32 as float32. Skipping the "
+            "line 109 cast when the block is already floating leaves that "
+            "column in place. Pick a different executed line or skip",
         )
     if _categorical_most_frequent_guards_strings(parsed):
         return (
