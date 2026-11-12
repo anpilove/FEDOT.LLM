@@ -49,6 +49,33 @@ def resolve_verification_target(checkout: Path, lead: MatchSite, *, file_path: s
         or offered.endswith("." + leaf)
     )
     if not agrees:
+        # The 11:29 Europe/Moscow resume named _correct_binary_ids_features
+        # on the line that calls it. That call is the same target.
+        offered_leaf = offered.rsplit(".", 1)[-1]
+        definitions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == offered_leaf
+        ]
+        called = any(
+            isinstance(node, ast.Call)
+            and getattr(node, "lineno", None) == nominated
+            and (
+                (isinstance(node.func, ast.Attribute) and node.func.attr == offered_leaf)
+                or (isinstance(node.func, ast.Name) and node.func.id == offered_leaf)
+            )
+            for node in ast.walk(tree)
+        )
+        if len(definitions) == 1 and called:
+            nominated = definitions[0].lineno
+            matches = []
+            walk(tree)
+            if not matches:
+                raise ValueError("verification target line is outside any source class/function")
+            _, _, qualified = max(matches)
+            agrees = True
+    if not agrees:
         raise ValueError("verification target symbol and source line disagree")
     relative = path.relative_to(root).as_posix()
     target = {

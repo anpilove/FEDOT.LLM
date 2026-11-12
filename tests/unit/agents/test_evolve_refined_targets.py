@@ -67,6 +67,24 @@ def test_unqualified_method_name_matches_the_enclosing_line(source):
     assert target["symbol"] == "Output.save"
 
 
+def test_call_site_resolves_to_the_named_function(source):
+    (source / "fedot/a.py").write_text(
+        "class Output:\n"
+        "    def transform(self):\n"
+        "        self.save()\n"
+        "    def save(self):\n"
+        "        return [2, 1]\n",
+        encoding="utf-8",
+    )
+
+    _, target = resolve_verification_target(
+        source, lead(), line=3, symbol="Output.save",
+    )
+
+    assert target["symbol"] == "Output.save"
+    assert target["line"] == 4
+
+
 def test_module_path_matches_the_enclosing_symbol(source):
     _, target = resolve_verification_target(
         source, lead(), line=4, symbol="fedot.a.Output.save",
