@@ -864,6 +864,113 @@ def test_tied_auc_does_not_get_a_pytest_revision(tmp_path, monkeypatch):
     assert "auc=0.540" in str(attempt.get("feedback") or "")
 
 
+def test_subset_index_print_does_not_enter_the_quality_queue(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, MatchSite, PatchCandidate, PatchEdit
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "re-base subset indices")
+    probe = (
+        "sub = data.subset_features(np.array([0, 1]))\n"
+        "print('EVOLVE_OBSERVATION=cat_idx_[]')\n"
+    )
+    patch = (
+        "def _local_indices(original_idx):\n"
+        "    return np.where(np.isin(feature_ids, original_idx))[0]\n"
+    )
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(
+        loop,
+        "fix_lead",
+        lambda *_a, **_k: PatchCandidate(
+            "subset-idx",
+            edits=[PatchEdit("fedot/a.py", "return 1", patch)],
+            file_path="fedot/a.py",
+            behavior_probe=probe,
+        ),
+    )
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {
+            "status": "changed",
+            "code": probe,
+            "stock": {"observation": "cat_idx_[]"},
+            "patched": {"observation": "cat_idx_[0, 1]"},
+        },
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: {"logit": ScoreResult("logit", "ok", 0.8)},
+    )
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    workspace = tmp_path / "work"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("logit",),
+        protect_ids=("logit",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+    assert decision.reason == "subset_index_out_of_range"
+    assert not (workspace / "quality_queue").exists()
+
+
+def test_queued_subset_index_resumes_as_correctness(tmp_path):
+    from fedotllm.agents.evolve.storage.replay import subset_index_resume
+
+    row = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "lead": {
+            "file_path": "fedot/core/data/data.py",
+            "line": 643,
+            "hypothesis_kind": "quality",
+            "why": "setdiff leaves categorical_idx empty",
+        },
+        "dev": {"reason": "queued_for_fedot_quality"},
+        "edits": [{"new_code": "def _local_indices(original_idx):\n    return local\n"}],
+        "behavior_probe": {
+            "status": "changed",
+            "code": "sub = data.subset_features(np.array([0, 1]))\n",
+            "stock": {"observation": "cat_idx_[]"},
+            "patched": {"observation": "cat_idx_[0, 1]"},
+        },
+    }
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps(row) + "\n")
+    resumed = subset_index_resume(findings, source_hash="src")
+    assert resumed is not None
+    site, note = resumed
+    assert (site.file_path, site.line) == ("fedot/core/data/data.py", 643)
+    assert site.hypothesis_kind == "correctness"
+    assert "index 2 is out of bounds" in note
+    row["lead"] = {**row["lead"], "hypothesis_kind": "correctness", "why": note}
+    findings.write_text(json.dumps(row) + "\n")
+    assert subset_index_resume(findings, source_hash="src") is None
+
+
 def test_queued_day_count_flag_resumes_once(tmp_path):
     from fedotllm.agents.evolve.storage.replay import scored_day_count_resume
 

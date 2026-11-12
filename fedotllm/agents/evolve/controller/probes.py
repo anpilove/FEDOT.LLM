@@ -258,6 +258,38 @@ def whole_conversion_scale_revision(
     )
 
 
+def subset_index_print(behavior_probe: dict | None, patch_text: str) -> str:
+    """A ``cat_idx_`` print is not a measurement of ``subset_features``.
+
+    The 13:00 Europe/Moscow probe subset the categorical columns and printed
+    ``cat_idx_[]`` on stock and ``cat_idx_[0, 1]`` on the patch. The same
+    subset keeps ``numerical_idx`` at ``[2, 3, ...]`` on a width-2 table.
+    ``convert_to_dataframe`` then raises ``IndexError: index 2 is out of
+    bounds for axis 0 with size 2``. The imputer reads ``.features`` of the
+    split, so this print does not belong in the 40-task queue.
+    """
+
+    probe = behavior_probe or {}
+    if str(probe.get("status") or "") != "changed":
+        return ""
+    code = str(probe.get("code") or "")
+    patch = patch_text or ""
+    if "subset_features" not in code or "_local_indices" not in patch:
+        return ""
+    stock = str((probe.get("stock") or {}).get("observation") or "")
+    patched = str((probe.get("patched") or {}).get("observation") or "")
+    if "cat_idx_" not in f"{stock} {patched}":
+        return ""
+    return (
+        "subset_features of the categorical columns leaves numerical_idx "
+        "outside the subset width. convert_to_dataframe raises IndexError: "
+        "index 2 is out of bounds for axis 0 with size 2. Assert that "
+        "IndexError on InputData with categorical_idx [0, 1], numerical_idx "
+        "[2, 3, 4], and subset_features(np.array([0, 1])). A cat_idx_ print "
+        "does not enter the 40-task queue."
+    )
+
+
 def mechanism_only_day_count(behavior_probe: dict | None, patch_text: str) -> str:
     """Feedback when a day-count edit was not scored on a model.
 

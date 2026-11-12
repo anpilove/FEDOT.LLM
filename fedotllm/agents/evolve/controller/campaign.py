@@ -84,6 +84,7 @@ from fedotllm.agents.evolve.storage.replay import (
     unfinished_correctness_leads,
     narrow_datetime_resume,
     scored_day_count_resume,
+    subset_index_resume,
     whole_scale_resume,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
@@ -116,6 +117,7 @@ from fedotllm.agents.evolve.controller.probes import (
     mechanism_only_day_count,
     tied_named_metric,
     narrow_datetime_revision,
+    subset_index_print,
     whole_conversion_scale_revision,
 )
 from fedotllm.agents.evolve.controller.finalization import (
@@ -725,20 +727,31 @@ def run_once(
         forced_site: MatchSite | None = None
         forced_note = ""
         if resume_lead is None:
-            resumed_score = scored_day_count_resume(
+            resumed_subset = subset_index_resume(
                 findings_path, source_hash=source_hash
+            )
+            resumed_score = (
+                None
+                if resumed_subset is not None
+                else scored_day_count_resume(
+                    findings_path, source_hash=source_hash
+                )
             )
             resumed_scale = (
                 None
-                if resumed_score is not None
+                if resumed_subset is not None or resumed_score is not None
                 else whole_scale_resume(findings_path, source_hash=source_hash)
             )
             resumed_narrow = (
                 None
-                if resumed_score is not None or resumed_scale is not None
+                if (
+                    resumed_subset is not None
+                    or resumed_score is not None
+                    or resumed_scale is not None
+                )
                 else narrow_datetime_resume(findings_path, source_hash=source_hash)
             )
-            resumed = resumed_score or resumed_scale or resumed_narrow
+            resumed = resumed_subset or resumed_score or resumed_scale or resumed_narrow
             if resumed is not None:
                 forced_site, forced_note = resumed
         if resume_lead is not None:
@@ -2326,6 +2339,31 @@ def run_once(
                                 if advance_revision("sibling_lift_regression"):
                                     continue
                                 break
+                    index_note = subset_index_print(behavior_probe, patch_body)
+                    if index_note:
+                        last = Decision(
+                            False,
+                            "subset_index_out_of_range",
+                            None,
+                            stage="dev",
+                            experiment_id=experiment_id,
+                        )
+                        feedback = push_feedback(index_note)
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            last,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            tests=after_tests,
+                            patch_hash=patch_hash,
+                            feedback=feedback,
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        break
                     probe_status = str((behavior_probe or {}).get("status") or "")
                     toy_moved = str(quick_result.get("reason") or "") == "early_gain"
                     priority = queue_priority(
