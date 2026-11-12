@@ -10,7 +10,7 @@ import pytest
 from fedotllm.agents.evolve.agents import verifier
 from fedotllm.agents.evolve.discovery.targets import apply_verified_target, resolve_verification_target
 from fedotllm.agents.evolve.execution import run_code
-from fedotllm.agents.evolve.types import MatchSite, VerificationResult
+from fedotllm.agents.evolve.types import MatchSite, SnippetResult, VerificationResult
 
 
 @pytest.fixture
@@ -209,6 +209,55 @@ def test_unreached_implementation_probe_keeps_the_class_under_test(source, monke
     assert "categorical_idx" in prompts[1]
     assert "Do not replace the class under test with a mock" in prompts[1]
     assert "not an unconfigured base Operation object" not in prompts[1]
+
+
+def test_import_error_on_implementation_probe_is_named(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    def crashed(checkout, code, **kwargs):
+        return SnippetResult(
+            status="runtime_error",
+            code=code,
+            stderr=(
+                "ImportError: cannot import name 'TYPE_TO_ID' "
+                "from 'fedot.core.data.data'\n"
+            ),
+            exit_code=1,
+            target_reached=False,
+        )
+
+    monkeypatch.setattr(verifier, "run_fedot_snippet", crashed)
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code=(
+                        "from fedot.core.operations.evaluation.operation_implementations."
+                        "data_operations.categorical_encoders import OneHotEncodingImplementation\n"
+                        "from fedot.core.data.data import TYPE_TO_ID\n"
+                        "assert OneHotEncodingImplementation is not None\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the import error")
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "TYPE_TO_ID" in prompts[1]
+    assert "likely probe setup failure" in prompts[1]
 
 
 def test_syntax_error_probe_gets_one_rewrite(source, monkeypatch):

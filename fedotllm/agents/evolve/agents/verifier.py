@@ -640,26 +640,28 @@ def _grounded_public_exception(
             "Fedot(",
         )
     )
+    stderr = (stock.stderr or "").replace("\\", "/")
+    terminal = next(
+        (line.strip() for line in reversed(stderr.splitlines()) if line.strip()),
+        "",
+    )
+    # A bad import dies before any entry point exists. Naming that
+    # ImportError keeps the model on the class it already chose.
+    if terminal.startswith((
+        "SyntaxError:",
+        "NameError:",
+        "ModuleNotFoundError:",
+        "ImportError:",
+    )):
+        return False, f"likely probe setup failure: {terminal}"
     if not public_entry or "operation_implementations" in code:
         return False, "probe did not use a public FEDOT entry point"
     target = (proposal.file_path or "").strip().replace("\\", "/")
     if not target.startswith("fedot/") or not target.endswith(".py"):
         return False, "verify_bug did not identify a FEDOT runtime target"
-    stderr = (stock.stderr or "").replace("\\", "/")
     if target not in stderr:
         return False, "exception traceback did not reach the claimed runtime target"
-    terminal = next(
-        (line.strip() for line in reversed(stderr.splitlines()) if line.strip()),
-        "",
-    )
-    setup_failures = (
-        "SyntaxError:",
-        "NameError:",
-        "ModuleNotFoundError:",
-        "ImportError:",
-        "AttributeError:",
-    )
-    if terminal.startswith(setup_failures):
+    if terminal.startswith("AttributeError:"):
         return False, f"likely probe setup failure: {terminal}"
     if terminal.startswith("TypeError:") and any(
         marker in terminal

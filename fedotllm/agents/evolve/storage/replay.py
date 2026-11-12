@@ -538,9 +538,10 @@ _MISSED_TARGET_MARKERS = (
     "probe syntax error",
     "crashed before its contract assertion",
 )
-# Three misses stay open so the next catalog can use the corrected hint.
-# The fourth miss closes the line.
-_MAX_OPEN_MISSED_TARGET_ATTEMPTS = 3
+# Four misses stay open. The 05:19 Moscow attempt still died on an import
+# the feedback described as a private entry point, so one more try remains.
+# The fifth miss closes the line.
+_MAX_OPEN_MISSED_TARGET_ATTEMPTS = 4
 
 
 def _probe_missed_target(row: dict[str, Any]) -> bool:
@@ -648,8 +649,8 @@ def unfinished_correctness_leads(
     attempts follow, behind that proven patch. A verifier rejection is
     finished even when the outcome field is still ``unverified_no_patch``.
     A third inconclusive attempt for the same line is not resumed.
-    Probes that never executed the claimed method stay open for one
-    further attempt after three misses, then close.
+    Probes that never executed the claimed method stay open through four
+    misses, then close.
     """
 
     if limit <= 0:
