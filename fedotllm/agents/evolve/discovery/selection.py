@@ -850,6 +850,42 @@ _INTEGRAL_CATEGORICAL_GATE = re.compile(
 )
 
 
+def _string_columns_stay_categorical(parsed: SiteProposal) -> bool:
+    """Originally-string columns stay categorical without a unique-count cap.
+
+    The 13:29 Europe/Moscow catalog applied ``categorical_max_uniques_th`` to
+    string columns. The threshold converts int or float columns with fewer
+    than 13 values into strings. Pytest then failed
+    ``test_complicated_table_types_processed_correctly``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(
+        r"string[- ]typed|originally[- ]string|string columns",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    if re.search(
+        r"categorical_max_uniques|nunique|cardinality",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    return (
+        re.search(
+            r"unconditionally|unique-value cap|same (?:unique|cardinality)|nunique\s*<",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     """Low-cardinality numeric columns become strings, including non-integers.
 
@@ -1247,6 +1283,15 @@ def _first_pick_rejection(
             "col_type_ids['features']; reduce_mem_usage then raises IndexError, "
             "and the preprocessing tests require the original width. Pick a "
             "different executed line or skip",
+        )
+    if _string_columns_stay_categorical(parsed):
+        return (
+            "string_columns_stay_categorical",
+            "The unique-count threshold converts int or float columns with "
+            "fewer than 13 values into strings. Originally-string columns stay "
+            "categorical. Capping them failed "
+            "test_complicated_table_types_processed_correctly. Pick a different "
+            "executed line or skip",
         )
     if _integrality_gate_on_categorical_heuristic(parsed):
         return (
