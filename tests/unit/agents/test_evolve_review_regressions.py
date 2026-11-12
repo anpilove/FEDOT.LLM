@@ -817,3 +817,45 @@ def test_importless_probe_resume_names_the_missing_import(tmp_path):
         ("fedot/sklearn_transformations.py", 391),
     ]
     assert "must import fedot" in resumed[0].why
+
+
+def test_unproved_binary_snap_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, [
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 391,
+                "hypothesis_kind": "correctness",
+                "why": "ids accumulate",
+            },
+            "reproduction": {
+                "status": "rejected",
+                "detail": (
+                    "a column with more than two unique values in the current "
+                    "batch is never added"
+                ),
+            },
+        },
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/categorical.py",
+                "line": 28,
+                "hypothesis_kind": "correctness",
+                "why": "view",
+            },
+            "reproduction": {"status": "rejected", "detail": "advanced indexing returns a copy"},
+        },
+    ])) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=2)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/sklearn_transformations.py", 391),
+    ]
+    assert "does not delete a key" in resumed[0].why
+    closed = replay.closed_correctness_sites(findings)
+    assert ("fedot/sklearn_transformations.py", 391) not in closed
+    assert ("fedot/categorical.py", 28) in closed

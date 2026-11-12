@@ -497,6 +497,21 @@ def _shared_protect_crash(row: dict[str, Any]) -> bool:
     )
 
 
+def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
+    """A reject that says a non-binary column is never added, without a probe.
+
+    ``dict.update`` does not delete the key from the earlier transform, so
+    ``_correct_binary_ids_features`` still snaps that column. The 06:52
+    Europe/Moscow reject stated the opposite and never ran the two transforms.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    detail = str(reproduction.get("detail") or "")
+    return "more than two unique values" in detail and "never added" in detail
+
+
 def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
     lead = row["lead"]
     evidence = lead.get("evidence") or ()
@@ -508,6 +523,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             f"{why} The previous probe was rejected before it ran because it did "
             "not import fedot. The next reproduction must import fedot and assert "
             "the claimed behavior on the same fitted object."
+        ).strip()
+    if _stale_binary_key_unproved(row) and "does not delete a key" not in why:
+        why = (
+            f"{why} dict.update does not delete a key from an earlier transform. "
+            "fit does not call _find_binary_features. A column with more than two "
+            "unique values keeps the old key, and _correct_binary_ids_features still "
+            "snaps it. The next reproduction must import fedot, fit once, transform "
+            "a two-value column, then transform that same object when the column has "
+            "more than two unique values, and assert the second result was not snapped "
+            "to the first min and max."
         ).strip()
     return MatchSite(
         channel=str(lead.get("channel") or "llm"),
@@ -627,6 +652,9 @@ def _correctness_resume_plan(
             proven.append((_correctness_site(key, proven_row), proven_row))
             continue
         reproduction = row.get("reproduction") or {}
+        if _stale_binary_key_unproved(row):
+            open_probes.append((_correctness_site(key, row), None))
+            continue
         if reproduction.get("status") == "rejected":
             continue
         if _probe_missed_target(row):
@@ -993,6 +1021,8 @@ def closed_correctness_sites(
             and (row.get("reproduction") or {}).get("target_reached") is not True
         )
         if healthy_without_target:
+            continue
+        if _stale_binary_key_unproved(row):
             continue
         if outcome in {
             "correctness_keep",

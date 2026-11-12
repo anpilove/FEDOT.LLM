@@ -322,6 +322,41 @@ def test_missing_fedot_import_gets_one_rewrite(source, monkeypatch):
     assert "imports fedot" in prompts[1]
 
 
+def test_binary_accumulation_reject_without_a_probe_gets_one_correction(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="reject",
+                    why=(
+                        "a column with more than two unique values is never added, "
+                        "so it cannot be snapped"
+                    ),
+                )
+            return schema(action="reject", why="stop after the required probe")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="self.ids_binary_integer_features accumulates across transform",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "does not delete a key" in prompts[1]
+
+
 def test_correctness_probe_constructor_error_gets_one_correction(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     prompts: list[str] = []

@@ -703,6 +703,7 @@ def verify_lead(
     unreached_target_retried = False
     syntax_probe_retried = False
     import_probe_retried = False
+    binary_reject_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1022,6 +1023,34 @@ def verify_lead(
             _write_verification(workspace, lead, result)
             return result
         elif action is VerificationAction.REJECT:
+            claim_text = " ".join(
+                filter(None, (lead.why, lead.mechanism, parsed.claim, parsed.why))
+            )
+            if (
+                correctness_only
+                and not binary_reject_retried
+                and "ids_binary_integer_features" in claim_text
+                and not any("Probe status=" in item for item in tool_history)
+            ):
+                # The 06:52 Moscow reject said a non-binary column is never
+                # added, so it cannot be snapped. update does not delete the
+                # earlier key, and no probe had run.
+                binary_reject_retried = True
+                step_budget += 1
+                output = (
+                    "dict.update does not delete a key from an earlier transform. "
+                    "fit does not call _find_binary_features. A column with more "
+                    "than two unique values keeps the old key, and "
+                    "_correct_binary_ids_features still snaps it. Reject only after "
+                    "a probe imports fedot, fits once, transforms a two-value column, "
+                    "transforms that same object when the column has more than two "
+                    "unique values, and shows the second result was not snapped."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
             result = VerificationResult(
                 "rejected",
                 claim=parsed.claim or lead.why,
