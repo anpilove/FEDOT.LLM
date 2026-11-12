@@ -4205,6 +4205,83 @@ def test_probe_builder_reserves_final_synthesis_after_navigation(
     assert "Final synthesis after navigation" in inference.prompts[-1]
 
 
+def test_probe_builder_corrects_a_crashed_final_probe_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.agents import probe_builder
+    from fedotllm.agents.evolve.agents.probe_builder import (
+        ProbeProposal,
+        repair_behavior_probe,
+    )
+
+    source = _source(tmp_path)
+    crashes = iter(
+        [
+            SnippetResult(
+                "runtime_error",
+                "arity",
+                exit_code=1,
+                stderr="TypeError: transform() takes 2 positional arguments but 3 were given",
+            ),
+            SnippetResult(
+                "runtime_error",
+                "ctor",
+                exit_code=1,
+                stderr="TypeError: InputData.__init__() got an unexpected keyword argument 'features_types'",
+            ),
+            SnippetResult(
+                "runtime_error",
+                "final",
+                exit_code=1,
+                stderr="TypeError: InputData.__init__() got an unexpected keyword argument 'features_types'",
+            ),
+            SnippetResult("ok", "fixed", stdout="EVOLVE_OBSERVATION=width\n"),
+        ]
+    )
+
+    class Inference:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def create(self, prompt, _schema):
+            self.prompts.append(prompt)
+            if len(self.prompts) > 4:
+                raise AssertionError("probe builder took more than one correction")
+            if len(self.prompts) < 4:
+                return ProbeProposal(action="run", run_code=f"bad probe {len(self.prompts)}")
+            return ProbeProposal(
+                action="run",
+                run_code="print('EVOLVE_OBSERVATION=width')",
+            )
+
+    inference = Inference()
+    monkeypatch.setattr(
+        probe_builder,
+        "run_fedot_snippet",
+        lambda *_a, **_k: next(crashes),
+    )
+    monkeypatch.setattr(
+        probe_builder,
+        "format_snippet_feedback",
+        lambda _checkout, result, **_k: result.stderr,
+    )
+
+    repaired = repair_behavior_probe(
+        source,
+        inference=inference,
+        frozen_patch="EDIT 1 fedot/a.py\nSEARCH: imputer\nREPLACE: imputer add_indicator",
+        verification="missingness width",
+        failed_probe="broken()",
+        failed_result=SnippetResult("runtime_error", "bad", stderr="IndentationError"),
+    )
+
+    assert repaired == "print('EVOLVE_OBSERVATION=width')"
+    assert len(inference.prompts) == 4
+    assert "unexpected keyword argument 'features_types'" in inference.prompts[-1]
+    assert "data_type=DataTypesEnum.table" in inference.prompts[0]
+    assert "transform(data)" in inference.prompts[0]
+
+
 def test_confirmed_fixer_benchmark_uses_workload_evidence_not_provisional_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
