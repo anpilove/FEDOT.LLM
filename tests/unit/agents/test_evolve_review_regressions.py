@@ -203,6 +203,42 @@ def test_audit_inconclusive_propagates_through_real_verifier(source, monkeypatch
     assert "unsupported public-contract" not in result.detail
 
 
+def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
+    seed = {
+        "file_path": "fedot/core/data/data_split.py",
+        "line": 198,
+        "why": "seed 0 becomes 42",
+        "hypothesis_kind": "correctness",
+        "channel": "llm",
+        "mechanism": "random_seed or 42",
+        "proposed_change": "use None instead of truthiness",
+    }
+    repeated = {
+        "file_path": "fedot/other.py",
+        "line": 4,
+        "hypothesis_kind": "correctness",
+    }
+    rows = [
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": seed,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": repeated,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": repeated,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "rejected", "lead": {
+            "file_path": "fedot/done.py", "line": 9, "hypothesis_kind": "correctness",
+        }, "reproduction": {"status": "quality_hypothesis"}},
+    ]
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    resumed = replay.unfinished_correctness_leads(findings, limit=2)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/core/data/data_split.py", 198)
+    ]
+    assert resumed[0].hypothesis_kind == "correctness"
+    assert resumed[0].proposed_change.startswith("use None")
+
+
 def test_context_failure_is_not_a_site_cooldown_or_completed_hypothesis(tmp_path):
     lead = {"file_path": "fedot/a.py", "line": 6, "mechanism": "check value"}
     rows = [

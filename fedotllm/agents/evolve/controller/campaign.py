@@ -78,6 +78,7 @@ from fedotllm.agents.evolve.storage.replay import (
     solved_lift_tasks_from_findings,
     tried_patch_hashes_from_findings,
     tried_sites,
+    unfinished_correctness_leads,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.storage.scoreboard import append_attempt
@@ -652,6 +653,17 @@ def run_once(
             trace["scout_actions"] = 0
             trace["resumed_branch"] = True
         else:
+            pending_unverified = unfinished_correctness_leads(
+                findings_path, limit=cap
+            )
+            trace["resumed_unverified_leads"] = [
+                {"file_path": item.file_path, "line": item.line}
+                for item in pending_unverified
+            ]
+            resumed_sites = {
+                (item.file_path, item.line) for item in pending_unverified
+            }
+            remaining_picks = max(0, cap - len(pending_unverified))
             try:
                 def persist_scout_picks(selected: list[MatchSite]) -> None:
                     save_checkpoint(
@@ -661,22 +673,25 @@ def run_once(
                         selected_leads=[asdict(item) for item in selected],
                     )
 
-                sites = scout(
-                    scout_checkout,
-                    inference=scout_inference,
-                    max_leads=pool_n,
-                    max_picks=cap,
-                    trace=trace,
-                    execution=execution,
-                    trace_leads=[*contract_leads, *crash_leads, *parameter_leads],
-                    max_actions=scout_action_limit,
-                    max_runs_per_file=2,
-                    excluded_sites=durable_tried | recent_site_cooldown,
-                    excluded_semantic_sites=recent_semantic_cooldown,
-                    prior_hypotheses=prior_hypotheses,
-                    present_full_catalog=True,
-                    on_pick=persist_scout_picks,
-                )
+                discovered: list[MatchSite] = []
+                if remaining_picks:
+                    discovered = scout(
+                        scout_checkout,
+                        inference=scout_inference,
+                        max_leads=pool_n,
+                        max_picks=remaining_picks,
+                        trace=trace,
+                        execution=execution,
+                        trace_leads=[*contract_leads, *crash_leads, *parameter_leads],
+                        max_actions=scout_action_limit,
+                        max_runs_per_file=2,
+                        excluded_sites=durable_tried | recent_site_cooldown | resumed_sites,
+                        excluded_semantic_sites=recent_semantic_cooldown,
+                        prior_hypotheses=prior_hypotheses,
+                        present_full_catalog=True,
+                        on_pick=persist_scout_picks,
+                    )
+                sites = [*pending_unverified, *discovered]
             except AgentModelFailure as exc:
                 return finish(
                     Decision(

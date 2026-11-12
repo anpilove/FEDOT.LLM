@@ -486,6 +486,77 @@ def _recent_completed_findings(
     return seen
 
 
+def unfinished_correctness_leads(
+    findings_path: Path | None,
+    *,
+    limit: int = 2,
+) -> list[MatchSite]:
+    """Return correctness leads whose verifier stopped before a patch.
+
+    One inconclusive attempt is resumed ahead of a new catalog walk. A second
+    inconclusive attempt for the same line is not resumed, and a later finding
+    with a patch replaces the unfinished row.
+    """
+
+    if findings_path is None or not findings_path.is_file() or limit <= 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("record_type") == "finding":
+            rows.append(row)
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    inconclusive_counts: dict[tuple[str, int], int] = {}
+    for row in rows:
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        if lead.get("hypothesis_kind") != "correctness":
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+        reproduction = row.get("reproduction") or {}
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+        ):
+            inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+    resumed: list[MatchSite] = []
+    for key, row in reversed(list(latest.items())):
+        if inconclusive_counts.get(key) != 1:
+            continue
+        if row.get("outcome") != "unverified_no_patch":
+            continue
+        lead = row["lead"]
+        evidence = lead.get("evidence") or ()
+        signals = lead.get("signals") or ()
+        resumed.append(
+            MatchSite(
+                channel=str(lead.get("channel") or "llm"),
+                file_path=key[0],
+                line=key[1],
+                why=str(lead.get("why") or ""),
+                evidence=tuple(str(item) for item in evidence),
+                signals=tuple(str(item) for item in signals),
+                mechanism=str(lead.get("mechanism") or ""),
+                proposed_change=str(lead.get("proposed_change") or ""),
+                expected_metric_effect=str(lead.get("expected_metric_effect") or ""),
+                hypothesis_kind="correctness",
+            )
+        )
+        if len(resumed) >= limit:
+            break
+    return resumed
+
+
 def recent_completed_sites_from_findings(
     findings_path: Path | None, **filters
 ) -> set[tuple[str, int]]:
