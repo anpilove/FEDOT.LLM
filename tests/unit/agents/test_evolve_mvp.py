@@ -5304,6 +5304,89 @@ def test_last_revision_pytest_feedback_gets_one_contract_repair_extension(
     assert extension[0]["gate"] == "pytest"
 
 
+def test_patched_probe_crash_gets_one_source_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+
+    source = _source(tmp_path)
+    lead = MatchSite("execution", "fedot/a.py", 1, "datetime conversion")
+    crashing = PatchCandidate(
+        "datetime-subtract",
+        edits=[PatchEdit("fedot/a.py", "return 1", "return 2")],
+        behavior_probe="print('EVOLVE_OBSERVATION=width')",
+    )
+    feedback_seen: list[str] = []
+    probes = [
+        {
+            "status": "patched_error",
+            "hypothesis_result": "patch_regression",
+            "stock": {"status": "ok", "observation": "r2=0.99"},
+            "patched": {
+                "status": "runtime_error",
+                "stderr_tail": (
+                    "ufunc 'subtract' cannot use operands with types "
+                    "dtype('float64') and dtype('<M8[D]')"
+                ),
+            },
+        }
+    ]
+
+    def fake_fix(*_args, **kwargs):
+        feedback_seen.append(kwargs.get("feedback", ""))
+        if len(feedback_seen) == 1:
+            return crashing
+        return None
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fake_fix)
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda ids, **_k: {task_id: ScoreResult(task_id, "ok", 0.8) for task_id in ids},
+    )
+    monkeypatch.setattr(loop, "_hydrate_configuration_surfaces", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: probes.pop(0),
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+
+    workspace = tmp_path / "probe-crash-repair"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=FAST_RUN_POLICY,
+    )
+
+    assert decision.keep is False
+    assert len(feedback_seen) == 2
+    assert "dtype('float64')" in feedback_seen[1]
+    assert "repair the source change" in feedback_seen[1]
+    rows = [
+        json.loads(line)
+        for line in (workspace / "journal.jsonl").read_text().splitlines()
+    ]
+    extension = [
+        row for row in rows if row.get("event") == "targeted_revision_extension"
+    ]
+    assert len(extension) == 1
+    assert extension[0]["gate"] == "behavior_probe"
+    assert extension[0]["candidate"] == "datetime-subtract"
+
+
 def test_fixer_budget_exhaustion_preserves_reproducible_pytest_rejection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

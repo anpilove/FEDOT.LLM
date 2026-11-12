@@ -1690,6 +1690,11 @@ def run_once(
                             reproduction=reproduction,
                             behavior_probe=behavior_probe,
                         )
+                        if behavior_status == "patched_error":
+                            # Stock ran the diagnostic. The patched traceback is
+                            # a source regression, so one repair revision stays
+                            # available after the nominal revision limit.
+                            grant_safety_extension("behavior_probe", candidate, reason)
                         if advance_revision(reason):
                             continue
                         break
