@@ -853,7 +853,7 @@ def run_once(
                 )
             ordered = skip_tried(sites, workspace)
             # Mechanism hypotheses take the slots. One-line contract repairs
-            # stay in the pool and are worked only when no mechanism exists.
+            # stay in the pool and are not run or measured.
             leads = select_work_leads(ordered, cap)
             leads.sort(
                 key=lambda item: 0 if "upstream_of_crash" in item.signals else 1
@@ -915,7 +915,11 @@ def run_once(
         reason = external_stop or (
             f"scout_incomplete: {failed_reads} failed reads"
             if failed_reads
-            else "no_lead"
+            else (
+                "no_mechanism_hypothesis"
+                if sites and all(lead_is_local_bugfix(item) for item in sites)
+                else "no_lead"
+            )
         )
         decision = Decision(
             keep=False,

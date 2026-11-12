@@ -483,16 +483,14 @@ def lead_is_local_bugfix(lead: MatchSite) -> bool:
 
 
 def select_work_leads(leads: list[MatchSite], cap: int) -> list[MatchSite]:
-    """Fill the campaign with mechanism hypotheses.
+    """Work mechanism hypotheses only.
 
-    One-line correctness fixes are worked only when no mechanism was found.
+    A one-line correctness fix is not a campaign hypothesis. It stays in the
+    scout pool and is never measured in place of a larger claim.
     """
 
     cap = max(0, int(cap))
-    mechanisms = [lead for lead in leads if not lead_is_local_bugfix(lead)]
-    if mechanisms:
-        return mechanisms[:cap]
-    return [lead for lead in leads if lead_is_local_bugfix(lead)][:cap]
+    return [lead for lead in leads if not lead_is_local_bugfix(lead)][:cap]
 
 
 def _mechanism_pick_count(leads: list[MatchSite]) -> int:

@@ -2163,7 +2163,7 @@ def test_mechanism_takes_the_slot_ahead_of_a_local_bug(tmp_path: Path):
     assert lead_is_local_bugfix(local)
     assert not lead_is_local_bugfix(mechanism)
     assert select_work_leads([local, mechanism], 1) == [mechanism]
-    assert select_work_leads([local], 1) == [local]
+    assert select_work_leads([local], 1) == []
 
     package = tmp_path / "fedot"
     package.mkdir()
@@ -2227,6 +2227,89 @@ def test_mechanism_takes_the_slot_ahead_of_a_local_bug(tmp_path: Path):
     assert chosen[0].hypothesis_kind == "quality"
     assert chosen[0].file_path == "fedot/b.py"
     assert any(site.file_path == "fedot/a.py" for site in chosen[0].sites)
+
+
+def test_large_hypothesis_is_measured_local_bug_is_not(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.patch import apply_patch
+    from fedotllm.agents.evolve.types import HypothesisSite, PatchEdit
+
+    source = tmp_path / "source"
+    package = source / "fedot"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "a.py").write_text("def fit_rule():\n    return 1\n", encoding="utf-8")
+    (package / "b.py").write_text(
+        "def predict_rule():\n    return 2\n", encoding="utf-8"
+    )
+    local = MatchSite(
+        "llm",
+        "fedot/a.py",
+        2,
+        hypothesis_kind="correctness",
+        mechanism="random_seed or 42 rewrites seed 0",
+    )
+    large = MatchSite(
+        "llm",
+        "fedot/b.py",
+        1,
+        hypothesis_kind="quality",
+        mechanism="fit and predict must share one imputation rule",
+        proposed_change="use the fitted rule in both fit and predict",
+        expected_metric_effect="predictions follow the fitted rule",
+        sites=(
+            HypothesisSite("fedot/b.py", 1, "predict"),
+            HypothesisSite("fedot/a.py", 1, "fit"),
+        ),
+    )
+    worked: list[MatchSite] = []
+    measured: list[tuple] = []
+    stock = {"catboost": ScoreResult("catboost", "ok", 0.5)}
+
+    def fix(checkout, lead, **_kwargs):
+        worked.append(lead)
+        candidate = PatchCandidate(
+            "big-hypothesis",
+            edits=[
+                PatchEdit("fedot/a.py", "return 1", "return 3"),
+                PatchEdit("fedot/b.py", "return 2", "return 3"),
+            ],
+            behavior_probe="print('EVOLVE_OBSERVATION=3')",
+        )
+        assert apply_patch(checkout, candidate)
+        return candidate
+
+    def measure(*args, **_kwargs):
+        measured.append(args)
+        return stock
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [local, large])
+    monkeypatch.setattr(loop, "fix_lead", fix)
+    monkeypatch.setattr(
+        loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"}
+    )
+    monkeypatch.setattr(loop, "measure_stock", lambda *_a, **_k: stock)
+    monkeypatch.setattr(loop, "measure_patched", measure)
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+
+    decision = loop.run_once(
+        checkout=source,
+        workspace=tmp_path / "work",
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=FAST_RUN_POLICY,
+    )
+
+    assert [lead.file_path for lead in worked] == ["fedot/b.py"]
+    assert measured
+    assert decision.correctness_keep is False
+    assert decision.reason != "correctness_keep"
 
 
 def test_llm_pick_rejects_file_outside_shown_context(tmp_path: Path):
