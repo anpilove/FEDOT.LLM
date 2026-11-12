@@ -1516,6 +1516,25 @@ def verify_lead(
     return result
 
 
+def _private_callback_name_only(patched, code: str) -> bool:
+    """The empty-list assertion passed and the probe then named a private class.
+
+    lightgbm exposes ``callback._EarlyStoppingCallback``. A probe that asserts
+    ``lgbm.callback.EarlyStoppingCallback`` raises AttributeError after
+    ``len(callbacks) == 1`` has already succeeded. The 08:14 Europe/Moscow
+    patch appended the callback and was marked still failing for that name.
+    """
+
+    stderr = patched.stderr or ""
+    if patched.status != "runtime_error" or "AssertionError" in stderr:
+        return False
+    if "has no attribute 'EarlyStoppingCallback'" not in stderr:
+        return False
+    length_at = code.find("len(callbacks)")
+    class_at = code.find("EarlyStoppingCallback")
+    return 0 <= length_at < class_at
+
+
 def replay_reproduction(checkout: Path, verification: VerificationResult) -> dict:
     research = {
         "claim": verification.claim,
@@ -1543,10 +1562,13 @@ def replay_reproduction(checkout: Path, verification: VerificationResult) -> dic
             **research,
         }
     patched = run_fedot_snippet(checkout, verification.reproduction_code)
+    resolved = patched.status == "ok" or _private_callback_name_only(
+        patched, verification.reproduction_code
+    )
     return {
         "status": "verified_bug",
         "stock": "failed_as_predicted",
-        "patched": "resolved" if patched.status == "ok" else "still_failing",
+        "patched": "resolved" if resolved else "still_failing",
         **research,
         "code": verification.reproduction_code,
         "patched_probe": {

@@ -14,7 +14,7 @@ from fedotllm.agents.evolve.benchmark import hidden_controls as hidden
 from fedotllm.agents.evolve.storage import replay
 from fedotllm.agents.evolve.types import (
     Decision, EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite, ScoreResult,
-    SnippetResult, TestResult as EvolveTestResult,
+    SnippetResult, VerificationResult, TestResult as EvolveTestResult,
 )
 
 
@@ -238,6 +238,66 @@ def test_discarded_early_stopping_callback_is_a_contract():
     )
     assert "callbacks=" in discarded_callback_return(source, 5)
     assert discarded_callback_return(source, 9) == ""
+
+
+def test_private_callback_class_does_not_keep_the_empty_list_failing(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.agents.verifier import replay_reproduction
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    code = (
+        "callbacks = impl.update_callbacks()\n"
+        "assert len(callbacks) == 1\n"
+        "assert isinstance(cb, lgbm.callback.EarlyStoppingCallback)\n"
+    )
+    monkeypatch.setattr(
+        verifier,
+        "run_fedot_snippet",
+        lambda checkout, reproduction: SnippetResult(
+            status="runtime_error",
+            code=reproduction,
+            stderr=(
+                "assert isinstance(cb, lgbm.callback.EarlyStoppingCallback)\n"
+                "AttributeError: module 'lightgbm.callback' has no attribute "
+                "'EarlyStoppingCallback'"
+            ),
+            exit_code=1,
+        ),
+    )
+    result = VerificationResult(
+        "verified_bug",
+        claim="lgbm_early_stopping is discarded",
+        reproduction_code=code,
+    )
+    replayed = replay_reproduction(tmp_path, result)
+    assert replayed["patched"] == "resolved"
+
+
+def test_unresolved_callback_patch_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "rejected",
+        "lead": {
+            "file_path": "fedot/boostings_implementations.py",
+            "line": 220,
+            "hypothesis_kind": "correctness",
+            "why": "lgbm_early_stopping result is discarded",
+        },
+        "reproduction": {
+            "status": "verified_bug",
+            "patched": "still_failing",
+            "patched_probe": {
+                "stderr": (
+                    "AttributeError: module 'lightgbm.callback' has no attribute "
+                    "'EarlyStoppingCallback'"
+                ),
+            },
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert resumed[0].line == 220
+    assert "no public EarlyStoppingCallback" in resumed[0].why
+    assert ("fedot/boostings_implementations.py", 220) not in replay.closed_correctness_sites(findings)
 
 
 def test_discarded_callback_reject_stays_open(tmp_path):

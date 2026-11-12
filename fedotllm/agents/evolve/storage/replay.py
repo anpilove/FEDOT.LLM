@@ -521,14 +521,18 @@ def _discarded_callback_unproved(row: dict[str, Any]) -> bool:
     """
 
     reproduction = row.get("reproduction") or {}
-    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+    if not isinstance(reproduction, dict):
         return False
-    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
     lead = row.get("lead") or {}
     why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
-    return "lgbm_early_stopping" in why and (
-        "returns []" in text or "empty list" in text or "callbacks=[]" in text
-    )
+    if "lgbm_early_stopping" not in why:
+        return False
+    if reproduction.get("patched") == "still_failing":
+        return True
+    if reproduction.get("status") != "rejected":
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return "returns []" in text or "empty list" in text or "callbacks=[]" in text
 
 
 def _union_symbol_unresolved(row: dict[str, Any]) -> bool:
@@ -588,6 +592,19 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "operation_info_by_id. Construct ImputationImplementation() directly. "
             "Fit once, transform a two-value numeric column, then transform that "
             "same instance when the column has more than two unique values."
+        ).strip()
+    reproduction = row.get("reproduction") or {}
+    probe = reproduction.get("patched_probe") or {}
+    if (
+        reproduction.get("patched") == "still_failing"
+        and "EarlyStoppingCallback" in str(probe.get("stderr") or "")
+        and "no public EarlyStoppingCallback" not in why
+    ):
+        why = (
+            f"{why} The length assertion passed. lightgbm.callback has no public "
+            "EarlyStoppingCallback; the class is _EarlyStoppingCallback. Keep "
+            "callback.append(lgbm_early_stopping(...)). The contract is a list of "
+            "length 1 whose stopping_rounds equals early_stopping_rounds."
         ).strip()
     if _discarded_callback_unproved(row) and "passes that list as callbacks=" not in why:
         why = (
