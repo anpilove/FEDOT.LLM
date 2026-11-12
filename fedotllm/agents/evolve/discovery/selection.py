@@ -1131,7 +1131,12 @@ def _llm_pick(
         shown = {lead.file_path}
         picked: MatchSite | None = None
         runs = 0
-        for step in range(1, per_file_steps + 1):
+        # A closed catalog line already has a judgment. One decision turn can
+        # name a different line or skip. A run on that line spent the 06:34
+        # Moscow budget and the walk stopped at 2 of 190 files.
+        closed_catalog_line = (lead.file_path, lead.line) in excluded_exact
+        file_steps = 1 if closed_catalog_line else per_file_steps
+        for step in range(1, file_steps + 1):
             if actions >= action_limit:
                 budget_exhausted = True
                 rounds.append({"file_path": lead.file_path, "status": "action_limit"})
@@ -1140,7 +1145,7 @@ def _llm_pick(
             architecture_block = f"\n\n{architecture}" if architecture else ""
             prompt = (
                 f"{_LOCATE}\n\n"
-                f"Step {step}/{per_file_steps}; campaign actions "
+                f"Step {step}/{file_steps}; campaign actions "
                 f"{actions}/{action_limit}.\n"
                 f"Catalog site: {lead.file_path}:{lead.line} {lead.why}\n\n"
                 f"File:\n{text}"
@@ -1198,7 +1203,7 @@ def _llm_pick(
                         for file_path, line in sorted(excluded_exact)
                     )
                 )
-            if step == per_file_steps:
+            if step == file_steps:
                 prompt += (
                     "\n\nFinal decision turn for this catalog file. "
                     "Return status=pick (the current file_path may be omitted) "
@@ -1272,7 +1277,23 @@ def _llm_pick(
             if raw:
                 raws.append(raw)
             status = (parsed.status or "pick").strip().lower()
-            if step == per_file_steps and status not in {"pick", "skip"}:
+            if closed_catalog_line and status == "run":
+                rounds.append(
+                    {
+                        "file_path": lead.file_path,
+                        "status": "closed_catalog_no_run",
+                        "line": lead.line,
+                    }
+                )
+                logger.info(
+                    "evolve pick %s/%s closed no-run %s:%s",
+                    walked,
+                    n_files,
+                    lead.file_path,
+                    lead.line,
+                )
+                break
+            if step == file_steps and status not in {"pick", "skip"}:
                 rounds.append(
                     {
                         "file_path": lead.file_path,
@@ -1423,14 +1444,14 @@ def _llm_pick(
                     rejection,
                     parsed.file_path or lead.file_path,
                 )
-                if step < per_file_steps:
+                if step < file_steps:
                     continue
                 break
             requested_target = parsed.file_path or lead.file_path
             if (
                 status == "pick"
                 and requested_target not in shown
-                and step < per_file_steps
+                and step < file_steps
                 and actions < action_limit
             ):
                 rel, opened, _ = _open_requested_runtime(
@@ -1545,7 +1566,7 @@ def _llm_pick(
                     picked.line,
                 )
                 picked = None
-                if step < per_file_steps:
+                if step < file_steps:
                     continue
                 break
             if (

@@ -6871,16 +6871,15 @@ def test_scout_rejects_cooled_site_after_llm_selects_change_line(tmp_path: Path)
             assert "fedot/a.py:1" in prompt
             if "Catalog site: fedot/a.py:1" in prompt:
                 self.a_calls += 1
-                if self.a_calls == 1:
-                    return SiteProposal(status="pick", **_causal_fields(1))
-                assert "pick rejected: that exact change_line is cooling down" in prompt
-                return SiteProposal(status="skip")
+                assert "Final decision turn" in prompt
+                return SiteProposal(status="pick", **_causal_fields(1))
             assert "Catalog site: fedot/b.py:1" in prompt
             return SiteProposal(status="pick", **_causal_fields(1))
 
     trace: dict = {}
+    inference = Inference()
     selected = _llm_pick(
-        Inference(),
+        inference,
         source,
         [
             MatchSite("execution", "fedot/a.py", 1, "executed value"),
@@ -6893,12 +6892,50 @@ def test_scout_rejects_cooled_site_after_llm_selects_change_line(tmp_path: Path)
     )
 
     assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
-    assert any(
+    assert trace and any(
         row["status"] == "recent_site_cooldown"
         and row["file_path"] == "fedot/a.py"
         and row["line"] == 1
         for row in trace["llm_pick_rounds"]
     )
+    assert inference.a_calls == 1
+
+
+def test_closed_catalog_line_does_not_run_and_reaches_the_next_file(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def create(self, prompt, _schema):
+            self.prompts.append(prompt)
+            if "Catalog site: fedot/a.py:1" in prompt:
+                return SiteProposal(status="run", run_code="print('EVOLVE_OBSERVATION=1')")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    inference = Inference()
+    selected = _llm_pick(
+        inference,
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=2,
+        excluded_sites={("fedot/a.py", 1)},
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert sum("Catalog site: fedot/a.py:1" in prompt for prompt in inference.prompts) == 1
+    assert any(row.get("status") == "closed_catalog_no_run" for row in trace["llm_pick_rounds"])
+    assert not any("EVOLVE_OBSERVATION" in prompt for prompt in inference.prompts)
 
 
 def test_scout_rejects_cooled_default_operation_after_neighbor_navigation(
