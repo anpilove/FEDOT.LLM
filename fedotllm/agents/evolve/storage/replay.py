@@ -551,6 +551,16 @@ def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
             "Fit once, transform a two-value numeric column, then transform that "
             "same instance when the column has more than two unique values."
         ).strip()
+    if (
+        "symbol and source line disagree" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "columns=self.non_categorical_ids" not in why
+    ):
+        why = (
+            f"{why} The previous probe named a symbol that does not contain the "
+            "source line. Use symbol _categorical_numerical_union and the DataFrame "
+            "line that passes columns=self.non_categorical_ids."
+        ).strip()
     if _all_nan_union_unproved(row) and "indices imply" not in why:
         why = (
             f"{why} SimpleImputer drops an all-NaN column. A numerical-only "

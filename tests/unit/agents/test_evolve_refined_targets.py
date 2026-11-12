@@ -405,6 +405,44 @@ def test_operation_info_crash_names_imputation_implementation(source, monkeypatc
     assert "ImputationImplementation()" in prompts[1]
 
 
+def test_symbol_line_disagree_gets_one_rewrite(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    symbol="unrelated",
+                    reproduction_code=(
+                        "from fedot.a import Output\n"
+                        "assert Output().save() == [1, 2]\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the symbol rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="width mismatch in _categorical_numerical_union",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "_categorical_numerical_union" in prompts[1]
+
+
 def test_all_nan_union_reject_gets_one_mixed_table_correction(source):
     prompts: list[str] = []
 

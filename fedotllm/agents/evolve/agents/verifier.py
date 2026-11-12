@@ -703,6 +703,7 @@ def verify_lead(
     unreached_target_retried = False
     syntax_probe_retried = False
     import_probe_retried = False
+    target_disagree_retried = False
     binary_reject_retried = False
     all_nan_reject_retried = False
     contract_audit_retried = False
@@ -1122,6 +1123,26 @@ def verify_lead(
                         "imports fedot and asserts the claimed behavior on the "
                         "same fitted object."
                     )
+                elif (
+                    "symbol and source line disagree" in str(detail)
+                    and not target_disagree_retried
+                ):
+                    # The 07:32 Moscow union probe named a symbol that does
+                    # not contain line 432, so the probe never ran.
+                    target_disagree_retried = True
+                    step_budget += 1
+                    output += (
+                        " The symbol and the source line name different objects. "
+                        "Name the symbol that contains the line, or set the line "
+                        "inside that symbol."
+                    )
+                    if "_categorical_numerical_union" in (
+                        (lead.why or "") + (lead.mechanism or "")
+                    ):
+                        output += (
+                            " Use symbol _categorical_numerical_union and the "
+                            "DataFrame line that passes columns=self.non_categorical_ids."
+                        )
             else:
                 symbol = resolved_target.get("symbol", "")
                 trace_target = {"file_path": target_lead.file_path, "symbol": symbol} if symbol else None

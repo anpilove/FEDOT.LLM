@@ -861,6 +861,29 @@ def test_unproved_binary_snap_reject_stays_open(tmp_path):
     assert ("fedot/categorical.py", 28) in closed
 
 
+def test_symbol_line_disagree_resume_names_the_union(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/sklearn_transformations.py",
+            "line": 432,
+            "hypothesis_kind": "correctness",
+            "why": "crash in _categorical_numerical_union",
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": (
+                "Probe rejected: unresolved verification target: "
+                "verification target symbol and source line disagree"
+            ),
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert "columns=self.non_categorical_ids" in resumed[0].why
+
+
 def test_all_nan_union_reject_stays_open(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({
