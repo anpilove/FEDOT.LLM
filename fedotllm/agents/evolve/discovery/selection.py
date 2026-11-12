@@ -50,11 +50,15 @@ Your primary goal is one causal hypothesis with a plausible effect on general
 predictive behavior or correctness. A hypothesis may change several coordinated
 sites, including different files. `change_line` is the first site. Put every other
 place the same claim must change into `sites`, each with `file_path`, `change_line`,
-and `role`. A local bug is a hypothesis with one site. Do not collapse a multi-site
-claim into a single line, and do not split one claim across unrelated picks.
-It may repair a bug/silent contract mismatch, or
-improve valid stock behavior with a more suitable algorithm, representation, adaptive
-rule, numerical method, or use of information that is currently discarded. Do not
+and `role`. Do not collapse a multi-site claim into a single line, and do not split one
+claim across unrelated picks. Prefer a mechanism change: a different algorithm,
+representation, numerical method, or use of information that changes predictions
+for the whole operation family, or one claim edited in several places. Use
+hypothesis_kind=quality for that mechanism. Use hypothesis_kind=correctness only
+for a single-site contract violation. A one-line contract repair does not finish
+the search; the walk continues until a mechanism is recorded or the action budget
+ends. It may also repair a bug or silent contract mismatch, but that repair is
+not a substitute for the mechanism. Do not
 classify the lead in advance. The exact benchmark dataset, score and metric identity
 are intentionally withheld during discovery: do not tune a proposal to one named
 metric. Explain how data, fitted state or predictions would change across the affected
@@ -62,9 +66,9 @@ task family; the controller will choose suitable metrics after the hypothesis ex
 
 "Use something newer" is not a mechanism. Compare the current behavior with a
 concrete alternative implementable with existing dependencies. Preserve unrelated
-task families and sibling operations. DEV decides whether it is better. If DEV is
-neutral, the change is useful only when an independent stock failure is reproduced
-and the same probe passes after patching. You do not have to pick this file.
+task families and sibling operations. DEV decides whether the mechanism is better.
+Do not replace it with a one-line contract probe because the metric has not been
+measured yet. You do not have to pick this file.
 
 status=pick — record this hypothesis as a match site. The catalog
 walk continues with the next file; pick does not stop the scan. Fill `mechanism`,
@@ -461,6 +465,38 @@ def _unique(leads: list[MatchSite]) -> list[MatchSite]:
             ),
         )
     return [by_key[key] for key in order]
+
+
+def lead_is_local_bugfix(lead: MatchSite) -> bool:
+    """True for a one-place correctness repair, not a mechanism change.
+
+    Quality hypotheses and correctness claims that name several sites stay in
+    the campaign. A single-line contract fix does not fill that slot.
+    """
+
+    if lead.hypothesis_kind != "correctness":
+        return False
+    places = {(lead.file_path, int(lead.line))}
+    for site in lead.sites:
+        places.add((site.file_path, int(site.line)))
+    return len(places) <= 1
+
+
+def select_work_leads(leads: list[MatchSite], cap: int) -> list[MatchSite]:
+    """Fill the campaign with mechanism hypotheses.
+
+    One-line correctness fixes are worked only when no mechanism was found.
+    """
+
+    cap = max(0, int(cap))
+    mechanisms = [lead for lead in leads if not lead_is_local_bugfix(lead)]
+    if mechanisms:
+        return mechanisms[:cap]
+    return [lead for lead in leads if lead_is_local_bugfix(lead)][:cap]
+
+
+def _mechanism_pick_count(leads: list[MatchSite]) -> int:
+    return sum(1 for lead in leads if not lead_is_local_bugfix(lead))
 
 
 def pool_rows(leads: list[MatchSite]) -> list[dict]:
@@ -1823,7 +1859,7 @@ def _llm_pick(
     excluded_exact = set(excluded_sites or ())
     excluded_semantic = set(excluded_semantic_sites or ())
     for lead in (() if external_stop else catalog):
-        if len(found) >= want or actions >= action_limit:
+        if _mechanism_pick_count(found) >= want or actions >= action_limit:
             budget_exhausted = actions >= action_limit
             break
         if lead.file_path in seen:

@@ -2134,6 +2134,101 @@ def test_multi_site_hypothesis_becomes_one_patch(tmp_path: Path):
     }
 
 
+def test_mechanism_takes_the_slot_ahead_of_a_local_bug(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+    from fedotllm.agents.evolve.discovery.selection import (
+        lead_is_local_bugfix,
+        select_work_leads,
+    )
+    from fedotllm.agents.evolve.types import HypothesisSite
+
+    local = MatchSite(
+        "llm",
+        "fedot/a.py",
+        2,
+        hypothesis_kind="correctness",
+        mechanism="random_seed or 42 rewrites seed 0",
+    )
+    mechanism = MatchSite(
+        "llm",
+        "fedot/b.py",
+        1,
+        hypothesis_kind="quality",
+        mechanism="fit and predict should share one imputation rule",
+        sites=(
+            HypothesisSite("fedot/b.py", 1, "primary"),
+            HypothesisSite("fedot/c.py", 4, "predict"),
+        ),
+    )
+    assert lead_is_local_bugfix(local)
+    assert not lead_is_local_bugfix(mechanism)
+    assert select_work_leads([local, mechanism], 1) == [mechanism]
+    assert select_work_leads([local], 1) == [local]
+
+    package = tmp_path / "fedot"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "a.py").write_text("def fit_rule():\n    return 1\n", encoding="utf-8")
+    (package / "b.py").write_text(
+        "def predict_rule():\n    return 2\n", encoding="utf-8"
+    )
+
+    class _Scout:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, _prompt, _schema):
+            self.calls += 1
+            if self.calls == 1:
+                return SiteProposal(
+                    status="pick",
+                    file_path="fedot/a.py",
+                    line=1,
+                    change_line=1,
+                    why="seed zero is rewritten",
+                    mechanism="random_seed or 42 rewrites seed 0",
+                    proposed_change="replace the or-expression with an explicit None check",
+                    expected_metric_effect="seed 0 stays 0",
+                    hypothesis_kind="correctness",
+                )
+            return SiteProposal(
+                status="pick",
+                file_path="fedot/b.py",
+                line=1,
+                change_line=1,
+                why="fit and predict disagree",
+                mechanism="the fitted rule is not the rule used at predict",
+                proposed_change="use the fitted rule in both fit and predict",
+                expected_metric_effect="predictions follow the fitted rule",
+                hypothesis_kind="quality",
+                sites=[
+                    {
+                        "file_path": "fedot/a.py",
+                        "change_line": 1,
+                        "role": "fit stores the rule",
+                    }
+                ],
+            )
+
+    scout = _Scout()
+    found = _llm_pick(
+        scout,
+        tmp_path,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed symbol fit_rule"),
+            MatchSite("execution", "fedot/b.py", 1, "executed symbol predict_rule"),
+        ],
+        max_picks=1,
+        max_actions=6,
+    )
+    assert scout.calls >= 2
+    chosen = select_work_leads(found, 1)
+    assert len(chosen) == 1
+    assert chosen[0].hypothesis_kind == "quality"
+    assert chosen[0].file_path == "fedot/b.py"
+    assert any(site.file_path == "fedot/a.py" for site in chosen[0].sites)
+
+
 def test_llm_pick_rejects_file_outside_shown_context(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, discover_leads
 
