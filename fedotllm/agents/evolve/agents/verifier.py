@@ -1165,10 +1165,13 @@ def verify_lead(
                         # Tell the model why the crash was not accepted as
                         # evidence (e.g. no public FEDOT entry point reached).
                         detail = f"{detail}: {exception_detail}"
-                    if (
-                        not correctness_only
-                        and probe_corrections < MAX_VERIFY_PROBE_CORRECTIONS
-                    ):
+                    # Campaign verification is correctness-only, so the old
+                    # gate never reserved the turn that already contains the
+                    # recovered constructor. One correction is enough there.
+                    correction_limit = (
+                        MAX_VERIFY_PROBE_CORRECTIONS if not correctness_only else 1
+                    )
+                    if probe_corrections < correction_limit:
                         probe_corrections += 1
                         step_budget += 1
                 probe_feedback = format_snippet_feedback(
