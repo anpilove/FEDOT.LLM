@@ -145,6 +145,37 @@ def test_healthy_probe_that_misses_the_target_does_not_disprove_it(source, monke
     assert "without executing the claimed target method" in prompts[1]
 
 
+def test_assertion_before_the_target_gets_one_correction(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            return schema(
+                action="verify_bug",
+                file_path="fedot/a.py",
+                line=4,
+                reproduction_code=(
+                    "from fedot.a import Output\n"
+                    "assert 0 == 1, 'setup failed'\n"
+                    "Output().save()\n"
+                ),
+            )
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status != "verified_bug"
+    assert len(prompts) == 2
+    assert "did not execute the claimed target method" in prompts[1]
+
+
 def test_unreached_refined_target_never_reaches_contract_audit(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     class Inference:

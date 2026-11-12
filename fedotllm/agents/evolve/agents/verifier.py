@@ -690,6 +690,7 @@ def verify_lead(
     disproved_bug_claims: list[str] = []
     last_target_reached: bool | None = None
     missed_target_retried = False
+    unreached_target_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
     step_budget = min(
@@ -1054,6 +1055,9 @@ def verify_lead(
                         "Use PipelineBuilder.add_node or PipelineNode with an operation name, "
                         "not an unconfigured base Operation object"
                     )
+                    if not unreached_target_retried:
+                        unreached_target_retried = True
+                        step_budget += 1
                 if reproduced:
                     evidence = list(filter(None, (parsed.why,)))
                     if grounded_exception:
