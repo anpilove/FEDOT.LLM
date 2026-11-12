@@ -728,6 +728,15 @@ def closed_correctness_sites(
     for key, row in latest.items():
         outcome = str(row.get("outcome") or "")
         reproduction = str((row.get("reproduction") or {}).get("status") or "")
+        healthy_without_target = (
+            reproduction == "rejected"
+            and str((row.get("reproduction") or {}).get("detail") or "").startswith(
+                "stock satisfied the proposed healthy contract"
+            )
+            and (row.get("reproduction") or {}).get("target_reached") is not True
+        )
+        if healthy_without_target:
+            continue
         if outcome in {
             "correctness_keep",
             "correctness_keep_with_metric_signal",

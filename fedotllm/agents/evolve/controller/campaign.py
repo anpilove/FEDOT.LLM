@@ -1306,6 +1306,7 @@ def run_once(
                 "expected": verification.expected,
                 "observed": verification.observed,
                 "detail": verification.detail,
+                "target_reached": verification.target_reached,
             }
             record_attempt(
                 lead,

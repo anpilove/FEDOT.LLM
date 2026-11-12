@@ -458,6 +458,64 @@ def test_finished_correctness_sites_stay_out_of_the_next_catalog(tmp_path):
     assert "is None" in report["diff"]
 
 
+def test_healthy_contract_rejection_stays_open_until_the_target_ran(tmp_path):
+    missed = {
+        "file_path": "fedot/sklearn_transformations.py",
+        "line": 432,
+        "hypothesis_kind": "correctness",
+    }
+    reached = {
+        "file_path": "fedot/sklearn_transformations.py",
+        "line": 457,
+        "hypothesis_kind": "correctness",
+    }
+    explicit = {
+        "file_path": "fedot/core/pipelines/pipeline.py",
+        "line": 457,
+        "hypothesis_kind": "correctness",
+    }
+    detail = (
+        "stock satisfied the proposed healthy contract; no independent "
+        "failure or grounded comparative quality hypothesis remained"
+    )
+    rows = [
+        {
+            "record_type": "finding",
+            "source_hash": "src",
+            "outcome": "unverified_no_patch",
+            "lead": missed,
+            "reproduction": {"status": "rejected", "detail": detail},
+        },
+        {
+            "record_type": "finding",
+            "source_hash": "src",
+            "outcome": "unverified_no_patch",
+            "lead": reached,
+            "reproduction": {
+                "status": "rejected",
+                "detail": detail,
+                "target_reached": True,
+            },
+        },
+        {
+            "record_type": "finding",
+            "source_hash": "src",
+            "outcome": "unverified_no_patch",
+            "lead": explicit,
+            "reproduction": {
+                "status": "rejected",
+                "detail": "unsupported public-contract precondition: documented rewrite",
+            },
+        },
+    ]
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    closed = replay.closed_correctness_sites(findings, source_hash="src")
+    assert ("fedot/sklearn_transformations.py", 432) not in closed
+    assert ("fedot/sklearn_transformations.py", 457) in closed
+    assert ("fedot/core/pipelines/pipeline.py", 457) in closed
+
+
 def test_context_failure_is_not_a_site_cooldown_or_completed_hypothesis(tmp_path):
     lead = {"file_path": "fedot/a.py", "line": 6, "mechanism": "check value"}
     rows = [

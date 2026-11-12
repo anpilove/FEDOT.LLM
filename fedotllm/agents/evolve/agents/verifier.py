@@ -688,6 +688,8 @@ def verify_lead(
     provisional_quality: VerificationProposal | None = None
     quality_challenge_actions = 0
     disproved_bug_claims: list[str] = []
+    last_target_reached: bool | None = None
+    missed_target_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
     step_budget = min(
@@ -1139,9 +1141,18 @@ def verify_lead(
                     )
                     _write_verification(workspace, lead, result)
                     return result
-                if stock.status == "ok":
+                if stock.status == "ok" and trace_target and stock.target_reached is not True:
+                    detail = (
+                        "probe passed without executing the claimed target method; "
+                        "a healthy result that never reached this line does not disprove it"
+                    )
+                    if not missed_target_retried:
+                        missed_target_retried = True
+                        step_budget += 1
+                elif stock.status == "ok":
                     detail = "stock satisfies the asserted healthy contract"
                     disproved_bug_claims.append(parsed.claim or lead.why)
+                    last_target_reached = True if trace_target is None else bool(stock.target_reached)
                 elif stock.status != "runtime_error":
                     detail = f"probe infrastructure status: {stock.status}"
                 elif "AssertionError" not in stock.stderr:
@@ -1191,6 +1202,7 @@ def verify_lead(
                 "stock satisfied the proposed healthy contract; no independent "
                 "failure or grounded comparative quality hypothesis remained"
             ),
+            target_reached=last_target_reached is True,
         )
     else:
         result = VerificationResult(
