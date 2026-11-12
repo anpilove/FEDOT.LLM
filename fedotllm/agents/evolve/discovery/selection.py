@@ -845,6 +845,26 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _empty_categorical_index_is_replaced(parsed: SiteProposal) -> bool:
+    """Obligatory preprocessing replaces the empty binary index.
+
+    The 09:45 Europe/Moscow resume saw ``BinaryCategoricalPreprocessor.fit``
+    store ``np.array([])`` as float64. The next preprocessing step assigns
+    ``categorical_idx`` from ``np.flatnonzero`` of the string type ids. A
+    random-forest fit and predict on two binary string columns returned
+    labels. The IndexError came from the probe slicing that array itself.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "categorical_idx" not in text or "float64" not in text.lower():
+        return False
+    return re.search(r"empty|np\.array\(\s*\[\]\s*\)", text, re.IGNORECASE) is not None
+
+
 def _binary_nan_encoder_already_substitutes(parsed: SiteProposal) -> bool:
     """``_apply_encoder`` already replaces raw NaN with the fitted sentinel.
 
@@ -962,6 +982,15 @@ def _first_pick_rejection(
             "test_data_with_mixed_types_per_column_processed_correctly expects "
             "7 importances. Do not gate that heuristic on integrality. Pick a "
             "different executed line or skip",
+        )
+    if _empty_categorical_index_is_replaced(parsed):
+        return (
+            "empty_categorical_index_replaced",
+            "After BinaryCategoricalPreprocessor.fit_transform, obligatory "
+            "preprocessing assigns categorical_idx from np.flatnonzero of the "
+            "string type ids. The empty float64 array does not reach a model. "
+            "A direct features[:, idx] in the probe is not a repository consumer. "
+            "Pick a different executed line or skip",
         )
     if _binary_nan_encoder_already_substitutes(parsed):
         return (
