@@ -111,6 +111,7 @@ from fedotllm.agents.evolve.controller.probes import (
     compare_with_prior_probe,
     infrastructure_probe_decision,
     mechanism_only_day_count,
+    tied_named_metric,
     narrow_datetime_revision,
     whole_conversion_scale_revision,
 )
@@ -2045,6 +2046,16 @@ def run_once(
                         + "\nPreserve the causal hypothesis, but correct the implementation "
                         "and all existing FEDOT contracts before DEV evaluation."
                     )
+                    tie = tied_named_metric(behavior_probe)
+                    if tie:
+                        # auc stayed 0.540 while the magnitude fell. Another
+                        # revision then deleted the helper and left the call.
+                        feedback = (
+                            f"The probe scored {tie} on both sides, so the metric "
+                            "did not move. A tied score does not get another "
+                            "source revision.\n"
+                            + feedback
+                        )
                     feedback = push_feedback(feedback)
                     record_attempt(
                         lead,
@@ -2062,6 +2073,8 @@ def run_once(
                     if blocked.infrastructure_error:
                         _record_final_skipped(journal, reason=blocked.reason)
                         return finish(blocked)
+                    if tie:
+                        break
                     grant_safety_extension("pytest", candidate, last.reason)
                     if advance_revision(last.reason):
                         continue

@@ -620,6 +620,86 @@ def test_day_count_flag_asks_for_a_model_score_before_pytest(tmp_path, monkeypat
     assert [row.get("gate") for row in extension] == ["scored_probe"]
 
 
+def test_tied_auc_does_not_get_a_pytest_revision(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "day counts", hypothesis_kind="quality")
+    feedback_seen: list[str] = []
+
+    def fake_fix(*_args, **kwargs):
+        feedback_seen.append(kwargs.get("feedback") or "")
+        return PatchCandidate(
+            "tied-auc",
+            edits=[PatchEdit("fedot/a.py", "return 1", "return 2")],
+            file_path="fedot/a.py",
+            behavior_probe="print('EVOLVE_OBSERVATION=auc=0.540')\n",
+        )
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fake_fix)
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {
+            "status": "changed",
+            "stock": {"observation": "maxabs=1.72316e+18;auc=0.540"},
+            "patched": {"observation": "maxabs=19944;auc=0.540"},
+        },
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: {"catboost": ScoreResult("catboost", "ok", 0.8)},
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_fedot_tests",
+        lambda *_a, **_k: TestResult(
+            "test_failures",
+            1,
+            failed_nodes={"test/unit/data/test_data_categorical.py::test_from_csv_with_cats"},
+            output="E AssertionError",
+        ),
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    decision = loop.run_once(
+        checkout=source,
+        workspace=tmp_path / "work",
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+
+    assert len(feedback_seen) == 1
+    assert decision.reason.startswith("fedot_tests_regressed")
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "work" / "journal.jsonl").read_text().splitlines()
+    ]
+    assert [row for row in rows if row.get("event") == "targeted_revision_extension"] == []
+    attempt = next(row for row in rows if row.get("event") == "decision" and row.get("revision") == 1)
+    assert "auc=0.540" in str(attempt.get("feedback") or "")
+
+
 def test_queued_day_count_flag_resumes_once(tmp_path):
     from fedotllm.agents.evolve.storage.replay import scored_day_count_resume
 

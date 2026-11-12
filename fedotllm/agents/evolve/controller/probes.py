@@ -287,6 +287,35 @@ def mechanism_only_day_count(behavior_probe: dict | None, patch_text: str) -> st
     )
 
 
+_NAMED_METRIC = re.compile(
+    r"\b(auc|roc_auc|accuracy|r2|mse|rmse|f1|logloss|score)\s*=\s*"
+    r"([+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def tied_named_metric(behavior_probe: dict | None) -> str:
+    """Named metric values that match on stock and the patch.
+
+    The 06:26 Moscow probe printed ``auc=0.540`` on both sides while the
+    magnitude changed. A tied score is not a reason to revise the source
+    again after pytest fails.
+    """
+
+    probe = behavior_probe or {}
+    if str(probe.get("status") or "") != "changed":
+        return ""
+    stock = _NAMED_METRIC.findall(str((probe.get("stock") or {}).get("observation") or ""))
+    patched = _NAMED_METRIC.findall(
+        str((probe.get("patched") or {}).get("observation") or "")
+    )
+    stock_metrics = {name.lower(): value for name, value in stock}
+    patched_metrics = {name.lower(): value for name, value in patched}
+    if not stock_metrics or stock_metrics != patched_metrics:
+        return ""
+    return ", ".join(f"{name}={stock_metrics[name]}" for name in sorted(stock_metrics))
+
+
 def _behavior_probe_blocks_candidate(result: dict) -> bool:
     """Cheap technical filter only. Toy no_change is not a quality veto.
 
