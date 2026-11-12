@@ -845,6 +845,36 @@ def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
     return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
 
 
+def _binary_nan_encoder_already_substitutes(parsed: SiteProposal) -> bool:
+    """``_apply_encoder`` already replaces raw NaN with the fitted sentinel.
+
+    The 09:11 Europe/Moscow catalog said a prediction row with a raw NaN raises
+    ``y contains previously unseen labels``. ``_apply_encoder`` writes
+    ``FEDOT_STR_NAN`` at those indices and maps the encoded sentinel back to
+    ``np.nan``. A logit pipeline fit and predict on that table returned labels.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if not re.search(
+        r"FEDOT_STR_NAN|BinaryCategorical|binary categorical",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    return (
+        re.search(
+            r"unseen labels|without (?:any )?substitution|does not substitute",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _datetime_integer_contract_forbids_nan(parsed: SiteProposal) -> bool:
     """``np_datetime_to_numeric`` documents an integer millisecond conversion.
 
@@ -932,6 +962,13 @@ def _first_pick_rejection(
             "test_data_with_mixed_types_per_column_processed_correctly expects "
             "7 importances. Do not gate that heuristic on integrality. Pick a "
             "different executed line or skip",
+        )
+    if _binary_nan_encoder_already_substitutes(parsed):
+        return (
+            "binary_nan_already_substituted",
+            "_apply_encoder already writes FEDOT_STR_NAN at NaN indices and maps "
+            "the encoded sentinel back to np.nan. A predict row with a raw NaN "
+            "does not raise unseen labels. Pick a different executed line or skip",
         )
     if _datetime_integer_contract_forbids_nan(parsed):
         return (
