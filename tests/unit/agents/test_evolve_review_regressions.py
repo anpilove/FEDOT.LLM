@@ -185,10 +185,13 @@ def test_audit_inconclusive_propagates_through_real_verifier(source, monkeypatch
         "runtime_error", code, stderr="AssertionError: value contract", exit_code=1, target_reached=True,
     ))
 
+    prompts: list[str] = []
+
     class Inference:
         def create(self, prompt, schema):
             if schema is verifier.ContractSupportAudit:
                 return schema(verdict="inconclusive", reason="missing lifecycle contract")
+            prompts.append(prompt)
             return schema(
                 action="verify_bug", claim="value contract",
                 reproduction_code="from fedot.a import Relevant\nx = Relevant()\nassert x.value == 2",
@@ -201,6 +204,8 @@ def test_audit_inconclusive_propagates_through_real_verifier(source, monkeypatch
     assert result.status == "inconclusive"
     assert not result.proceed
     assert "unsupported public-contract" not in result.detail
+    assert len(prompts) == 2
+    assert "Assert the failed behavior" in prompts[1]
 
 
 def test_annotated_int_or_recognizes_a_zero_seed():

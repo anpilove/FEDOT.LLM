@@ -702,6 +702,7 @@ def verify_lead(
     missed_target_retried = False
     unreached_target_retried = False
     syntax_probe_retried = False
+    contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
     step_budget = min(
@@ -1152,6 +1153,30 @@ def verify_lead(
                                     evidence=[coerced],
                                 )
                         if support_audit.verdict != "supported":
+                            if (
+                                support_audit.verdict == "inconclusive"
+                                and not contract_audit_retried
+                            ):
+                                # The 05:30 Moscow one-hot run already showed
+                                # the collapsed block, then a later crash was
+                                # audited as inconclusive and the lead ended.
+                                contract_audit_retried = True
+                                step_budget += 1
+                                output = (
+                                    "Contract support was inconclusive: "
+                                    f"{support_audit.reason}. "
+                                    "A crash before the behavior assertion does not "
+                                    "establish the claim. Assert the failed behavior "
+                                    "itself. If an earlier run already showed the "
+                                    "encoded block collapsed, reuse that input and "
+                                    "assert that collapse."
+                                )
+                                last_detail = output[:4_000]
+                                tool_history.append(
+                                    f"Step {step} action={action.value} output:\n"
+                                    f"```\n{last_detail}\n```"
+                                )
+                                continue
                             result = VerificationResult(
                                 "rejected" if support_audit.verdict == "unsupported" else "inconclusive",
                                 claim=parsed.claim or lead.why,
