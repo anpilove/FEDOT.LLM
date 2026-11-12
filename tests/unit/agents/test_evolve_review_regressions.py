@@ -285,6 +285,41 @@ def test_one_inconclusive_correctness_lead_is_resumed(tmp_path):
     seed_lead = next(item for item in resumed if item.line == 198)
     assert seed_lead.hypothesis_kind == "correctness"
     assert seed_lead.proposed_change.startswith("use None")
+    noisy = {
+        "file_path": "fedot/noisy.py",
+        "line": 390,
+        "hypothesis_kind": "correctness",
+        "why": "imputer state",
+    }
+    rows.extend([
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": noisy,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": noisy,
+         "reproduction": {"status": "inconclusive"}},
+        {"record_type": "finding", "outcome": "unverified_no_patch", "lead": noisy,
+         "reproduction": {"status": "rejected"}},
+    ])
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/core/data/data_split.py", 198),
+    ]
+    rows.append({
+        "record_type": "finding",
+        "outcome": "infrastructure_error",
+        "lead": parked,
+        "tests": {"status": "passed"},
+        "dev": {"reason": "regression pca->catboost timeout_or_invalid"},
+        "reproduction": {"status": "verified_bug"},
+    })
+    findings.write_text("\n".join(map(json.dumps, rows)))
+    resumed = replay.unfinished_correctness_leads(findings, limit=3)
+    assert ("fedot/core/data/data_split.py", 198) not in {
+        (item.file_path, item.line) for item in resumed
+    }
+    assert ("fedot/noisy.py", 390) not in {
+        (item.file_path, item.line) for item in resumed
+    }
 
 
 def test_context_failure_is_not_a_site_cooldown_or_completed_hypothesis(tmp_path):

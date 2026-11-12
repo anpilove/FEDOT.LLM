@@ -486,16 +486,47 @@ def _recent_completed_findings(
     return seen
 
 
+def _shared_protect_crash(row: dict[str, Any]) -> bool:
+    """A verified patch dropped because stock already crashed the same task."""
+
+    dev_reason = str((row.get("dev") or {}).get("reason") or "")
+    return (
+        row.get("outcome") == "infrastructure_error"
+        and (row.get("tests") or {}).get("status") == "passed"
+        and "timeout_or_invalid" in dev_reason
+    )
+
+
+def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
+    lead = row["lead"]
+    evidence = lead.get("evidence") or ()
+    signals = lead.get("signals") or ()
+    return MatchSite(
+        channel=str(lead.get("channel") or "llm"),
+        file_path=key[0],
+        line=key[1],
+        why=str(lead.get("why") or ""),
+        evidence=tuple(str(item) for item in evidence),
+        signals=tuple(str(item) for item in signals),
+        mechanism=str(lead.get("mechanism") or ""),
+        proposed_change=str(lead.get("proposed_change") or ""),
+        expected_metric_effect=str(lead.get("expected_metric_effect") or ""),
+        hypothesis_kind="correctness",
+    )
+
+
 def unfinished_correctness_leads(
     findings_path: Path | None,
     *,
     limit: int = 2,
 ) -> list[MatchSite]:
-    """Return correctness leads whose verifier stopped before a patch.
+    """Return correctness leads that still deserve a patch attempt.
 
-    One or two inconclusive attempts are resumed ahead of a new catalog walk.
-    A third inconclusive attempt for the same line is not resumed, and a later
-    finding with a patch replaces the unfinished row.
+    A verified patch dropped on one shared protect crash is resumed first.
+    A second drop of the same kind is not resumed. One or two inconclusive
+    attempts follow, behind that proven patch. A verifier rejection is
+    finished even when the outcome field is still ``unverified_no_patch``.
+    A third inconclusive attempt for the same line is not resumed.
     """
 
     if findings_path is None or not findings_path.is_file() or limit <= 0:
@@ -512,6 +543,7 @@ def unfinished_correctness_leads(
             rows.append(row)
     latest: dict[tuple[str, int], dict[str, Any]] = {}
     inconclusive_counts: dict[tuple[str, int], int] = {}
+    shared_crash_counts: dict[tuple[str, int], int] = {}
     for row in rows:
         lead = row.get("lead")
         if not isinstance(lead, dict) or not lead.get("file_path"):
@@ -529,40 +561,24 @@ def unfinished_correctness_leads(
             and reproduction.get("status") == "inconclusive"
         ):
             inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
-    resumed: list[MatchSite] = []
+        if _shared_protect_crash(row):
+            shared_crash_counts[key] = shared_crash_counts.get(key, 0) + 1
+    proven: list[MatchSite] = []
+    open_probes: list[MatchSite] = []
     for key, row in reversed(list(latest.items())):
-        if not 1 <= inconclusive_counts.get(key, 0) <= 2:
+        reproduction = row.get("reproduction") or {}
+        if reproduction.get("status") == "rejected":
             continue
-        outcome = row.get("outcome")
-        dev_reason = str((row.get("dev") or {}).get("reason") or "")
-        tests_passed = (row.get("tests") or {}).get("status") == "passed"
-        shared_crash = (
-            outcome == "infrastructure_error"
-            and tests_passed
-            and "timeout_or_invalid" in dev_reason
-        )
-        if outcome != "unverified_no_patch" and not shared_crash:
+        if _shared_protect_crash(row) and shared_crash_counts.get(key) == 1:
+            proven.append(_correctness_site(key, row))
             continue
-        lead = row["lead"]
-        evidence = lead.get("evidence") or ()
-        signals = lead.get("signals") or ()
-        resumed.append(
-            MatchSite(
-                channel=str(lead.get("channel") or "llm"),
-                file_path=key[0],
-                line=key[1],
-                why=str(lead.get("why") or ""),
-                evidence=tuple(str(item) for item in evidence),
-                signals=tuple(str(item) for item in signals),
-                mechanism=str(lead.get("mechanism") or ""),
-                proposed_change=str(lead.get("proposed_change") or ""),
-                expected_metric_effect=str(lead.get("expected_metric_effect") or ""),
-                hypothesis_kind="correctness",
-            )
-        )
-        if len(resumed) >= limit:
-            break
-    return resumed
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+            and 1 <= inconclusive_counts.get(key, 0) <= 2
+        ):
+            open_probes.append(_correctness_site(key, row))
+    return [*proven, *open_probes][:limit]
 
 
 def recent_completed_sites_from_findings(
