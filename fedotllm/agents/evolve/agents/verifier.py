@@ -319,6 +319,198 @@ def _call_name(call: ast.Call) -> str:
     return ""
 
 
+def _binary_midpoint_assertion(source: str, stderr: str) -> bool:
+    error = stderr or ""
+    if "AssertionError" not in error or "0.5" not in error:
+        return False
+    if "filled_column > mean_value" not in source or "filled_column < mean_value" not in source:
+        return False
+    return "0.75" in source
+
+
+def choice_coerced_mixed_column(code: str, stderr: str) -> str:
+    """A ``choice`` of strings and an int is not a mixed object column.
+
+    ``np.random.choice(['a', 'b', 1])`` stores every cell as ``str``,
+    including ``'1'``. The 12:46 Europe/Moscow probe then saw ``fit()``
+    complete and failed ``categorical_idx must remain a list``. ``fit``
+    assigns ``np.array``. A cell-wise object column of ``str`` and ``int``
+    makes ``np.unique`` raise ``TypeError``.
+    """
+
+    error = stderr or ""
+    if "AssertionError" not in error:
+        return ""
+    if "categorical_idx" not in error or "list" not in error:
+        return ""
+    text = code or ""
+    if "caught is None" not in text and "remain a list" not in text:
+        return ""
+    mixed = False
+    for match in re.finditer(r"\.choice\(\s*(\[[^\]]*\])", text):
+        group = match.group(1)
+        if not re.search(r"""['"][^'"]+['"]""", group):
+            continue
+        bare = re.sub(r"""['"][^'"]*['"]""", "", group)
+        if re.search(r"(?<![\w.])\d+", bare):
+            mixed = True
+            break
+    if not mixed:
+        return ""
+    return (
+        "np.random.choice on a list that mixes strings and an int stores "
+        "the int as the string '1'. fit() then never sees a mixed column, "
+        "so a completed fit does not disprove np.unique. Build an object "
+        "array and assign each cell: strings in one column and both str "
+        "and Python int in the other. Assert that "
+        "BinaryCategoricalPreprocessor.fit raises TypeError. Do not assert "
+        "that categorical_idx stays a list: fit assigns np.array."
+    )
+
+
+def mixed_int_str_unique_is_outside_contract(
+    source: str, line: int, stderr: str, code: str
+) -> str:
+    """A mixed int/str column is not a fit-completes input.
+
+    The 12:52 Europe/Moscow probe assigned ``[1, 'x', 2, 'y', 3, 'z']`` and
+    asserted ``caught is None``. Stock raised ``'<' not supported between
+    instances of 'str' and 'int'``. ``fit`` documents binary features that
+    have str objects, so that crash is not a contract violation.
+    """
+
+    del line
+    error = stderr or ""
+    if "not supported between instances" not in error:
+        return ""
+    if "int" not in error or "str" not in error:
+        return ""
+    if "caught is None" not in (code or ""):
+        return ""
+    if "has str objects" not in (source or ""):
+        return ""
+    return (
+        "A cell-wise object column of Python int and str makes np.unique "
+        "raise TypeError. BinaryCategoricalPreprocessor.fit documents "
+        "binary features that \"has str objects\", so fit is not required "
+        "to complete on it."
+    )
+
+
+def equal_category_mean_is_required(source: str, line: int, stderr: str) -> str:
+    """Return why a balanced binary gap must stay at the mean 0.5.
+
+    ``test_imputation_binary_features_with_equal_categories_correct`` says
+    equal category counts have no majority label, so the mean is inserted,
+    and asserts ``np.isclose(..., 0.5)``. The 11:54 Europe/Moscow patch
+    changed ``>`` to ``>=``. The probe then saw 1.0, and that test failed.
+    The 0.75 tip only maps values strictly above the midpoint.
+    """
+
+    del line
+    if not _binary_midpoint_assertion(source, stderr):
+        return ""
+    return (
+        "test_imputation_binary_features_with_equal_categories_correct "
+        "asserts the equal-count binary gap stays 0.5. The docstring says "
+        "there is no majority label, so the mean is inserted. Strict "
+        "inequalities around (min+max)/2 leave that midpoint in place."
+    )
+
+
+def binary_midpoint_left_unchanged(source: str, line: int, stderr: str) -> str:
+    """Do not treat a leftover 0.5 as a supported correctness bug.
+
+    The 11:25 audit saw ``[0.0, 0.5, 1.0]``. Snapping the midpoint failed
+    the frozen equal-category test at 11:54. That fill is the contract.
+    """
+
+    del source, line, stderr
+    return ""
+
+
+def replay_reaching_assertion(
+    checkout: Path,
+    lead: MatchSite,
+    stored: dict[str, str],
+) -> VerificationResult:
+    """Rerun a probe that already reached the target and failed its assertion.
+
+    The 11:38 Europe/Moscow resume spent seven verifier calls inventing probes
+    that never showed ``[0.0, 0.5, 1.0]``, then rejected the line. The 11:25
+    probe had already failed that assertion.
+    """
+
+    code = str(stored.get("code") or "")
+    stock = run_fedot_snippet(checkout, code)
+    try:
+        source = (checkout / lead.file_path).read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    stderr = stock.stderr or ""
+    denied = ""
+    coerced = ""
+    if "AssertionError" in stderr:
+        denied = equal_category_mean_is_required(source, lead.line, stderr)
+        coerced = (
+            ""
+            if denied
+            else (
+                binary_midpoint_left_unchanged(source, lead.line, stderr)
+                or discarded_callback_return(source, lead.line)
+                or annotated_int_or_coerces_zero(source, lead.line)
+            )
+        )
+    marker = "replayed stored reaching assertion"
+    claim = str(stored.get("claim") or lead.why)
+    expected = str(stored.get("expected") or "")
+    if denied:
+        return VerificationResult(
+            "rejected",
+            claim=claim,
+            expected=expected,
+            observed=stderr[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            evidence=(denied,),
+            detail=f"{marker}: {denied}",
+            target_reached=True,
+        )
+    if stock.status == "ok":
+        return VerificationResult(
+            "rejected",
+            claim=claim,
+            expected=expected,
+            observed=(stock.stdout or "")[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            detail=f"{marker}: stock satisfied the proposed healthy contract",
+            target_reached=stock.target_reached is True,
+        )
+    if coerced:
+        return VerificationResult(
+            "verified_bug",
+            claim=claim,
+            expected=expected,
+            observed=stderr[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            evidence=(coerced,),
+            detail=f"{marker}: {coerced}",
+            target_reached=True,
+        )
+    return VerificationResult(
+        "inconclusive",
+        claim=claim,
+        expected=expected,
+        observed=stderr[-1_000:],
+        reproduction_code=code,
+        stock_probe=stock,
+        detail=f"{marker}: contract still unsupported",
+        target_reached=stock.target_reached is True,
+    )
+
+
 def discarded_callback_return(source: str, line: int) -> str:
     """Return why an early-stopping callback is built and then dropped.
 
@@ -775,8 +967,12 @@ def verify_lead(
     )
     target_disagree_retried = False
     binary_reject_retried = False
+    subset_index_reject_retried = False
     all_nan_reject_retried = False
     callback_reject_retried = False
+    string_domain_reject_retried = False
+    string_domain_upcast_retried = False
+    empty_index_setup_retried = False
     contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
@@ -1126,6 +1322,32 @@ def verify_lead(
                 continue
             if (
                 correctness_only
+                and not subset_index_reject_retried
+                and "convert_to_dataframe" in claim_text
+                and "index 2 is out of bounds" in claim_text
+                and not any("index 2 is out of bounds" in item for item in tool_history)
+            ):
+                # The 13:10 Moscow reject said setdiff has no documented
+                # failure. The probes never called convert_to_dataframe.
+                subset_index_reject_retried = True
+                step_budget += 1
+                output = (
+                    "Import convert_to_dataframe from "
+                    "fedot.core.operations.evaluation.operation_implementations."
+                    "models.boostings_implementations. Build InputData with "
+                    "categorical_idx [0, 1] and numerical_idx [2, 3, 4]. Call "
+                    "subset_features(np.array([0, 1])), then "
+                    "convert_to_dataframe(subset, identify_cats=True). Assert "
+                    "IndexError: index 2 is out of bounds. Reject only after "
+                    "that call."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
                 and not all_nan_reject_retried
                 and "keep_empty_features" in claim_text
                 and "_categorical_numerical_union" in claim_text
@@ -1150,6 +1372,61 @@ def verify_lead(
                 )
                 continue
             history_text = "\n".join(tool_history)
+            if (
+                correctness_only
+                and not string_domain_reject_retried
+                and "convert_num_column_into_string_array" in claim_text
+                and ("1.0" in claim_text or "astype(str)" in claim_text)
+                and "category sets match" not in history_text
+                and "'0.0'" not in history_text
+            ):
+                # The 09:19 Moscow probe died unpacking a 1-D target. The
+                # reject cited the preprocessing docs and never printed the
+                # fit and predict string sets.
+                string_domain_reject_retried = True
+                step_budget += 1
+                output = (
+                    "A 1-D target dies in _check_columns_vs_types_number with "
+                    "not enough values to unpack before any string set is "
+                    "printed. Predict calls convert_num_column_into_string_array "
+                    "again. Reshape the target to (-1, 1). Fit on an int column "
+                    "with values 0, 1, 2, 3. Predict the same values as floats. "
+                    "Print both string sets. Reject only after those sets match. "
+                    "The preprocessing docs are not that comparison."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            verdict_text = f"{parsed.observed}\n{parsed.why}".lower()
+            if (
+                correctness_only
+                and not string_domain_upcast_retried
+                and "convert_num_column_into_string_array" in claim_text
+                and "sets equal" in verdict_text
+                and "column_stack" in history_text
+                and "dtype=object" not in history_text
+            ):
+                # The 09:27 Moscow comparison stacked ints with floats, so the
+                # ints were float64 before fit and both sets printed '0.0'.
+                string_domain_upcast_retried = True
+                step_budget += 1
+                output = (
+                    "np.column_stack of an int column and a float column "
+                    "promotes the ints to float64 before fit, so both sets "
+                    "print '0.0'. That is not a disproof. Build features as an "
+                    "object array. Put Python ints 0, 1, 2, 3 in the categorical "
+                    "column and a float in the other. Predict the same "
+                    "categorical values as Python floats. Print both string "
+                    "sets. Reject only when that object-array fit set equals "
+                    "the predict set."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
             if (
                 correctness_only
                 and not callback_reject_retried
@@ -1366,12 +1643,61 @@ def verify_lead(
                                 coerced = discarded_callback_return(
                                     source_text, target_lead.line
                                 )
-                            if coerced:
+                            if not coerced:
+                                denied = equal_category_mean_is_required(
+                                    source_text,
+                                    target_lead.line,
+                                    stock.stderr or "",
+                                )
+                                if denied:
+                                    support_audit = ContractSupportAudit(
+                                        verdict="unsupported",
+                                        reason=denied,
+                                        evidence=[denied],
+                                    )
+                            if not coerced:
+                                coerced = binary_midpoint_left_unchanged(
+                                    source_text,
+                                    target_lead.line,
+                                    stock.stderr or "",
+                                )
+                            if coerced and support_audit.verdict != "unsupported":
                                 support_audit = ContractSupportAudit(
                                     verdict="supported",
                                     reason=coerced,
                                     evidence=[coerced],
                                 )
+                            stringified = choice_coerced_mixed_column(
+                                parsed.reproduction_code or "",
+                                stock.stderr or "",
+                            )
+                            if (
+                                stringified
+                                and support_audit.verdict == "unsupported"
+                            ):
+                                support_audit = ContractSupportAudit(
+                                    verdict="inconclusive",
+                                    reason=stringified,
+                                    evidence=[stringified],
+                                )
+                        try:
+                            contract_source = (
+                                checkout / target_lead.file_path
+                            ).read_text(encoding="utf-8")
+                        except OSError:
+                            contract_source = ""
+                        outside = mixed_int_str_unique_is_outside_contract(
+                            contract_source,
+                            target_lead.line,
+                            stock.stderr or "",
+                            parsed.reproduction_code or "",
+                        )
+                        if outside:
+                            support_audit = ContractSupportAudit(
+                                verdict="unsupported",
+                                reason=outside,
+                                evidence=[outside],
+                            )
                         if support_audit.verdict != "supported":
                             if (
                                 support_audit.verdict == "inconclusive"
@@ -1382,15 +1708,18 @@ def verify_lead(
                                 # audited as inconclusive and the lead ended.
                                 contract_audit_retried = True
                                 step_budget += 1
-                                output = (
-                                    "Contract support was inconclusive: "
-                                    f"{support_audit.reason}. "
-                                    "A crash before the behavior assertion does not "
-                                    "establish the claim. Assert the failed behavior "
-                                    "itself. If an earlier run already showed the "
-                                    "encoded block collapsed, reuse that input and "
-                                    "assert that collapse."
-                                )
+                                if "stores the int as the string" in support_audit.reason:
+                                    output = support_audit.reason
+                                else:
+                                    output = (
+                                        "Contract support was inconclusive: "
+                                        f"{support_audit.reason}. "
+                                        "A crash before the behavior assertion does not "
+                                        "establish the claim. Assert the failed behavior "
+                                        "itself. If an earlier run already showed the "
+                                        "encoded block collapsed, reuse that input and "
+                                        "assert that collapse."
+                                    )
                                 last_detail = output[:4_000]
                                 tool_history.append(
                                     f"Step {step} action={action.value} output:\n"
@@ -1458,6 +1787,30 @@ def verify_lead(
                             "FedotLightGBMClassificationImplementation(params="
                             "OperationParameters(early_stopping_rounds=30, "
                             "use_eval_set=True))."
+                        )
+                    history_text = "\n".join(tool_history)
+                    if (
+                        not empty_index_setup_retried
+                        and "array([], dtype=float64)" in history_text
+                        and (
+                            "features_types" in (stock.stderr or "")
+                            or "missing 3 required positional arguments" in (stock.stderr or "")
+                            or "missing 1 required positional argument" in (stock.stderr or "")
+                        )
+                    ):
+                        # The 09:39 Moscow diagnostic already printed the empty
+                        # float64 index. Later probes rebuilt InputData.
+                        empty_index_setup_retried = True
+                        step_budget += 1
+                        detail += (
+                            " The diagnostic already printed categorical_idx "
+                            "array([], dtype=float64) and IndexError: arrays "
+                            "used as indices must be of integer (or boolean) "
+                            "type. Reuse that InputData: idx, features, target, "
+                            "task, data_type=DataTypesEnum.table, "
+                            "categorical_idx=np.array([0, 1]). Do not pass "
+                            "features_types. Assert the fitted categorical_idx "
+                            "has an integer dtype."
                         )
                     if "add_operation" in (stock.stderr or "") and (
                         "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))

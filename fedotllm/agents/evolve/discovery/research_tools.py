@@ -229,6 +229,91 @@ def _constructor_contract_source(checkout: Path, symbol, symbols: list) -> str:
     return "\n\n".join(parts)
 
 
+def _unique_module_file(checkout: Path, missing_module: str) -> str | None:
+    """Return one runtime file for a missing import, when the match is unique.
+
+    An exact ``operation_parameters.py`` is enough. ``operation_types`` has no
+    file of that name; the parent package holds
+    ``operation_types_repository.py``.
+    """
+
+    root = checkout.resolve()
+    fedot = root / "fedot"
+    if not fedot.is_dir():
+        return None
+    stem = (missing_module or "").rsplit(".", 1)[-1]
+    if not stem:
+        return None
+
+    def rel(path: Path) -> str | None:
+        if not path.is_file() or deny_write(path, checkout=root):
+            return None
+        try:
+            return path.resolve().relative_to(root).as_posix()
+        except (OSError, ValueError):
+            return None
+
+    exact = [
+        item
+        for path in sorted(fedot.rglob(f"{stem}.py"))
+        if (item := rel(path))
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    if exact:
+        return None
+    parent = root.joinpath(*(missing_module or "").split(".")[:-1])
+    if not parent.is_dir():
+        return None
+    try:
+        parent.resolve().relative_to(fedot)
+    except ValueError:
+        return None
+    nearby = [
+        item
+        for path in sorted(parent.glob("*.py"))
+        if path.name != "__init__.py"
+        and (
+            path.stem == stem
+            or path.stem.startswith(f"{stem}_")
+            or path.stem.endswith(f"_{stem}")
+        )
+        and (item := rel(path))
+    ]
+    if len(nearby) == 1:
+        return nearby[0]
+    return None
+
+
+def rewrite_missing_module_import(
+    checkout: Path,
+    code: str,
+    error: str,
+) -> str | None:
+    """Point a probe import at the one runtime file that matches the missing name."""
+
+    match = _MISSING_MODULE.search(error or "")
+    if match is None:
+        return None
+    missing = match.group(1)
+    if not missing or missing not in (code or ""):
+        return None
+    path = _unique_module_file(checkout, missing)
+    if path is None or not path.endswith(".py"):
+        return None
+    dotted = path[:-3].replace("/", ".")
+    if dotted == missing:
+        return None
+    rewritten = re.sub(
+        rf"(?<![\w.]){re.escape(missing)}(?![\w.])",
+        dotted,
+        code,
+    )
+    if rewritten == code:
+        return None
+    return rewritten
+
+
 def snippet_failure_context(
     checkout: Path,
     result: SnippetResult,
@@ -247,18 +332,11 @@ def snippet_failure_context(
 
     missing_module = _MISSING_MODULE.search(error)
     if missing_module:
-        basename = missing_module.group(1).rsplit(".", 1)[-1] + ".py"
-        candidates: list[str] = []
-        for path in sorted((checkout.resolve() / "fedot").rglob(basename)):
-            try:
-                rel = path.resolve().relative_to(checkout.resolve()).as_posix()
-            except (OSError, ValueError):
-                continue
-            if path.is_file() and not deny_write(path, checkout=checkout):
-                candidates.append(rel)
-        if len(candidates) == 1:
+        match = _unique_module_file(checkout, missing_module.group(1))
+        if match:
             parts.append(
-                f"Requested module path does not exist; unique matching runtime file: {candidates[0]}"
+                "Requested module path does not exist; unique matching runtime file: "
+                f"{match}"
             )
 
     for frame in inspect_trace(result.stderr, checkout=checkout)[-2:]:
@@ -279,7 +357,8 @@ def snippet_failure_context(
     if len(parts) == 1:
         return ""
     output = "\n\n".join(parts)
-    output = output[: max(0, max_chars)].rsplit("\n", 1)[0]
+    if len(output) > max_chars:
+        output = output[: max(0, max_chars)].rsplit("\n", 1)[0]
     _trace(
         {
             "tool": "api_recovery",

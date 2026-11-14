@@ -6986,6 +6986,50 @@ def test_advanced_index_view_claim_is_rejected_and_the_walk_continues(tmp_path: 
     )
 
 
+def test_sentinel_assignment_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "line 41 writes FEDOT_STR_NAN in-place and permanently "
+                        "into input_data.features for a non-binary categorical_idx"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "0 sentinel" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "sentinel_assignment_stays_on_copy"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
 def test_empty_categorical_features_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
 
@@ -7026,6 +7070,674 @@ def test_empty_categorical_features_claim_is_rejected_and_the_walk_continues(tmp
     assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
     assert any(
         row.get("status") == "constructor_fills_categorical_features"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_add_indicator_drop_in_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "add_indicator is a drop-in sklearn alternative for the "
+                        "missingness pattern"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "original width" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "indicator_columns_break_ids"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_categorical_most_frequent_claim_is_rejected_and_the_walk_continues(
+    tmp_path: Path,
+):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "most_frequent silently overrides a user-supplied "
+                        "strategy for the categorical imputer"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "non-numeric data" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "categorical_most_frequent_guards_strings"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_equal_category_mean_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "the midpoint-equality edge leaves mean-imputed binary "
+                        "cells uncorrected, so snap 0.5 with a strict comparison"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "equal-count binary gap stays 0.5" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "equal_category_mean_stays"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_one_hot_float32_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "line 109 casts the non-categorical block to float32 "
+                        "and quantizes wide-range timestamps; skip the cast "
+                        "when the block is already floating and keep float64"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "reduce_mem_usage" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "one_hot_float32_follows_memory_downcast"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_n_jobs_rewrite_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "fit calls replace_n_jobs_in_nodes and never restores "
+                        "n_jobs, so descriptive_id changes"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "descriptive_id" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "n_jobs_rewrite_is_contract"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_numerical_min_uniques_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "TableTypesCorrector hardcodes the threshold and "
+                        "silently drops numerical_min_uniques"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "categorical_max_uniques_th" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "numerical_min_uniques_is_docs_only"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_nan_target_scan_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "_find_features_lacking_nans counts NaNs before "
+                        "_drop_rows_with_nan_in_target, so a column that is "
+                        "fully observed on retained rows is removed"
+                    )
+                    fields["proposed_change"] = (
+                        "Reorder the drop so NaN-target rows are filtered first"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "ids [0]" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "nan_target_rows_change_width"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_one_hot_frame_branch_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "The DataFrame branch passes a numeric categorical column "
+                        "to the encoder without astype(str) and emits all-zero rows"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "handle_unknown" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "one_hot_frame_branch_unexecuted"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_empty_float_index_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "an empty categorical_idx becomes a float64 array from "
+                        "np.array([]) and later slices crash"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "np.flatnonzero" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "empty_categorical_index_replaced"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_string_cardinality_cap_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "Lines 320-322 unconditionally promote every string-typed "
+                        "column to categorical without the cardinality test"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "test_complicated_table_types_processed_correctly" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "string_columns_stay_categorical"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_subset_reindex_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "subset_features uses setdiff so categorical_idx must "
+                        "be re-based to local subset coordinates"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "feature_ids" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "subset_features_docstring_is_the_subset"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_mixed_unique_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "Executed line uses np.unique on object arrays; "
+                        "mixed-type categorical columns raise TypeError"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "has str objects" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "mixed_unique_outside_string_contract"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_binary_nan_unseen_label_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "transform on a raw NaN raises previously unseen labels "
+                        "because BinaryCategoricalPreprocessor applies the encoder "
+                        "without any substitution of FEDOT_STR_NAN"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "does not raise unseen labels" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "binary_nan_already_substituted"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_integrality_gate_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "an integrality gate keeps only integer-valued columns "
+                        "categorical and continuous float columns remain numeric"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "7 importances" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "low_cardinality_floats_stay_categorical"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_nat_to_nan_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "np_datetime_to_numeric turns NaT into a finite sentinel "
+                        "instead of NaN"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "integer milliseconds" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "datetime_contract_is_integer"
         for row in trace["llm_pick_rounds"]
     )
 
@@ -9458,6 +10170,42 @@ def test_snippet_failure_recovers_wrong_module_and_actual_api(tmp_path: Path):
     assert "def from_operation_type" in feedback
     assert "ModuleNotFoundError" in feedback
     assert len(feedback) <= 3_002
+
+
+def test_missing_module_rewrites_unique_nearby_file(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.research_tools import (
+        rewrite_missing_module_import,
+        snippet_failure_context,
+    )
+    from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    source = _source(tmp_path)
+    module = source / "fedot/core/repository/operation_types_repository.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("MARK = 'full'\n", encoding="utf-8")
+    (module.parent / "__init__.py").write_text("", encoding="utf-8")
+    (source / "fedot/core/__init__.py").write_text("", encoding="utf-8")
+    probe = (
+        "from fedot.core.repository.operation_types import MARK\n"
+        "print('EVOLVE_OBSERVATION=' + MARK)\n"
+    )
+    error = "ModuleNotFoundError: No module named 'fedot.core.repository.operation_types'"
+    failed = SnippetResult("runtime_error", probe, stderr=error)
+
+    recovery = snippet_failure_context(source, failed)
+    rewritten = rewrite_missing_module_import(source, probe, error)
+
+    assert "fedot/core/repository/operation_types_repository.py" in recovery
+    assert rewritten is not None
+    assert "from fedot.core.repository.operation_types_repository import MARK" in rewritten
+    ran = run_fedot_snippet(source, rewritten, timeout_s=30)
+    assert ran.status == "ok"
+    assert "EVOLVE_OBSERVATION=full" in ran.stdout
+
+    extra = module.parent / "operation_types_extra.py"
+    extra.write_text("MARK = 'other'\n", encoding="utf-8")
+    assert rewrite_missing_module_import(source, probe, error) is None
 
 
 def test_snippet_failure_recovers_inherited_constructor_fields(tmp_path: Path):
