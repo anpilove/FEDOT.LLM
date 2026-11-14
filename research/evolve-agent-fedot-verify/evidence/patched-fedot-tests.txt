@@ -1,0 +1,48 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.18, pytest-8.4.0, pluggy-1.6.0 -- /workspace/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.9.0, mock-3.14.1, asyncio-1.0.0, Faker-37.3.0, langsmith-0.3.45, cov-6.1.1
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_registry_like_profile_keeps_final_fit_reserve_out_of_search PASSED [ 14%]
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_exhausted_search_skips_candidates_but_keeps_final_reserve PASSED [ 28%]
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_invalid_budgets_fail_closed PASSED [ 42%]
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_validate_worker_kwargs_accepts_return_best_and_rejects_unknown PASSED [ 57%]
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_patched_fedot_accepts_evolve_worker_timeout_kwargs PASSED [ 71%]
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_return_best_shrinks_composing_window_by_final_fit_reserve PASSED [ 85%]
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable PASSED [100%]
+
+=============================== warnings summary ===============================
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+  /tmp/fedot-verify/FEDOT-return-best/fedot/preprocessing/data_types.py:411: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+    table_of_types = table_of_types.replace({np.nan: None}).applymap(lambda el: TYPE_TO_ID[type(el)])
+
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+  /workspace/.venv/lib/python3.11/site-packages/statsmodels/genmod/families/links.py:13: FutureWarning: The log link alias is deprecated. Use Log instead. The log link alias will be removed after the 0.15.0 release.
+    warnings.warn(
+
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+  /workspace/.venv/lib/python3.11/site-packages/statsmodels/genmod/families/links.py:13: FutureWarning: The identity link alias is deprecated. Use Identity instead. The identity link alias will be removed after the 0.15.0 release.
+    warnings.warn(
+
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+  /workspace/.venv/lib/python3.11/site-packages/statsmodels/genmod/families/links.py:13: FutureWarning: The inverse_power link alias is deprecated. Use InversePower instead. The inverse_power link alias will be removed after the 0.15.0 release.
+    warnings.warn(
+
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+  /workspace/.venv/lib/python3.11/site-packages/statsmodels/genmod/families/links.py:13: FutureWarning: The inverse_squared link alias is deprecated. Use InverseSquared instead. The inverse_squared link alias will be removed after the 0.15.0 release.
+    warnings.warn(
+
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+research/evolve-agent-fedot-verify/prototype/test_patched_fedot_return_best.py::test_limited_aa_smoke_on_synthetic_classification_is_measurable
+  /tmp/fedot-verify/FEDOT-return-best/fedot/preprocessing/data_types.py:473: FutureWarning: Setting an item of incompatible dtype is deprecated and will raise an error in a future version of pandas. Value '[]' has dtype incompatible with float64, please explicitly cast to a compatible dtype first.
+    numerical_column[true_nums.index] = true_nums.astype(str, copy=False)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 7 passed, 10 warnings in 5.47s ========================

@@ -1,0 +1,15 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.18, pytest-8.4.0, pluggy-1.6.0 -- /workspace/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.9.0, mock-3.14.1, asyncio-1.0.0, Faker-37.3.0, langsmith-0.3.45, cov-6.1.1
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 4 items
+
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_registry_like_profile_keeps_final_fit_reserve_out_of_search PASSED [ 25%]
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_exhausted_search_skips_candidates_but_keeps_final_reserve PASSED [ 50%]
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_invalid_budgets_fail_closed PASSED [ 75%]
+research/evolve-agent-fedot-verify/prototype/test_return_best_budget.py::test_validate_worker_kwargs_accepts_return_best_and_rejects_unknown PASSED [100%]
+
+============================== 4 passed in 0.09s ===============================

@@ -1,0 +1,4 @@
+1076 passed, 1 failed, 81 deselected
+FAILED tests/unit/agents/test_evolve_tuning_isolation.py::test_real_fedot_tuner_uses_isolated_objective[regression]
+Note: failure reproduces on HEAD without this PR diff (PyPI FEDOT/sklearn env);
+out of goal scope (goal subset: pin/preflight/worker/transfer/budget/parallel/recovery).

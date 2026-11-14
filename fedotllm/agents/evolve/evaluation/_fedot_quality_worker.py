@@ -19,6 +19,11 @@ import traceback as tb_mod
 from pathlib import Path
 
 from fedotllm.agents.evolve.storage.journal import write_json_atomic
+from fedotllm.agents.evolve.evaluation.fedot_pin_preflight import (
+    FAILURE_KIND_PIN_INCOMPATIBLE,
+    FedotPinIncompatibleError,
+    is_fedot_pin_parameter_keyerror,
+)
 from fedotllm.agents.evolve.evaluation.quality_registry import TUNING_EVALUATION_POLICIES
 
 STACK_DUMP_INTERVAL_SECONDS = 60.0
@@ -655,7 +660,7 @@ def main(argv: list[str] | None = None) -> int:
                 payload["metric_observations"]["python_line_trace_path"] = line_diagnostics.get("output_path")
                 with timings.measure("saved_payload"):
                     write_json_atomic(Path(args.out), payload)
-    return 0 if payload.get("status") != "crash" else 2
+    return 0 if payload.get("status") not in {"crash", "invalid"} else 2
 
 
 @contextmanager
@@ -850,33 +855,48 @@ def _evaluate_worker_with_logging(
                 )
             composer_options = dict(raw_composer_options)
             if candidate_dispatcher == "isolated-candidate-process-v1":
-                from fedot.core.optimisers.isolated_gp_optimizer import IsolatedEvoGraphOptimizer
+                try:
+                    from fedot.core.optimisers.isolated_gp_optimizer import IsolatedEvoGraphOptimizer
+                except ImportError as exc:
+                    raise FedotPinIncompatibleError(
+                        "FEDOT pin lacks IsolatedEvoGraphOptimizer required by "
+                        "candidate_dispatcher=isolated-candidate-process-v1",
+                        detail=f"{type(exc).__name__}: {exc}",
+                    ) from exc
 
                 composer_options["optimizer"] = IsolatedEvoGraphOptimizer
             timeout_policy_options = (
                 {"max_pipeline_evaluation_time": float(max_pipeline_evaluation_time_seconds) / 60.0}
                 if fedot_timeout_policy == "return_best" else {}
             )
-            model = Fedot(
-                problem=dataset.problem,
-                timeout=timeout_minutes,
-                seed=int(spec["seed"]),
-                n_jobs=int(spec["n_jobs"]),
-                preset=str(spec["preset"]),
-                with_tuning=bool(spec["with_tuning"]),
-                timeout_policy=str(fedot_timeout_policy),
-                final_fit_reserve_seconds=final_fit_reserve_seconds,
-                cv_folds=cv_folds,
-                max_pipeline_fit_time=float(max_pipeline_fit_time_seconds) / 60.0,
-                metric=dataset.metric,
-                safe_mode=False,
-                logging_level=logging.INFO,
-                cache_dir=str(cache_dir),
-                **cache_flags,
-                **timeout_policy_options,
-                **extra,
-                **composer_options,
-            )
+            try:
+                model = Fedot(
+                    problem=dataset.problem,
+                    timeout=timeout_minutes,
+                    seed=int(spec["seed"]),
+                    n_jobs=int(spec["n_jobs"]),
+                    preset=str(spec["preset"]),
+                    with_tuning=bool(spec["with_tuning"]),
+                    timeout_policy=str(fedot_timeout_policy),
+                    final_fit_reserve_seconds=final_fit_reserve_seconds,
+                    cv_folds=cv_folds,
+                    max_pipeline_fit_time=float(max_pipeline_fit_time_seconds) / 60.0,
+                    metric=dataset.metric,
+                    safe_mode=False,
+                    logging_level=logging.INFO,
+                    cache_dir=str(cache_dir),
+                    **cache_flags,
+                    **timeout_policy_options,
+                    **extra,
+                    **composer_options,
+                )
+            except KeyError as exc:
+                if fedot_timeout_policy == "return_best" and is_fedot_pin_parameter_keyerror(exc):
+                    raise FedotPinIncompatibleError(
+                        "FEDOT pin rejects timeout_policy=return_best worker kwargs",
+                        detail=f"KeyError: {exc}",
+                    ) from exc
+                raise
             assert_cache_policy(model, cache_flags, cache_attributes, phase="before fit")
             fit_arguments = {"features": fold["X_train"]}
             if not ts:
@@ -969,10 +989,15 @@ def _evaluate_worker_with_logging(
     except Exception as exc:
         failed_stage = timings.failed_stage
         is_fedot_budget_timeout = _is_fedot_budget_timeout(exc)
+        is_pin_incompatible = isinstance(exc, FedotPinIncompatibleError) or (
+            isinstance(exc, KeyError) and is_fedot_pin_parameter_keyerror(exc)
+        )
         if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
             failure_kind = "storage_error"
         elif is_fedot_budget_timeout:
             failure_kind = "fedot_budget_timeout"
+        elif is_pin_incompatible:
+            failure_kind = FAILURE_KIND_PIN_INCOMPATIBLE
         elif failed_stage == "fedot_import":
             failure_kind = "fedot_import_error"
         elif failed_stage in {"predict", "metrics"}:
@@ -981,9 +1006,15 @@ def _evaluate_worker_with_logging(
             failure_kind = "fedot_fit_error"
         else:
             failure_kind = "worker_error"
+        if is_fedot_budget_timeout:
+            status = "timeout"
+        elif is_pin_incompatible:
+            status = "invalid"
+        else:
+            status = "crash"
         payload = {
             "task_id": spec.get("source_dataset", ""),
-            "status": "timeout" if is_fedot_budget_timeout else "crash",
+            "status": status,
             "failure_kind": failure_kind,
             "failed_stage": failed_stage,
             "last_stage": timings.last_stage,
@@ -994,6 +1025,7 @@ def _evaluate_worker_with_logging(
             "seed": int(spec.get("seed") or 42),
             "metric_observations": {
                 "search_ran": False,
+                "failure_kind": failure_kind,
                 "fedot_trace_enabled": bool(spec.get("fedot_trace_dir")),
                 "fedot_trace_dir": spec.get("fedot_trace_dir"),
                 "fedot_trace_interval_seconds": spec.get("fedot_trace_interval_seconds"),

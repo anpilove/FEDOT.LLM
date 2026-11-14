@@ -1,0 +1,30 @@
+# Sketch only — not applied. Target: aimclub/FEDOT @ 8990f28b
+# Goal: accept EvolveAgent worker kwargs and reserve final-fit time under return_best.
+#
+# Files to change in FEDOT:
+#   fedot/api/api_utils/api_params_repository.py
+#   fedot/api/time.py
+#   fedot/api/api_utils/api_composer.py  (stop composing/tuning at search_deadline)
+#   fedot/api/main.py                   (document timeout_policy)
+#   test/unit/api/test_return_best_timeout_policy.py
+#
+# Minimal ApiParamsRepository addition:
+--- a/fedot/api/api_utils/api_params_repository.py
++++ b/fedot/api/api_utils/api_params_repository.py
+@@
+             with_tuning=True,
+             seed=None
++            ,
++            timeout_policy='legacy',
++            final_fit_reserve_seconds=0,
++            max_pipeline_evaluation_time=None,
+         )
+         return default_param_values_dict
+
+# Minimal ApiTime contract (pseudocode):
+#   if timeout_policy == 'return_best':
+#       search_deadline = time_for_automl*60 - final_fit_reserve_seconds
+#       composing/tuning must stop at search_deadline
+#       final refit may use only final_fit_reserve_seconds
+#       slow candidates whose remaining_search_seconds == 0 are skipped
+#       never invent a metric when no fitted incumbent exists
