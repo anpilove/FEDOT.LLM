@@ -486,6 +486,760 @@ def _recent_completed_findings(
     return seen
 
 
+def _shared_protect_crash(row: dict[str, Any]) -> bool:
+    """A verified patch dropped because stock already crashed the same task."""
+
+    dev_reason = str((row.get("dev") or {}).get("reason") or "")
+    return (
+        row.get("outcome") == "infrastructure_error"
+        and (row.get("tests") or {}).get("status") == "passed"
+        and "timeout_or_invalid" in dev_reason
+    )
+
+
+def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
+    """A reject that says a non-binary column is never added, without a probe.
+
+    ``dict.update`` does not delete the key from the earlier transform, so
+    ``_correct_binary_ids_features`` still snaps that column. The 06:52
+    Europe/Moscow reject stated the opposite and never ran the two transforms.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    detail = str(reproduction.get("detail") or "")
+    return "more than two unique values" in detail and "never added" in detail
+
+
+def _discarded_callback_unproved(row: dict[str, Any]) -> bool:
+    """A reject that treats the dropped early-stopping callback as undocumented.
+
+    ``update_callbacks`` calls ``lgbm_early_stopping`` and returns ``[]``.
+    ``fit`` passes that list as ``callbacks=``. The 08:10 Europe/Moscow audit
+    saw the empty return and rejected it because the method has no docstring.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "lgbm_early_stopping" not in why:
+        return False
+    if reproduction.get("patched") == "still_failing":
+        return True
+    if reproduction.get("status") != "rejected":
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return "returns []" in text or "empty list" in text or "callbacks=[]" in text
+
+
+def _union_symbol_unresolved(row: dict[str, Any]) -> bool:
+    """The short union name was rejected before any mixed-table probe ran.
+
+    ``ImputationImplementation._categorical_numerical_union`` is the qualified
+    symbol. A proposal that names only ``_categorical_numerical_union`` on that
+    function's line is the same target. The 07:47 Europe/Moscow run was the
+    third recorded inconclusive, which would close the line without a probe.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "inconclusive":
+        return False
+    if "symbol and source line disagree" not in str(reproduction.get("observed") or ""):
+        return False
+    lead = row.get("lead") or {}
+    text = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    return "_categorical_numerical_union" in text
+
+
+def _all_nan_union_unproved(row: dict[str, Any]) -> bool:
+    """A reject that treats a silent narrower array as disproof of the union.
+
+    sklearn 1.3 SimpleImputer drops an all-NaN column. A numerical-only
+    transform returns that narrower array without raising. The union with a
+    categorical column raises ``ValueError: Shape of passed values is (4, 1),
+    indices imply (4, 2)``. The 07:29 Europe/Moscow reject stopped on the
+    numerical-only call.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    detail = str(reproduction.get("detail") or "")
+    return "all-NaN column completed without error" in detail
+
+
+def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
+    lead = row["lead"]
+    evidence = lead.get("evidence") or ()
+    signals = lead.get("signals") or ()
+    why = str(lead.get("why") or "")
+    observed = str((row.get("reproduction") or {}).get("observed") or "")
+    if "probe must import FEDOT" in observed and "import fedot" not in why.lower():
+        why = (
+            f"{why} The previous probe was rejected before it ran because it did "
+            "not import fedot. The next reproduction must import fedot and assert "
+            "the claimed behavior on the same fitted object."
+        ).strip()
+    if (
+        "operation_info_by_id" in observed
+        and "ImputationImplementation()" not in why
+    ):
+        why = (
+            f"{why} The previous probe built an Operation and crashed with "
+            "operation_info_by_id. Construct ImputationImplementation() directly. "
+            "Fit once, transform a two-value numeric column, then transform that "
+            "same instance when the column has more than two unique values."
+        ).strip()
+    reproduction = row.get("reproduction") or {}
+    if (
+        "'dict' object has no attribute 'to_dict'" in observed
+        and "lgbm_early_stopping" in (why + str(lead.get("mechanism") or ""))
+        and "Pass OperationParameters" not in why
+    ):
+        why = (
+            f"{why} Pass OperationParameters, not a dict. Construct "
+            "FedotLightGBMClassificationImplementation(params=OperationParameters("
+            "early_stopping_rounds=30, use_eval_set=True))."
+        ).strip()
+    probe = reproduction.get("patched_probe") or {}
+    if (
+        reproduction.get("patched") == "still_failing"
+        and "EarlyStoppingCallback" in str(probe.get("stderr") or "")
+        and "no public EarlyStoppingCallback" not in why
+    ):
+        why = (
+            f"{why} The length assertion passed. lightgbm.callback has no public "
+            "EarlyStoppingCallback; the class is _EarlyStoppingCallback. Keep "
+            "callback.append(lgbm_early_stopping(...)). The contract is a list of "
+            "length 1 whose stopping_rounds equals early_stopping_rounds."
+        ).strip()
+    if _discarded_callback_unproved(row) and "passes that list as callbacks=" not in why:
+        why = (
+            f"{why} The returned list is the contract. fit passes that list as "
+            "callbacks=. lgbm_early_stopping's result is discarded, so the list "
+            "stays empty. Assert that update_callbacks returns a non-empty list "
+            "when early_stopping_rounds is an int. Do not require the fitted "
+            "tree count to change."
+        ).strip()
+    if (
+        "'list' object has no attribute 'size'" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "must be numpy arrays" not in why
+    ):
+        why = (
+            f"{why} categorical_idx and numerical_idx must be numpy arrays. "
+            "A Python list has no size attribute and crashes in fit before the union."
+        ).strip()
+    if (
+        "add_operation" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "has no add_operation" not in why
+    ):
+        why = (
+            f"{why} PipelineBuilder has no add_operation. Do not build a pipeline. "
+            "Construct ImputationImplementation() and call fit and transform on one "
+            "table with a numeric all-NaN column and a categorical column."
+        ).strip()
+    if (
+        "symbol and source line disagree" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "columns=self.non_categorical_ids" not in why
+    ):
+        why = (
+            f"{why} The previous probe named a symbol that does not contain the "
+            "source line. Use symbol _categorical_numerical_union and the DataFrame "
+            "line that passes columns=self.non_categorical_ids."
+        ).strip()
+    if _all_nan_union_unproved(row) and "indices imply" not in why:
+        why = (
+            f"{why} SimpleImputer drops an all-NaN column. A numerical-only "
+            "transform can return a narrower array without raising, and that "
+            "does not disprove the union. Construct ImputationImplementation(), "
+            "fit and transform one table with a numeric all-NaN column and a "
+            "categorical column, and assert the ValueError whose message contains "
+            "indices imply."
+        ).strip()
+    if _stale_binary_key_unproved(row) and "does not delete a key" not in why:
+        why = (
+            f"{why} dict.update does not delete a key from an earlier transform. "
+            "fit does not call _find_binary_features. A column with more than two "
+            "unique values keeps the old key, and _correct_binary_ids_features still "
+            "snaps it. The next reproduction must import fedot, fit once, transform "
+            "a two-value column, then transform that same object when the column has "
+            "more than two unique values, and assert the second result was not snapped "
+            "to the first min and max."
+        ).strip()
+    return MatchSite(
+        channel=str(lead.get("channel") or "llm"),
+        file_path=key[0],
+        line=key[1],
+        why=why,
+        evidence=tuple(str(item) for item in evidence),
+        signals=tuple(str(item) for item in signals),
+        mechanism=str(lead.get("mechanism") or ""),
+        proposed_change=str(lead.get("proposed_change") or ""),
+        expected_metric_effect=str(lead.get("expected_metric_effect") or ""),
+        hypothesis_kind="correctness",
+    )
+
+
+def _supersedes_proven_patch(row: dict[str, Any]) -> bool:
+    """A later decisive result replaces a patch that was only dropped on a crash."""
+
+    reproduction = row.get("reproduction") or {}
+    if reproduction.get("status") == "rejected":
+        return True
+    outcome = str(row.get("outcome") or "")
+    if outcome in {
+        "rejected",
+        "correctness_keep",
+        "correctness_keep_with_metric_signal",
+    }:
+        return True
+    tests = row.get("tests") or {}
+    return isinstance(tests, dict) and tests.get("status") not in {None, "", "passed"}
+
+
+_MISSED_TARGET_MARKERS = (
+    "did not execute the claimed target method",
+    "without executing the claimed target method",
+    "probe syntax error",
+    "crashed before its contract assertion",
+)
+# Four misses stay open. The 05:19 Moscow attempt still died on an import
+# the feedback described as a private entry point, so one more try remains.
+# The fifth miss closes the line.
+_MAX_OPEN_MISSED_TARGET_ATTEMPTS = 4
+
+
+def _probe_missed_target(row: dict[str, Any]) -> bool:
+    """A probe that never executed the claimed method is not a finished test."""
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return False
+    if reproduction.get("status") != "inconclusive":
+        return False
+    if reproduction.get("target_reached") is True:
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return any(marker in text for marker in _MISSED_TARGET_MARKERS)
+
+
+def _correctness_resume_plan(
+    findings_path: Path | None,
+) -> list[tuple[MatchSite, dict[str, Any] | None]]:
+    """Proven shared-crash patches first, then still-open inconclusive probes."""
+
+    if findings_path is None or not findings_path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("record_type") == "finding":
+            rows.append(row)
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    inconclusive_counts: dict[tuple[str, int], int] = {}
+    missed_counts: dict[tuple[str, int], int] = {}
+    shared_crash_counts: dict[tuple[str, int], int] = {}
+    proven_rows: dict[tuple[str, int], dict[str, Any]] = {}
+    superseded: set[tuple[str, int]] = set()
+    for row in rows:
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        if lead.get("hypothesis_kind") != "correctness":
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+        reproduction = row.get("reproduction") or {}
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+        ):
+            if _probe_missed_target(row):
+                missed_counts[key] = missed_counts.get(key, 0) + 1
+            else:
+                inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+        if _shared_protect_crash(row):
+            shared_crash_counts[key] = shared_crash_counts.get(key, 0) + 1
+            proven_rows[key] = row
+            superseded.discard(key)
+        elif key in proven_rows and _supersedes_proven_patch(row):
+            superseded.add(key)
+    proven: list[tuple[MatchSite, dict[str, Any]]] = []
+    open_probes: list[tuple[MatchSite, None]] = []
+    for key, row in reversed(list(latest.items())):
+        proven_row = proven_rows.get(key)
+        if (
+            proven_row is not None
+            and shared_crash_counts.get(key) == 1
+            and key not in superseded
+        ):
+            proven.append((_correctness_site(key, proven_row), proven_row))
+            continue
+        reproduction = row.get("reproduction") or {}
+        if (
+            _stale_binary_key_unproved(row)
+            or _all_nan_union_unproved(row)
+            or _union_symbol_unresolved(row)
+            or _discarded_callback_unproved(row)
+        ):
+            open_probes.append((_correctness_site(key, row), None))
+            continue
+        if reproduction.get("status") == "rejected":
+            continue
+        if _probe_missed_target(row):
+            # An older real inconclusive must not resume a line whose latest
+            # probe still missed the method after the open-attempt cap.
+            if 1 <= missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS:
+                open_probes.append((_correctness_site(key, row), None))
+            continue
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+            and 1 <= inconclusive_counts.get(key, 0) <= 2
+        ):
+            open_probes.append((_correctness_site(key, row), None))
+    return [*proven, *open_probes]
+
+
+def scored_day_count_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a queued day-count edit whose probe never scored a model.
+
+    Stop once any finding for the line already asks for that score.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import mechanism_only_day_count
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any(
+            "does not show a model improved" in str(row.get("feedback") or "")
+            for row in rows
+        ):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason != "queued_for_fedot_quality":
+            continue
+        edits = latest.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "")
+            for item in edits
+            if isinstance(item, dict)
+        )
+        note = mechanism_only_day_count(latest.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = latest["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
+def whole_scale_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a site whose patch divided every converted column.
+
+    The dividing edit can sit on an earlier finding. The latest row is often
+    ``no_patch`` with empty edits. Resume once, until some finding already
+    records the column-wise instruction.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import (
+        divides_whole_conversion,
+        whole_conversion_scale_revision,
+    )
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any("only datetime columns" in str(row.get("feedback") or "") for row in rows):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason != "no_patch" and not reason.startswith("fedot_tests_regressed"):
+            continue
+        dividing = None
+        for row in reversed(rows):
+            edits = row.get("edits") or []
+            patch_text = "\n".join(
+                str(item.get("new_code") or "")
+                for item in edits
+                if isinstance(item, dict)
+            )
+            if divides_whole_conversion(patch_text):
+                dividing = row
+                break
+        if dividing is None:
+            continue
+        note = whole_conversion_scale_revision(
+            dividing.get("behavior_probe") or {},
+            "\n".join(
+                str(item.get("new_code") or "")
+                for item in (dividing.get("edits") or [])
+                if isinstance(item, dict)
+            ),
+        )
+        if not note:
+            continue
+        lead = latest["lead"] if isinstance(latest.get("lead"), dict) else dividing["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
+def narrow_datetime_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """One more fixer pass for a queued pure-datetime dtype branch.
+
+    The 05:47 Moscow logit probe moved from 0.000 to 0.958 on a single
+    datetime64 column. A mixed table never enters that branch. Resume once,
+    with feedback that asks for a column-wise conversion.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import narrow_datetime_revision
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+    for key, row in reversed(list(latest.items())):
+        reason = str((row.get("dev") or {}).get("reason") or "")
+        if reason != "queued_for_fedot_quality":
+            continue
+        if "single datetime64 column" in str(row.get("feedback") or ""):
+            continue
+        edits = row.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "") for item in edits if isinstance(item, dict)
+        )
+        note = narrow_datetime_revision(row.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = row["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
+def unfinished_correctness_leads(
+    findings_path: Path | None,
+    *,
+    limit: int = 2,
+) -> list[MatchSite]:
+    """Return correctness leads that still deserve a patch attempt.
+
+    A verified patch dropped on one shared protect crash is resumed first,
+    even when a later inconclusive probe was recorded for the same line.
+    A second drop of the same kind is not resumed. One or two inconclusive
+    attempts follow, behind that proven patch. A verifier rejection is
+    finished even when the outcome field is still ``unverified_no_patch``.
+    A third inconclusive attempt for the same line is not resumed.
+    Probes that never executed the claimed method stay open through four
+    misses, then close.
+    """
+
+    if limit <= 0:
+        return []
+    return [site for site, _row in _correctness_resume_plan(findings_path)[:limit]]
+
+
+def _replay_pair(
+    row: dict[str, Any],
+) -> tuple[VerificationResult, PatchCandidate] | None:
+    edits: list[PatchEdit] = []
+    for item in row.get("edits") or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("file_path") or "")
+        old_code = str(item.get("old_code") or "")
+        new_code = str(item.get("new_code") or "")
+        if file_path and old_code and new_code and old_code != new_code:
+            edits.append(PatchEdit(file_path, old_code, new_code))
+    reproduction = row.get("reproduction") or {}
+    code = str(reproduction.get("code") or "")
+    if not edits or not code:
+        return None
+    alternatives = reproduction.get("alternatives_considered") or ()
+    risks = reproduction.get("risks") or ()
+    verification = VerificationResult(
+        "verified_bug",
+        claim=str(reproduction.get("claim") or ""),
+        expected=str(reproduction.get("expected") or ""),
+        observed=str(reproduction.get("observed") or ""),
+        reproduction_code=code,
+        detail="replayed a verified patch dropped on a shared protect crash",
+        current_approach=str(reproduction.get("current_approach") or ""),
+        proposed_approach=str(reproduction.get("proposed_approach") or ""),
+        alternatives_considered=tuple(str(item) for item in alternatives),
+        generality=str(reproduction.get("generality") or ""),
+        risks=tuple(str(item) for item in risks),
+    )
+    candidate = PatchCandidate(
+        candidate_id=str(row.get("candidate_id") or "replayed-correctness"),
+        edits=edits,
+        rationale=(
+            "Replay the verified patch. The previous drop was a protect crash "
+            "that stock already had."
+        ),
+    )
+    return verification, candidate
+
+
+def proven_correctness_replay(
+    findings_path: Path | None,
+) -> dict[tuple[str, int], tuple[VerificationResult, PatchCandidate]]:
+    """Reapply a verified patch instead of spending another verifier budget.
+
+    The returned candidate is the exact edit from the finding. The verifier
+    result carries the probe that already showed stock failing and the patch
+    resolving it, so the campaign can rerun that probe on the replayed edit.
+    """
+
+    replayed: dict[tuple[str, int], tuple[VerificationResult, PatchCandidate]] = {}
+    for site, row in _correctness_resume_plan(findings_path):
+        if row is None:
+            continue
+        pair = _replay_pair(row)
+        if pair is not None:
+            replayed[(site.file_path, site.line)] = pair
+    return replayed
+
+
+def closed_correctness_sites(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> set[tuple[str, int]]:
+    """Sites a new catalog must not pick again on this source.
+
+    A rejected reproduction, a kept correctness patch, and a third inconclusive
+    attempt are finished. One or two inconclusive attempts stay available.
+    """
+
+    if findings_path is None or not findings_path.is_file():
+        return set()
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    inconclusive_counts: dict[tuple[str, int], int] = {}
+    missed_counts: dict[tuple[str, int], int] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or lead.get("hypothesis_kind") != "correctness":
+            continue
+        if not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+        reproduction = row.get("reproduction") or {}
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+        ):
+            if _probe_missed_target(row):
+                missed_counts[key] = missed_counts.get(key, 0) + 1
+            else:
+                inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+    closed: set[tuple[str, int]] = set()
+    for key, row in latest.items():
+        outcome = str(row.get("outcome") or "")
+        reproduction = str((row.get("reproduction") or {}).get("status") or "")
+        healthy_without_target = (
+            reproduction == "rejected"
+            and str((row.get("reproduction") or {}).get("detail") or "").startswith(
+                "stock satisfied the proposed healthy contract"
+            )
+            and (row.get("reproduction") or {}).get("target_reached") is not True
+        )
+        if healthy_without_target:
+            continue
+        if (
+            _stale_binary_key_unproved(row)
+            or _all_nan_union_unproved(row)
+            or _union_symbol_unresolved(row)
+            or _discarded_callback_unproved(row)
+        ):
+            continue
+        if (
+            _probe_missed_target(row)
+            and missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS
+        ):
+            continue
+        if outcome in {
+            "correctness_keep",
+            "correctness_keep_with_metric_signal",
+            "rejected",
+        } or reproduction == "rejected":
+            closed.add(key)
+        elif missed_counts.get(key, 0) >= _MAX_OPEN_MISSED_TARGET_ATTEMPTS + 1:
+            closed.add(key)
+        elif (
+            outcome == "unverified_no_patch"
+            and reproduction == "inconclusive"
+            and inconclusive_counts.get(key, 0) >= 3
+        ):
+            closed.add(key)
+    return closed
+
+
+def closed_hunt_sites(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> set[tuple[str, int]]:
+    """Sites already judged on this source, including failed quality patches.
+
+    A line whose patch failed the unit tests, or that the fixer refused, is
+    not offered to the next catalog. Correctness keeps and exhausted probes
+    stay closed as well.
+    """
+
+    closed = set(closed_correctness_sites(findings_path, source_hash=source_hash))
+    if findings_path is None or not findings_path.is_file():
+        return closed
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        tests = (row.get("tests") or {}).get("status")
+        outcome = str(row.get("outcome") or "")
+        reason = str((row.get("dev") or {}).get("reason") or "")
+        if (
+            tests == "test_failures"
+            or outcome == "rejected_tests"
+            or reason.startswith(("fedot_tests_regressed", "duplicate_patch", "cannot_fix"))
+            or reason == "cannot_fix"
+        ):
+            closed.add(key)
+    return closed
+
+
 def recent_completed_sites_from_findings(
     findings_path: Path | None, **filters
 ) -> set[tuple[str, int]]:
@@ -689,7 +1443,11 @@ def tried_patch_hashes_from_findings(
             source_hash=source_hash,
             evaluation_protocol_hash=evaluation_protocol_hash,
         )
-        if not _probe_only_rejection(row) and not _cheap_screen_not_quality_verdict(row)
+        if (
+            not _probe_only_rejection(row)
+            and not _cheap_screen_not_quality_verdict(row)
+            and not _shared_protect_crash(row)
+        )
     }
 
 

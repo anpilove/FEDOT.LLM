@@ -148,6 +148,9 @@ class VerificationResult:
     generality: str = ""
     risks: tuple[str, ...] = ()
     resolved_target: dict = field(default_factory=dict)
+    # True only when a healthy probe actually executed the claimed method.
+    # A rejection that never reached the line stays available to the next catalog.
+    target_reached: bool | None = None
 
     @property
     def proceed(self) -> bool:

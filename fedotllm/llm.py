@@ -219,6 +219,11 @@ class AIInference:
                 try:
                     return self._complete(messages)
                 except LLMRequestTimeout as exc:
+                    # A stage reserve inherits the timeout type so provider
+                    # retries stay suppressed, but it is not a model failure
+                    # and must not walk the fallback chain.
+                    if type(exc).__name__ == "EvolveBudgetExhausted":
+                        raise
                     last = exc
                     logger.warning("LLM timeout on %s, trying fallback", model)
                     continue

@@ -34,7 +34,21 @@ def resolve_verification_target(checkout: Path, lead: MatchSite, *, file_path: s
     if not matches:
         raise ValueError("verification target line is outside any source class/function")
     _, _, qualified = max(matches)
-    if symbol.strip() and symbol.strip() != qualified:
+    offered = symbol.strip()
+    # A verifier often names the import path or only the method. That still
+    # identifies the enclosing function; a different function at the same line
+    # does not. The 07:47 Europe/Moscow union probe named
+    # `_categorical_numerical_union` on its own source line and was rejected
+    # because the qualified name also includes the class.
+    leaf = qualified.rsplit(".", 1)[-1]
+    agrees = (
+        not offered
+        or offered == qualified
+        or offered.endswith("." + qualified)
+        or offered == leaf
+        or offered.endswith("." + leaf)
+    )
+    if not agrees:
         raise ValueError("verification target symbol and source line disagree")
     relative = path.relative_to(root).as_posix()
     target = {

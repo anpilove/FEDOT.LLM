@@ -282,3 +282,36 @@ def finish_campaign(
     else:
         os.environ["EVOLVE_AGENT_LLM_AUDIT"] = previous_llm_audit
     return decision
+
+
+def kept_patch_report(workspace: Path, summary: dict | None) -> dict[str, str]:
+    """The kept diff a coding agent can apply without opening the run tree."""
+
+    artifacts = (summary or {}).get("artifacts") or {}
+    relatives: list[str] = []
+    for key in ("correctness_patches", "maintenance_patches"):
+        values = artifacts.get(key) or []
+        if isinstance(values, list):
+            relatives.extend(str(item) for item in values if item)
+    winner = artifacts.get("winner_patch")
+    if winner:
+        relatives.append(str(winner))
+    for rel in relatives:
+        path = workspace / rel
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        file_path = ""
+        for line in text.splitlines():
+            if line.startswith("+++ "):
+                file_path = line[4:].strip()
+                for prefix in ("b/", "patched/"):
+                    if file_path.startswith(prefix):
+                        file_path = file_path[len(prefix):]
+                break
+        diff = text if len(text) <= 4000 else text[:4000] + "\n...[diff truncated]...\n"
+        return {"file": file_path, "patch": str(path), "diff": diff}
+    return {}

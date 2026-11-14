@@ -380,6 +380,23 @@ def fix_lead(
                 if any("cannot_fix" in item for item in errors)
                 else "no_patch"
             )
+            if (
+                reason == "no_patch"
+                and "noop_or_empty_old" in errors
+                and apply_revision < max_apply_revisions
+            ):
+                # The 06:07 Moscow revision returned status=patch with no
+                # edits after the API-test failure. Ask once more before
+                # giving up the source proposal.
+                working_ctx = (
+                    ctx
+                    + "\n\nPrevious response had status=patch and no edits. "
+                    "That is not a patch. Return the corrected source, or "
+                    "status=cannot_fix.\n"
+                )
+                if all_errors:
+                    note("propose_error.txt", "\n".join(all_errors))
+                continue
             if all_errors:
                 note("propose_error.txt", "\n".join(all_errors))
             note("fix_status.txt", reason)
