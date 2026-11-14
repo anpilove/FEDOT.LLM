@@ -5,6 +5,7 @@
 датасетов проверки, а не результат обучения FEDOT. Таблица по каждой задаче —
 [`task_inventory.csv`](task_inventory.csv); код построения таблицы и графиков —
 [`research/evolve/hw2_eda.py`](../../../../../research/evolve/hw2_eda.py).
+Шаги анализа с выполненными ячейками и графиками — в [ноутбуке](eda.ipynb).
 
 ## Источники и метод
 
@@ -29,6 +30,11 @@
 ```bash
 python research/evolve/hw2_eda.py --fedot-checkout /absolute/path/to/FEDOT --raw-samples
 ```
+
+Для повторного выполнения ноутбука задайте переменную окружения
+`FEDOT_CHECKOUT=/absolute/path/to/FEDOT`. Нужны `pandas`, `numpy`,
+`matplotlib` и `openml`; две сырые таблицы OpenML должны быть доступны по сети
+или в локальном кэше.
 
 ## Состав и объём
 
