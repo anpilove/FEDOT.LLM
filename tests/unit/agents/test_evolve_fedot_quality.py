@@ -996,6 +996,80 @@ def test_subset_index_print_does_not_enter_the_quality_queue(tmp_path, monkeypat
     assert not (workspace / "quality_queue").exists()
 
 
+def test_unexercised_unique_count_rule_does_not_enter_the_quality_queue(
+    tmp_path, monkeypatch
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, MatchSite, PatchCandidate, PatchEdit
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "relative unique count")
+    probe = "print('EVOLVE_OBSERVATION=str')\n"
+    patch = (
+        "nuniques = num_df.nunique(dropna=True)\n"
+        "observed_counts = num_df.notna().sum()\n"
+        "num_df = num_df.loc[:, (2 < nuniques) & relative_ok]\n"
+    )
+    missed = "Preprocessing was unable to define the categorical columns\n"
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(
+        loop,
+        "fix_lead",
+        lambda *_a, **_k: PatchCandidate(
+            "unique-count",
+            edits=[PatchEdit("fedot/a.py", "return 1", patch)],
+            file_path="fedot/a.py",
+            behavior_probe=probe,
+        ),
+    )
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {
+            "status": "no_change",
+            "code": probe,
+            "stock": {"observation": "str", "stdout_tail": missed},
+            "patched": {"observation": "str", "stdout_tail": missed},
+        },
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: {"logit": ScoreResult("logit", "ok", 0.8)},
+    )
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    workspace = tmp_path / "work"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("logit",),
+        protect_ids=("logit",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+    assert decision.reason == "categorical_rule_not_exercised"
+    assert not (workspace / "quality_queue").exists()
+
+
 def test_queued_subset_index_resumes_as_correctness(tmp_path):
     from fedotllm.agents.evolve.storage.replay import subset_index_resume
 

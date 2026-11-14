@@ -118,6 +118,7 @@ from fedotllm.agents.evolve.controller.probes import (
     tied_named_metric,
     narrow_datetime_revision,
     subset_index_print,
+    categorical_rule_not_exercised,
     whole_conversion_scale_revision,
 )
 from fedotllm.agents.evolve.controller.finalization import (
@@ -2356,6 +2357,33 @@ def run_once(
                             experiment_id=experiment_id,
                         )
                         feedback = push_feedback(index_note)
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            last,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            tests=after_tests,
+                            patch_hash=patch_hash,
+                            feedback=feedback,
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        break
+                    rule_note = categorical_rule_not_exercised(
+                        behavior_probe, patch_body
+                    )
+                    if rule_note:
+                        last = Decision(
+                            False,
+                            "categorical_rule_not_exercised",
+                            None,
+                            stage="dev",
+                            experiment_id=experiment_id,
+                        )
+                        feedback = push_feedback(rule_note)
                         record_attempt(
                             lead,
                             candidate,
