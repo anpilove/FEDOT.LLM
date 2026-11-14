@@ -278,16 +278,20 @@ def indicator_width_pytest(candidate: PatchCandidate, output: str) -> bool:
 
 
 def scout_action_limit_for(max_actions: int) -> int:
-    """Cover a second catalog file when the action budget can hold it.
+    """Cover another catalog file when the action budget can hold it.
 
     Half of the budget stays available for later repair. The 07:17 Moscow
     walk used the catalog plan plus five turns on the first file and stopped
     at action 8 while the second file was still open. Eleven actions are the
-    plan plus two five-step file decisions.
+    plan plus two five-step file decisions. The 18:09 Moscow walk skipped
+    three files and stopped on step 2 of the fourth file at action 11.
+    Fourteen actions let that file finish its decision.
     """
 
     limit = max(1, max_actions // 2)
-    if max_actions >= 11:
+    if max_actions >= 16:
+        limit = max(limit, 14)
+    elif max_actions >= 11:
         limit = max(limit, 11)
     return limit
 
