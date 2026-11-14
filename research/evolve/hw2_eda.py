@@ -21,7 +21,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 EVOLVE = ROOT / "fedotllm" / "agents" / "evolve"
-OUTPUT = EVOLVE / "docs" / "hw2_eda"
+OUTPUT = EVOLVE / "docs" / "eda_assets"
 
 
 def number(value: object) -> float:
