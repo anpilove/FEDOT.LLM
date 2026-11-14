@@ -1,0 +1,41 @@
+task_id,name,problem,source,metric,rows,columns_reported,missing_values,missing_percent,minority_percent,forecast_horizon,checksum_ok,metadata_source
+openml-31-credit-g,credit-g,classification,openml_task,roc_auc,1000.0,21.0,0.0,0.0,30.0,,,https://www.openml.org/d/31
+openml-10101-blood-transfusion,blood-transfusion-service-center,classification,openml_task,roc_auc,748.0,5.0,0.0,0.0,23.796791443850267,,,https://www.openml.org/d/1464
+openml-37-diabetes,diabetes,classification,openml_task,roc_auc,768.0,9.0,0.0,0.0,34.895833333333336,,,https://www.openml.org/d/37
+openml-3917-kc1,kc1,classification,openml_task,roc_auc,2109.0,22.0,0.0,0.0,15.457562825983878,,,https://www.openml.org/d/1067
+openml-53-vehicle,vehicle,classification,openml_task,roc_auc,846.0,19.0,0.0,0.0,23.52245862884161,,,https://www.openml.org/d/54
+openml-9952-phoneme,phoneme,classification,openml_task,roc_auc,5404.0,6.0,0.0,0.0,29.348630643967432,,,https://www.openml.org/d/1489
+openml-3-kr-vs-kp,kr-vs-kp,classification,openml_task,roc_auc,3196.0,37.0,0.0,0.0,47.778473091364205,,,https://www.openml.org/d/3
+openml-146818-australian,Australian,classification,openml_task,roc_auc,690.0,15.0,0.0,0.0,44.492753623188406,,,https://www.openml.org/d/40981
+openml-6-letter,letter,classification,openml_task,roc_auc,20000.0,17.0,0.0,0.0,3.67,,,https://www.openml.org/d/6
+openml-11-balance-scale,balance-scale,classification,openml_task,roc_auc,625.0,5.0,0.0,0.0,7.84,,,https://www.openml.org/d/11
+openml-12-mfeat-factors,mfeat-factors,classification,openml_task,roc_auc,2000.0,217.0,0.0,0.0,10.0,,,https://www.openml.org/d/12
+openml-14-mfeat-fourier,mfeat-fourier,classification,openml_task,roc_auc,2000.0,77.0,0.0,0.0,10.0,,,https://www.openml.org/d/14
+openml-15-breast-w,breast-w,classification,openml_task,roc_auc,699.0,10.0,16.0,0.22889842632331905,34.47782546494993,,,https://www.openml.org/d/15
+openml-16-mfeat-karhunen,mfeat-karhunen,classification,openml_task,roc_auc,2000.0,65.0,0.0,0.0,10.0,,,https://www.openml.org/d/16
+openml-18-mfeat-morphological,mfeat-morphological,classification,openml_task,roc_auc,2000.0,7.0,0.0,0.0,10.0,,,https://www.openml.org/d/18
+openml-22-mfeat-zernike,mfeat-zernike,classification,openml_task,roc_auc,2000.0,48.0,0.0,0.0,10.0,,,https://www.openml.org/d/22
+openml-23-cmc,cmc,classification,openml_task,roc_auc,1473.0,10.0,0.0,0.0,22.60692464358452,,,https://www.openml.org/d/23
+openml-28-optdigits,optdigits,classification,openml_task,roc_auc,5620.0,65.0,0.0,0.0,9.857651245551601,,,https://www.openml.org/d/28
+openml-29-credit-approval,credit-approval,classification,openml_task,roc_auc,690.0,16.0,67.0,0.6068840579710145,44.492753623188406,,,https://www.openml.org/d/29
+openml-32-pendigits,pendigits,classification,openml_task,roc_auc,10992.0,17.0,0.0,0.0,9.597889374090247,,,https://www.openml.org/d/32
+openml-43-spambase,spambase,classification,openml_task,roc_auc,4601.0,58.0,0.0,0.0,39.404477287546186,,,https://www.openml.org/d/44
+openml-45-splice,splice,classification,openml_task,roc_auc,3190.0,61.0,0.0,0.0,24.043887147335422,,,https://www.openml.org/d/46
+openml-49-tic-tac-toe,tic-tac-toe,classification,openml_task,roc_auc,958.0,10.0,0.0,0.0,34.65553235908142,,,https://www.openml.org/d/50
+openml-219-electricity,electricity,classification,openml_task,roc_auc,45312.0,9.0,0.0,0.0,42.45453742937853,,,https://www.openml.org/d/151
+openml-regression-moneyball,Moneyball,regression,openml_task,rmse,1232.0,15.0,3600.0,19.480519480519483,,,,https://www.openml.org/d/41021
+openml-regression-abalone,Abalone,regression,openml_task,rmse,4177.0,9.0,0.0,0.0,,,,https://www.openml.org/d/44956
+openml-regression-airfoil-self-noise,Airfoil Self-Noise,regression,openml_task,rmse,1503.0,6.0,0.0,0.0,,,,https://www.openml.org/d/44957
+openml-regression-concrete-strength,Concrete Compressive Strength,regression,openml_task,rmse,1030.0,9.0,0.0,0.0,,,,https://www.openml.org/d/44959
+openml-regression-energy-efficiency,Energy Efficiency,regression,openml_task,rmse,768.0,9.0,0.0,0.0,,,,https://www.openml.org/d/44960
+openml-regression-forest-fires,Forest Fires,regression,openml_task,rmse,517.0,13.0,0.0,0.0,,,,https://www.openml.org/d/44962
+openml-regression-protein,Physicochemical Protein,regression,openml_task,rmse,45730.0,10.0,0.0,0.0,,,,https://www.openml.org/d/44963
+openml-regression-superconductivity,Superconductivity,regression,openml_task,rmse,21263.0,82.0,0.0,0.0,,,,https://www.openml.org/d/44964
+fedot-ts-beer,beer,ts_forecasting,fedot_public_ts,mae,476.0,2.0,0.0,0.0,,12.0,yes,examples/data/ts/beer.csv
+fedot-ts-australia,australia,ts_forecasting,fedot_public_ts,mae,204.0,2.0,0.0,0.0,,12.0,yes,examples/data/ts/australia.csv
+fedot-ts-salaries,salaries,ts_forecasting,fedot_public_ts,mae,544.0,2.0,0.0,0.0,,14.0,yes,examples/data/ts/salaries.csv
+fedot-ts-temperature,temperature,ts_forecasting,fedot_local_ts,mae,17520.0,3.0,0.0,0.0,,24.0,yes,examples/real_cases/data/time_series/temperature.csv
+fedot-ts-traffic,traffic,ts_forecasting,fedot_local_ts,mae,17520.0,3.0,0.0,0.0,,24.0,yes,examples/real_cases/data/time_series/traffic.csv
+fedot-ts-economic,economic,ts_forecasting,fedot_local_ts,mae,1028.0,3.0,0.0,0.0,,12.0,yes,examples/real_cases/data/time_series/economic_data.csv
+fedot-ts-arctic,arctic,ts_forecasting,fedot_local_ts,mae,365.0,6.0,0.0,0.0,,14.0,yes,examples/real_cases/data/arctic/topaz_multi_ts.csv
+fedot-ts-metocean,metocean,ts_forecasting,fedot_local_ts,mae,9988.0,3.0,0.0,0.0,,24.0,yes,examples/real_cases/data/metocean/metocean_data_train.csv

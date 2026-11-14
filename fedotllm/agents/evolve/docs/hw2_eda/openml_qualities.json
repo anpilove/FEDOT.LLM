@@ -1,0 +1,486 @@
+{
+  "retrieved_utc": "2026-11-14",
+  "source": "https://www.openml.org/api/v1/json/data/qualities/{openml_data}",
+  "datasets": [
+    {
+      "openml_data": 3,
+      "name": "kr-vs-kp",
+      "qualities": {
+        "NumberOfInstances": "3196.0",
+        "NumberOfFeatures": "37.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "1527.0",
+        "MajorityClassSize": "1669.0",
+        "NumberOfNumericFeatures": "0.0",
+        "NumberOfSymbolicFeatures": "37.0"
+      }
+    },
+    {
+      "openml_data": 6,
+      "name": "letter",
+      "qualities": {
+        "NumberOfInstances": "20000.0",
+        "NumberOfFeatures": "17.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "26.0",
+        "MinorityClassSize": "734.0",
+        "MajorityClassSize": "813.0",
+        "NumberOfNumericFeatures": "16.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 11,
+      "name": "balance-scale",
+      "qualities": {
+        "NumberOfInstances": "625.0",
+        "NumberOfFeatures": "5.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "3.0",
+        "MinorityClassSize": "49.0",
+        "MajorityClassSize": "288.0",
+        "NumberOfNumericFeatures": "4.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 12,
+      "name": "mfeat-factors",
+      "qualities": {
+        "NumberOfInstances": "2000.0",
+        "NumberOfFeatures": "217.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "200.0",
+        "MajorityClassSize": "200.0",
+        "NumberOfNumericFeatures": "216.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 14,
+      "name": "mfeat-fourier",
+      "qualities": {
+        "NumberOfInstances": "2000.0",
+        "NumberOfFeatures": "77.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "200.0",
+        "MajorityClassSize": "200.0",
+        "NumberOfNumericFeatures": "76.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 15,
+      "name": "breast-w",
+      "qualities": {
+        "NumberOfInstances": "699.0",
+        "NumberOfFeatures": "10.0",
+        "NumberOfMissingValues": "16.0",
+        "PercentageOfMissingValues": "0.22889842632331905",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "241.0",
+        "MajorityClassSize": "458.0",
+        "NumberOfNumericFeatures": "9.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 16,
+      "name": "mfeat-karhunen",
+      "qualities": {
+        "NumberOfInstances": "2000.0",
+        "NumberOfFeatures": "65.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "200.0",
+        "MajorityClassSize": "200.0",
+        "NumberOfNumericFeatures": "64.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 18,
+      "name": "mfeat-morphological",
+      "qualities": {
+        "NumberOfInstances": "2000.0",
+        "NumberOfFeatures": "7.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "200.0",
+        "MajorityClassSize": "200.0",
+        "NumberOfNumericFeatures": "6.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 22,
+      "name": "mfeat-zernike",
+      "qualities": {
+        "NumberOfInstances": "2000.0",
+        "NumberOfFeatures": "48.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "200.0",
+        "MajorityClassSize": "200.0",
+        "NumberOfNumericFeatures": "47.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 23,
+      "name": "cmc",
+      "qualities": {
+        "NumberOfInstances": "1473.0",
+        "NumberOfFeatures": "10.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "3.0",
+        "MinorityClassSize": "333.0",
+        "MajorityClassSize": "629.0",
+        "NumberOfNumericFeatures": "2.0",
+        "NumberOfSymbolicFeatures": "8.0"
+      }
+    },
+    {
+      "openml_data": 28,
+      "name": "optdigits",
+      "qualities": {
+        "NumberOfInstances": "5620.0",
+        "NumberOfFeatures": "65.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "554.0",
+        "MajorityClassSize": "572.0",
+        "NumberOfNumericFeatures": "64.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 29,
+      "name": "credit-approval",
+      "qualities": {
+        "NumberOfInstances": "690.0",
+        "NumberOfFeatures": "16.0",
+        "NumberOfMissingValues": "67.0",
+        "PercentageOfMissingValues": "0.6068840579710145",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "307.0",
+        "MajorityClassSize": "383.0",
+        "NumberOfNumericFeatures": "6.0",
+        "NumberOfSymbolicFeatures": "10.0"
+      }
+    },
+    {
+      "openml_data": 31,
+      "name": "credit-g",
+      "qualities": {
+        "NumberOfInstances": "1000.0",
+        "NumberOfFeatures": "21.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "300.0",
+        "MajorityClassSize": "700.0",
+        "NumberOfNumericFeatures": "7.0",
+        "NumberOfSymbolicFeatures": "14.0"
+      }
+    },
+    {
+      "openml_data": 32,
+      "name": "pendigits",
+      "qualities": {
+        "NumberOfInstances": "10992.0",
+        "NumberOfFeatures": "17.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "10.0",
+        "MinorityClassSize": "1055.0",
+        "MajorityClassSize": "1144.0",
+        "NumberOfNumericFeatures": "16.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 37,
+      "name": "diabetes",
+      "qualities": {
+        "NumberOfInstances": "768.0",
+        "NumberOfFeatures": "9.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "268.0",
+        "MajorityClassSize": "500.0",
+        "NumberOfNumericFeatures": "8.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 44,
+      "name": "spambase",
+      "qualities": {
+        "NumberOfInstances": "4601.0",
+        "NumberOfFeatures": "58.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "1813.0",
+        "MajorityClassSize": "2788.0",
+        "NumberOfNumericFeatures": "57.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 46,
+      "name": "splice",
+      "qualities": {
+        "NumberOfInstances": "3190.0",
+        "NumberOfFeatures": "61.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "3.0",
+        "MinorityClassSize": "767.0",
+        "MajorityClassSize": "1655.0",
+        "NumberOfNumericFeatures": "0.0",
+        "NumberOfSymbolicFeatures": "61.0"
+      }
+    },
+    {
+      "openml_data": 50,
+      "name": "tic-tac-toe",
+      "qualities": {
+        "NumberOfInstances": "958.0",
+        "NumberOfFeatures": "10.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "332.0",
+        "MajorityClassSize": "626.0",
+        "NumberOfNumericFeatures": "0.0",
+        "NumberOfSymbolicFeatures": "10.0"
+      }
+    },
+    {
+      "openml_data": 54,
+      "name": "vehicle",
+      "qualities": {
+        "NumberOfInstances": "846.0",
+        "NumberOfFeatures": "19.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "4.0",
+        "MinorityClassSize": "199.0",
+        "MajorityClassSize": "218.0",
+        "NumberOfNumericFeatures": "18.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 151,
+      "name": "electricity",
+      "qualities": {
+        "NumberOfInstances": "45312.0",
+        "NumberOfFeatures": "9.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "19237.0",
+        "MajorityClassSize": "26075.0",
+        "NumberOfNumericFeatures": "7.0",
+        "NumberOfSymbolicFeatures": "2.0"
+      }
+    },
+    {
+      "openml_data": 1067,
+      "name": "kc1",
+      "qualities": {
+        "NumberOfInstances": "2109.0",
+        "NumberOfFeatures": "22.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "326.0",
+        "MajorityClassSize": "1783.0",
+        "NumberOfNumericFeatures": "21.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 1464,
+      "name": "blood-transfusion-service-center",
+      "qualities": {
+        "NumberOfInstances": "748.0",
+        "NumberOfFeatures": "5.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "178.0",
+        "MajorityClassSize": "570.0",
+        "NumberOfNumericFeatures": "4.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 1489,
+      "name": "phoneme",
+      "qualities": {
+        "NumberOfInstances": "5404.0",
+        "NumberOfFeatures": "6.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "1586.0",
+        "MajorityClassSize": "3818.0",
+        "NumberOfNumericFeatures": "5.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 40981,
+      "name": "Australian",
+      "qualities": {
+        "NumberOfInstances": "690.0",
+        "NumberOfFeatures": "15.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "2.0",
+        "MinorityClassSize": "307.0",
+        "MajorityClassSize": "383.0",
+        "NumberOfNumericFeatures": "6.0",
+        "NumberOfSymbolicFeatures": "9.0"
+      }
+    },
+    {
+      "openml_data": 41021,
+      "name": "Moneyball",
+      "qualities": {
+        "NumberOfInstances": "1232.0",
+        "NumberOfFeatures": "15.0",
+        "NumberOfMissingValues": "3600.0",
+        "PercentageOfMissingValues": "19.480519480519483",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "9.0",
+        "NumberOfSymbolicFeatures": "6.0"
+      }
+    },
+    {
+      "openml_data": 44956,
+      "name": "abalone",
+      "qualities": {
+        "NumberOfInstances": "4177.0",
+        "NumberOfFeatures": "9.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "8.0",
+        "NumberOfSymbolicFeatures": "1.0"
+      }
+    },
+    {
+      "openml_data": 44957,
+      "name": "airfoil_self_noise",
+      "qualities": {
+        "NumberOfInstances": "1503.0",
+        "NumberOfFeatures": "6.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "6.0",
+        "NumberOfSymbolicFeatures": "0.0"
+      }
+    },
+    {
+      "openml_data": 44959,
+      "name": "concrete_compressive_strength",
+      "qualities": {
+        "NumberOfInstances": "1030.0",
+        "NumberOfFeatures": "9.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "9.0",
+        "NumberOfSymbolicFeatures": "0.0"
+      }
+    },
+    {
+      "openml_data": 44960,
+      "name": "energy_efficiency",
+      "qualities": {
+        "NumberOfInstances": "768.0",
+        "NumberOfFeatures": "9.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "9.0",
+        "NumberOfSymbolicFeatures": "0.0"
+      }
+    },
+    {
+      "openml_data": 44962,
+      "name": "forest_fires",
+      "qualities": {
+        "NumberOfInstances": "517.0",
+        "NumberOfFeatures": "13.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "11.0",
+        "NumberOfSymbolicFeatures": "0.0"
+      }
+    },
+    {
+      "openml_data": 44963,
+      "name": "physiochemical_protein",
+      "qualities": {
+        "NumberOfInstances": "45730.0",
+        "NumberOfFeatures": "10.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "10.0",
+        "NumberOfSymbolicFeatures": "0.0"
+      }
+    },
+    {
+      "openml_data": 44964,
+      "name": "superconductivity",
+      "qualities": {
+        "NumberOfInstances": "21263.0",
+        "NumberOfFeatures": "82.0",
+        "NumberOfMissingValues": "0.0",
+        "PercentageOfMissingValues": "0.0",
+        "NumberOfClasses": "0.0",
+        "MinorityClassSize": [],
+        "MajorityClassSize": [],
+        "NumberOfNumericFeatures": "82.0",
+        "NumberOfSymbolicFeatures": "0.0"
+      }
+    }
+  ]
+}

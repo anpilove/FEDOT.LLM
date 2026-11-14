@@ -1,0 +1,29 @@
+[
+  {
+    "openml_data": 31,
+    "name": "credit-g",
+    "rows": 1000,
+    "input_features": 20,
+    "missing_input_cells": 0,
+    "missing_target_rows": 0,
+    "class_counts": {
+      "good": 700,
+      "bad": 300
+    }
+  },
+  {
+    "openml_data": 41021,
+    "name": "Moneyball",
+    "rows": 1232,
+    "input_features": 14,
+    "missing_input_cells": 3600,
+    "missing_target_rows": 0,
+    "target_quantiles": {
+      "0.0": 463.0,
+      "0.25": 652.0,
+      "0.5": 711.0,
+      "0.75": 775.0,
+      "1.0": 1009.0
+    }
+  }
+]
