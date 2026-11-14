@@ -1944,7 +1944,16 @@ def _llm_pick(
             except Exception as exc:
                 actions += 1
                 if isinstance(exc, EvolveBudgetExhausted):
-                    external_stop = "llm_budget_exhausted"
+                    # A stage reserve means the scout used its discovery calls
+                    # and the verifier/fixer calls are still held. The 18:17
+                    # Moscow walk had no site after 14 scout calls and exited
+                    # as infrastructure. That stop is an empty catalog.
+                    message = str(exc)
+                    external_stop = (
+                        "scout_stage_reserve"
+                        if "evolve_run_stage_reserve_exhausted" in message
+                        else "llm_budget_exhausted"
+                    )
                     budget_exhausted = True
                     rounds.append(
                         {

@@ -911,6 +911,10 @@ def run_once(
     logger.info("evolve scout %s sites, stock %s tasks", len(leads), len(stock))
     if not leads:
         external_stop = str(trace.get("scout_external_stop") or "")
+        # The discovery floor holds verifier and fixer calls. Spending the
+        # scout's own calls is an empty catalog, not a provider failure.
+        if external_stop == "scout_stage_reserve":
+            external_stop = ""
         failed_reads = sum(
             row.get("status") == "error" for row in trace.get("llm_pick_rounds", [])
         )
