@@ -934,6 +934,26 @@ def _categorical_most_frequent_guards_strings(parsed: SiteProposal) -> bool:
     )
 
 
+def _preprocess_already_copies_multimodal(parsed: SiteProposal) -> bool:
+    """``_preprocess`` deepcopies every fit input, including MultiModalData.
+
+    The 17:10 Europe/Moscow catalog said the ``isinstance`` guard at
+    ``pipeline.py:198`` lets MultiModalData mutate the caller.
+    ``_preprocess`` copies the input at line 143 before any preprocessing.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "MultiModalData" not in text:
+        return False
+    if re.search(r"isinstance|copy guard|deep-?cop", text, re.IGNORECASE) is None:
+        return False
+    return re.search(r"mutat|_preprocess|is_auto_preprocessed", text, re.IGNORECASE) is not None
+
+
 def _n_jobs_rewrite_is_the_contract(parsed: SiteProposal) -> bool:
     """``fit`` writes ``n_jobs`` because that argument is the job count.
 
@@ -1343,6 +1363,13 @@ def _first_pick_rejection(
             "and the categorical NaN with 'a'. "
             "test_imputation_with_binary_correct expects that category fill. "
             "Pick a different executed line or skip",
+        )
+    if _preprocess_already_copies_multimodal(parsed):
+        return (
+            "preprocess_already_copies_multimodal",
+            "Pipeline._preprocess deepcopies every input at line 143 regardless "
+            "of type. MultiModalData fit inputs are already isolated from the "
+            "caller. Pick a different executed line or skip",
         )
     if _n_jobs_rewrite_is_the_contract(parsed):
         return (
