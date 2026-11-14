@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fedotllm.agents.evolve.storage.journal import append_journal, write_json_atomic
-from fedotllm.agents.evolve.types import MatchSite
+from fedotllm.agents.evolve.types import MatchSite, hypothesis_sites_from_raw
 
 
 def load_checkpoint(workspace: Path) -> dict[str, Any]:
@@ -76,6 +76,7 @@ def checkpoint_leads(workspace: Path) -> list[MatchSite]:
                     proposed_change=str(raw.get("proposed_change") or ""),
                     expected_metric_effect=str(raw.get("expected_metric_effect") or ""),
                     hypothesis_kind=str(raw.get("hypothesis_kind") or "quality"),
+                    sites=hypothesis_sites_from_raw(raw.get("sites")),
                 )
             )
         except (KeyError, TypeError, ValueError):

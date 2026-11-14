@@ -169,9 +169,14 @@ the change intentionally updates a documented public contract, put the proposed
 `test/**` update in `proposed_test_edits`; it is review-only and cannot make the
 candidate pass its own pytest gate. Do not mention scoring harnesses, datasets,
 case catalogs, or bug names.
-Runtime evidence is measured ground truth. Form a causal hypothesis and prefer
-the smallest coordinated source change that directly tests it. Preserve public
-behavior and producer/consumer contracts that the evidence does not show to be broken.
+Runtime evidence is measured ground truth. Form a causal hypothesis and
+implement the whole claim. When the context lists Hypothesis sites, those places
+are one hypothesis: return one SEARCH/REPLACE for every listed site that must
+change, in this single status=patch. Do not replace a multi-site claim with a
+smaller single-line edit. Do not return cannot_fix only because the hypothesis
+touches more than one file or function. cannot_fix means the claim is unsafe,
+unsupported by the source, or cannot be expressed within {n} hunks.
+Preserve public behavior and producer/consumer contracts that the evidence does not show to be broken.
 Respect source ownership: context labelled `Inherited runtime behavior` is shared
 by sibling operations. If DEV feedback reports a sibling regression, move the
 behavior into the named subclass rather than editing the shared base class.
@@ -206,8 +211,30 @@ symbol for repository navigation; do not spend run_code on open()/grep.
 Use status=docs with query for FEDOT architectural concepts and operation metadata."""
 
 
+_HYPOTHESIS_SITES_MARKER = (
+    "Hypothesis sites (one claim; implement every listed site in one patch):"
+)
+
+
+def hypothesis_site_count(context: str) -> int:
+    """How many places the lead context says belong to one hypothesis."""
+
+    if _HYPOTHESIS_SITES_MARKER not in context:
+        return 1
+    block = context.split(_HYPOTHESIS_SITES_MARKER, 1)[1].split("\n\n", 1)[0]
+    count = sum(1 for line in block.splitlines() if line.startswith("- "))
+    return max(1, count)
+
+
+def effective_max_edits(context: str, max_edits: int) -> int:
+    """A multi-site hypothesis keeps one hunk per site even if the caller asked for one."""
+
+    return max(max(1, int(max_edits)), min(6, hypothesis_site_count(context)))
+
+
 def build_prompt(context: str, *, max_edits: int = 1) -> str:
-    system = _SYSTEM if max_edits <= 1 else _SYSTEM_MULTI.format(n=max(1, max_edits))
+    edits = effective_max_edits(context, max_edits)
+    system = _SYSTEM if edits <= 1 else _SYSTEM_MULTI.format(n=edits)
     return f"{system}\n\nSource context:\n{context}\n"
 
 
@@ -235,6 +262,7 @@ def propose_patch(
 ) -> PatchCandidate | None:
     if inference is None or not context.strip():
         return None
+    max_edits = effective_max_edits(context, max_edits)
     from fedotllm.agents.evolve.execution.run_code import MAX_STEPS, run_fedot_snippet
 
     base_context = _stable_base_context(context)

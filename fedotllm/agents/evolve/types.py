@@ -201,12 +201,41 @@ class PatchCandidate:
 
 
 @dataclass(frozen=True)
+class HypothesisSite:
+    """One source place that belongs to a single hypothesis."""
+
+    file_path: str
+    line: int
+    role: str = ""
+
+
+def hypothesis_sites_from_raw(raw) -> tuple[HypothesisSite, ...]:
+    """Restore hypothesis sites saved by ``asdict`` or a model payload."""
+
+    sites: list[HypothesisSite] = []
+    for item in raw or ():
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("file_path") or "").strip()
+        try:
+            line = int(item.get("line") or item.get("change_line") or 0)
+        except (TypeError, ValueError):
+            continue
+        if file_path and line >= 1:
+            sites.append(HypothesisSite(file_path, line, str(item.get("role") or "")))
+    return tuple(sites)
+
+
+@dataclass(frozen=True)
 class MatchSite:
     """Candidate file+line for a patch. Not a found bug.
 
     The LLM reads source around this site (file or method); that context is not
     a separate type. Scout returns up to ``max_picks`` of these per campaign.
     Historically called ``lead`` throughout the code and journal rows.
+
+    ``sites`` is the whole hypothesis. A local bug has one site, the same place
+    as ``file_path`` and ``line``. A global claim lists every place it must change.
     """
 
     channel: str
@@ -219,6 +248,7 @@ class MatchSite:
     proposed_change: str = ""
     expected_metric_effect: str = ""
     hypothesis_kind: Literal["correctness", "quality"] = "quality"
+    sites: tuple[HypothesisSite, ...] = ()
 
 
 @dataclass

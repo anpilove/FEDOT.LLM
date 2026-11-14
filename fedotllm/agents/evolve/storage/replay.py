@@ -10,10 +10,11 @@ from typing import Any
 
 
 from fedotllm.agents.evolve.types import (
+    MatchSite,
     PatchCandidate,
     PatchEdit,
-    MatchSite,
     VerificationResult,
+    hypothesis_sites_from_raw,
 )
 from fedotllm.agents.evolve.storage.journal import read_jsonl, resolve_run_workspace
 from fedotllm.agents.evolve.storage.hypothesis import behavior_probe_fingerprint
@@ -192,6 +193,7 @@ def load_resume_branch(
             proposed_change=str(lead_row.get("proposed_change") or ""),
             expected_metric_effect=str(lead_row.get("expected_metric_effect") or ""),
             hypothesis_kind=str(lead_row.get("hypothesis_kind") or "quality"),
+            sites=hypothesis_sites_from_raw(lead_row.get("sites")),
         )
         verification = VerificationResult(
             status=verification_row["status"],
