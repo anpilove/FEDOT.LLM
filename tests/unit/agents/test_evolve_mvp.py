@@ -7477,6 +7477,49 @@ def test_empty_float_index_claim_is_rejected_and_the_walk_continues(tmp_path: Pa
     )
 
 
+def test_gate_rejection_leaves_the_file_for_the_next_catalog_entry(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                fields = _causal_fields(1)
+                fields["why"] = (
+                    "The isinstance copy guard lets MultiModalData mutate "
+                    "the caller inside _preprocess"
+                )
+                return SiteProposal(status="pick", **fields)
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    inference = Inference()
+    trace: dict = {}
+    selected = _llm_pick(
+        inference,
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert inference.a_calls == 1
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "preprocess_already_copies_multimodal"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
 def test_multimodal_copy_guard_is_rejected_and_the_walk_continues(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
 

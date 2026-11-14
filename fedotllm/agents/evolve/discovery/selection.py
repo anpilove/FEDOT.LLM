@@ -2247,8 +2247,10 @@ def _llm_pick(
                     picked.line,
                 )
                 picked = None
-                if step < file_steps:
-                    continue
+                # The 17:19 Europe/Moscow walk spent the rest of an 11-action
+                # budget on categorical.py after the first gate rejection and
+                # stopped at 2 of 189 files with no site. Leave the file so the
+                # next catalog entry can use the remaining actions.
                 break
             if (
                 picked is not None
