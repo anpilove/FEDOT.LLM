@@ -1812,6 +1812,13 @@ def run_once(
                                 "probe code, exit status, traceback, stdout, stderr, and "
                                 "observations from both runs follow."
                             )
+                            if behavior_probe.get("shared_exception"):
+                                diagnosis = (
+                                    "Both sides printed the same ERR: exception, so the "
+                                    "diagnostic did not measure the edit. Keep the source "
+                                    "edit and print the width and the unseen row without "
+                                    "that exception."
+                                )
                         elif indicator_width_crash(candidate, behavior_probe):
                             diagnosis = (
                                 "add_indicator appends columns that are not in "

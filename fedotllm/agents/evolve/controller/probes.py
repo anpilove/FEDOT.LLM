@@ -85,6 +85,7 @@ def compare_behavior_probe(
 
     stock_row = row(stock)
     patched_row = row(patched)
+    shared_exception = False
     shared_import = _preflight_import_error(stock.stdout or "")
     if (
         shared_import
@@ -104,7 +105,14 @@ def compare_behavior_probe(
     elif stock_row["observation"] is None or patched_row["observation"] is None:
         status = "invalid"
     elif stock_row["observation"] == patched_row["observation"]:
-        status = "no_change"
+        # The 13:54 Europe/Moscow one-hot probe printed the same
+        # ``ERR:TypeError`` on both sides and still entered the 40-task queue.
+        # A shared caught exception did not measure the edit.
+        if "ERR:" in stock_row["observation"]:
+            status = "invalid"
+            shared_exception = True
+        else:
+            status = "no_change"
     else:
         # Two successful executions with different deterministic observations.
         status = "changed"
@@ -122,6 +130,7 @@ def compare_behavior_probe(
         "probe_valid": status in {"no_change", "changed"},
         "hypothesis_result": interpretation,
         "import_error": (shared_import or "") if status == "infrastructure" else "",
+        "shared_exception": shared_exception,
         "stock": stock_row,
         "patched": patched_row,
     }

@@ -9634,8 +9634,31 @@ def test_behavior_probe_rejects_semantic_noop_and_accepts_runtime_change(
     assert no_change["status"] == "no_change"
     assert no_change["probe_valid"] is True
     assert no_change["hypothesis_result"] == "toy_probe_did_not_see_effect"
+    assert no_change["shared_exception"] is False
     assert changed["status"] == "changed"
     assert changed["hypothesis_result"] == "mechanism_supported_pending_independent_gates"
+
+
+def test_shared_err_observation_is_an_invalid_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    source = tmp_path / "source"
+    experiment = tmp_path / "experiment"
+    source.mkdir()
+    experiment.mkdir()
+    observed = "EVOLVE_OBSERVATION=width=5 unseen_row=ERR:TypeError\n"
+    monkeypatch.setattr(
+        loop,
+        "run_fedot_snippet",
+        lambda *_a, **_k: SnippetResult("ok", "probe", stdout=observed),
+    )
+    result = loop.compare_behavior_probe(source, experiment, "print('probe')")
+    assert result["status"] == "invalid"
+    assert result["probe_valid"] is False
+    assert result["shared_exception"] is True
 
 
 def test_behavior_probe_requires_declared_observation_and_real_stock_execution(

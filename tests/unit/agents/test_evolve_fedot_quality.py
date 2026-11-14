@@ -231,6 +231,65 @@ def test_historical_delta0_and_no_change_stay_hour_queue_eligible(tmp_path):
     assert rejected_probe_hashes_from_findings(path, **scope) == {}
 
 
+def test_shared_probe_exception_does_not_enter_the_quality_queue(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "executed symbol value")
+    calls = {"fix": 0}
+
+    def fix_lead(*_a, **_k):
+        calls["fix"] += 1
+        return PatchCandidate(
+            "shared-err",
+            edits=[PatchEdit("fedot/a.py", "return 1", "return 2")],
+            file_path="fedot/a.py",
+            behavior_probe="print('ERR')",
+        )
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fix_lead)
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {
+            "status": "invalid",
+            "code": "print('ERR')",
+            "shared_exception": True,
+            "hypothesis_result": "inconclusive_invalid_probe",
+        },
+    )
+    stock = {"catboost": ScoreResult("catboost", "ok", 0.86)}
+    monkeypatch.setattr(loop, "measure_stock", lambda *_a, **_k: stock)
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    workspace = tmp_path / "work"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+    assert decision.reason == "behavior_probe_invalid"
+    assert calls["fix"] == 1
+    assert not (workspace / "quality_queue").exists()
+
+
 def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller import campaign as loop
     from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
