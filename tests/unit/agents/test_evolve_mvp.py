@@ -7520,6 +7520,66 @@ def test_gate_rejection_leaves_the_file_for_the_next_catalog_entry(tmp_path: Pat
     )
 
 
+def test_default_stratified_eval_split_is_rejected_and_the_walk_continues(
+    tmp_path: Path,
+):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+    from fedotllm.agents.evolve.discovery.selection import (
+        _eval_split_already_stratified,
+    )
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+    kept = SiteProposal(
+        why="line 164 passes stratify=False, so the eval split is unstratified",
+        mechanism="train_test_data_setup(input_data, stratify=False) draws a plain random split",
+        proposed_change="train_test_data_setup(input_data, stratify=True)",
+    )
+    assert _eval_split_already_stratified(kept) is False
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                fields = _causal_fields(1)
+                fields["why"] = (
+                    "The split at line 164 is unstratified for imbalanced classification"
+                )
+                fields["mechanism"] = (
+                    "train_test_data_setup(input_data) uses the default settings "
+                    "and produces a plain random 80/20 split"
+                )
+                fields["proposed_change"] = (
+                    "train_test_data_setup(input_data, stratify=True)"
+                )
+                return SiteProposal(status="pick", **fields)
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    inference = Inference()
+    trace: dict = {}
+    selected = _llm_pick(
+        inference,
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert inference.a_calls == 1
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "eval_split_already_stratified"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
 def test_predict_type_recompute_is_rejected_and_the_walk_continues(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
 
