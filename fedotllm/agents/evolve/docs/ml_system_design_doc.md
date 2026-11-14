@@ -78,7 +78,9 @@ FEDOT автоматически строит ML-пайплайны, но раз
 
 Агент видит код FEDOT и то, какие функции реально исполнились. Финальные метрики ему не отдают.
 
-В реестре 40 задач: 24 классификации OpenML, 8 регрессий OpenML-CTR23 и 8 временных рядов (`beer`, `australia`, `salaries`, `temperature`, `traffic`, `economic`, `arctic`, `metocean`). Для OpenML берётся `repeat=0`, `fold=0`. У рядов holdout — хвост, без подглядывания в будущее. Общий код проверяется на всём наборе. Состав и пороги лежат в [`quality_registry.json`](../fedotllm/agents/evolve/evaluation/quality_registry.json).
+В реестре 40 задач: 20 классификаций из [OpenML-CC18](https://www.openml.org/search?id=99&type=study), ещё 4 задачи классификации OpenML, 8 регрессий из [OpenML-CTR23](https://www.openml.org/search?id=353&type=study) и 8 временных рядов FEDOT (`beer`, `australia`, `salaries`, `temperature`, `traffic`, `economic`, `arctic`, `metocean`). Для OpenML берётся `repeat=0`, `fold=0`. У рядов holdout — хвост, без подглядывания в будущее. Общий код проверяется на всём наборе. Точные идентификаторы задач, пути, контрольные суммы и пороги лежат в [`quality_registry.json`](../evaluation/quality_registry.json).
+
+Данные берутся из OpenML и [публичных примеров FEDOT](https://github.com/aimclub/FEDOT/tree/master/examples/data/ts). Пять рядов из [real_cases FEDOT](https://github.com/aimclub/FEDOT/tree/master/examples/real_cases/data) читаются из отдельного checkout или подготовленного кэша; их контрольные суммы проверяются перед запуском. Большие копии датасетов в FEDOT.LLM не добавляются: для воспроизведения нужны указанные источники и зафиксированные в реестре версии данных.
 
 ### 2.4. Бейзлайн и основное решение
 
@@ -98,7 +100,7 @@ FEDOT автоматически строит ML-пайплайны, но раз
 | `DROP` | Все требуемые пары оценены, но есть регрессия или улучшений недостаточно. |
 | `not_evaluated` | Хотя бы одна требуемая пара не дала валидной метрики: пропущенный датасет, таймаут, ошибка запуска или проверки. Это не свидетельство ухудшения качества. |
 
-Правило реализовано в `decision_from_quality_jobs`. Один seed делает парный запуск сравнимым, но не доказывает значимость улучшения.
+Правило реализовано в [`decision_from_quality_jobs`](../evaluation/fedot_quality.py). Один seed делает парный запуск сравнимым, но не доказывает значимость улучшения.
 
 ## 3. Подготовка пилота
 
