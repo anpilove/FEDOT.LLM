@@ -24,7 +24,7 @@ from fedotllm.agents.evolve.execution.guard import deny_write
 from fedotllm.agents.evolve.discovery.repo_map import in_metric_scan
 from fedotllm.agents.evolve.discovery.navigation import architecture_contexts
 from fedotllm.agents.evolve.storage.replay import semantic_site_id
-from fedotllm.agents.evolve.types import MatchSite, ToolAction
+from fedotllm.agents.evolve.types import HypothesisSite, MatchSite, ToolAction
 
 _RAW_PICK_CHARS = 32_000
 
@@ -46,10 +46,19 @@ _METADATA_REGISTRY_FILES = {
 
 _LOCATE = """You inspect one FEDOT runtime source file from the catalog.
 
-Your primary goal is one source change with a plausible causal effect on general
-predictive behavior or correctness. It may repair a bug/silent contract mismatch, or
-improve valid stock behavior with a more suitable algorithm, representation, adaptive
-rule, numerical method, or use of information that is currently discarded. Do not
+Your primary goal is one causal hypothesis with a plausible effect on general
+predictive behavior or correctness. A hypothesis may change several coordinated
+sites, including different files. `change_line` is the first site. Put every other
+place the same claim must change into `sites`, each with `file_path`, `change_line`,
+and `role`. Do not collapse a multi-site claim into a single line, and do not split one
+claim across unrelated picks. Prefer a mechanism change: a different algorithm,
+representation, numerical method, or use of information that changes predictions
+for the whole operation family, or one claim edited in several places. Use
+hypothesis_kind=quality for that mechanism. Use hypothesis_kind=correctness only
+for a single-site contract violation. A one-line contract repair does not finish
+the search; the walk continues until a mechanism is recorded or the action budget
+ends. It may also repair a bug or silent contract mismatch, but that repair is
+not a substitute for the mechanism. Do not
 classify the lead in advance. The exact benchmark dataset, score and metric identity
 are intentionally withheld during discovery: do not tune a proposal to one named
 metric. Explain how data, fitted state or predictions would change across the affected
@@ -57,13 +66,16 @@ task family; the controller will choose suitable metrics after the hypothesis ex
 
 "Use something newer" is not a mechanism. Compare the current behavior with a
 concrete alternative implementable with existing dependencies. Preserve unrelated
-task families and sibling operations. DEV decides whether it is better. If DEV is
-neutral, the change is useful only when an independent stock failure is reproduced
-and the same probe passes after patching. You do not have to pick this file.
+task families and sibling operations. DEV decides whether the mechanism is better.
+Do not replace it with a one-line contract probe because the metric has not been
+measured yet. You do not have to pick this file.
 
-status=pick — record this file (or an opened neighbor) as a match site. The catalog
+status=pick — record this hypothesis as a match site. The catalog
 walk continues with the next file; pick does not stop the scan. Fill `mechanism`,
 `proposed_change`, `expected_metric_effect`, `hypothesis_kind`, and `change_line`.
+When the claim needs more than that first line, fill `sites` with each additional
+place, including a file opened with read, search, or symbol. Do not drop a real
+second site to make the pick look local.
 Use hypothesis_kind=correctness only for a concrete violation of a stable data,
 parameter, lifecycle, or fit/predict contract which a public runtime probe can
 reproduce without consulting a metric. Use quality for valid behavior where an
@@ -112,6 +124,24 @@ Do not name a path outside fedot/ runtime source.
 Do not import the scoring harness, datasets, or case catalogs.
 Do not choose plotting, visualization, logging-only, cache-only, remote, tests,
 or research-harness code."""
+
+
+class HypothesisSiteProposal(BaseModel):
+    """Another place the same hypothesis must change."""
+
+    file_path: str = Field(
+        default="",
+        description="fedot/ path of an additional site in this same hypothesis",
+    )
+    change_line: int = Field(
+        default=0,
+        ge=0,
+        description="First source line this site's change would alter",
+    )
+    role: str = Field(
+        default="",
+        description="What this site does in the one hypothesis",
+    )
 
 
 class SiteProposal(BaseModel):
@@ -164,6 +194,14 @@ class SiteProposal(BaseModel):
         description=(
             "Executed operation affected by a default_operation_params.json pick; "
             "empty for ordinary source files"
+        ),
+    )
+    sites: list[HypothesisSiteProposal] = Field(
+        default_factory=list,
+        max_length=5,
+        description=(
+            "Other sites this same hypothesis must change. Empty when change_line "
+            "is the whole claim."
         ),
     )
 
@@ -415,8 +453,48 @@ def _unique(leads: list[MatchSite]) -> list[MatchSite]:
             )
             or old.expected_metric_effect
             or lead.expected_metric_effect,
+            hypothesis_kind=(
+                old.hypothesis_kind
+                if old.channel == "llm" or lead.channel != "llm"
+                else lead.hypothesis_kind
+            ),
+            sites=(
+                old.sites
+                if old.channel == "llm" or lead.channel != "llm"
+                else lead.sites or old.sites
+            ),
         )
     return [by_key[key] for key in order]
+
+
+def lead_is_local_bugfix(lead: MatchSite) -> bool:
+    """True for a one-place correctness repair, not a mechanism change.
+
+    Quality hypotheses and correctness claims that name several sites stay in
+    the campaign. A single-line contract fix does not fill that slot.
+    """
+
+    if lead.hypothesis_kind != "correctness":
+        return False
+    places = {(lead.file_path, int(lead.line))}
+    for site in lead.sites:
+        places.add((site.file_path, int(site.line)))
+    return len(places) <= 1
+
+
+def select_work_leads(leads: list[MatchSite], cap: int) -> list[MatchSite]:
+    """Work mechanism hypotheses only.
+
+    A one-line correctness fix is not a campaign hypothesis. It stays in the
+    scout pool and is never measured in place of a larger claim.
+    """
+
+    cap = max(0, int(cap))
+    return [lead for lead in leads if not lead_is_local_bugfix(lead)][:cap]
+
+
+def _mechanism_pick_count(leads: list[MatchSite]) -> int:
+    return sum(1 for lead in leads if not lead_is_local_bugfix(lead))
 
 
 def pool_rows(leads: list[MatchSite]) -> list[dict]:
@@ -1454,6 +1532,40 @@ def _first_pick_rejection(
     return None
 
 
+def _validated_hypothesis_sites(
+    parsed: SiteProposal,
+    primary_path: str,
+    primary_line: int,
+    checkout: Path,
+) -> tuple[HypothesisSite, ...]:
+    """Keep the primary site and every extra site that exists in the checkout.
+
+    A companion that the model named but never opened is still part of the
+    hypothesis when the file is real runtime source. A missing path is dropped
+    and does not reject the claim.
+    """
+
+    sites = [HypothesisSite(primary_path, primary_line, "primary")]
+    seen = {(primary_path, primary_line)}
+    for item in list(parsed.sites or [])[:5]:
+        rel = (item.file_path or "").lstrip("/")
+        if "fedot/" in rel and not rel.startswith("fedot/"):
+            rel = rel[rel.index("fedot/") :]
+        line = int(item.change_line or 0)
+        if not rel or line < 1 or (rel, line) in seen:
+            continue
+        target = (checkout / rel).resolve()
+        if deny_write(target, checkout=checkout) or not target.is_file():
+            continue
+        if not _metric_path(rel):
+            continue
+        if not show_source(target, checkout=checkout, around=line):
+            continue
+        seen.add((rel, line))
+        sites.append(HypothesisSite(rel, line, (item.role or "").strip()))
+    return tuple(sites)
+
+
 def _accept_pick(
     parsed: SiteProposal,
     shown: set[str],
@@ -1504,6 +1616,9 @@ def _accept_pick(
         proposed_change=parsed.proposed_change.strip(),
         expected_metric_effect=parsed.expected_metric_effect.strip(),
         hypothesis_kind=parsed.hypothesis_kind,
+        sites=_validated_hypothesis_sites(
+            parsed, rel, line, checkout
+        ),
     )
 
 
@@ -1654,6 +1769,7 @@ def _llm_pick(
             proposed_change=winner.proposed_change,
             expected_metric_effect=winner.expected_metric_effect,
             hypothesis_kind=winner.hypothesis_kind,
+            sites=winner.sites,
         )
     seen: set[str] = set()
     reviewed_catalog_files: list[str] = []
@@ -1741,7 +1857,7 @@ def _llm_pick(
     excluded_exact = set(excluded_sites or ())
     excluded_semantic = set(excluded_semantic_sites or ())
     for lead in (() if external_stop else catalog):
-        if len(found) >= want or actions >= action_limit:
+        if _mechanism_pick_count(found) >= want or actions >= action_limit:
             budget_exhausted = actions >= action_limit
             break
         if lead.file_path in seen:
@@ -2186,6 +2302,7 @@ def _llm_pick(
                         proposed_change=picked.proposed_change,
                         expected_metric_effect=picked.expected_metric_effect,
                         hypothesis_kind=picked.hypothesis_kind,
+                        sites=picked.sites,
                     )
             rejection = (
                 _first_pick_rejection(

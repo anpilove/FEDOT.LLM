@@ -783,7 +783,19 @@ def run_once(
             closed_sites = closed_hunt_sites(
                 findings_path, source_hash=source_hash
             )
-            remaining_picks = max(0, cap - len(pending_unverified))
+            # A one-line correctness resume must not consume the hypothesis
+            # slot or skip the search for a mechanism change.
+            from fedotllm.agents.evolve.discovery.selection import (
+                lead_is_local_bugfix,
+                select_work_leads,
+            )
+
+            pending_mechanisms = [
+                item
+                for item in pending_unverified
+                if not lead_is_local_bugfix(item)
+            ]
+            remaining_picks = max(0, cap - len(pending_mechanisms))
             try:
                 def persist_scout_picks(selected: list[MatchSite]) -> None:
                     save_checkpoint(
@@ -839,21 +851,12 @@ def run_once(
                         infrastructure_error=True,
                     )
                 )
-            leads = skip_tried(
-                sites,
-                workspace,
-            )[:cap]
-            # Repair reproducible contract violations before speculative metric
-            # alternatives. This preserves Scout diversity while preventing a
-            # small budget from being consumed by defaults before real defects.
+            ordered = skip_tried(sites, workspace)
+            # Mechanism hypotheses take the slots. One-line contract repairs
+            # stay in the pool and are not run or measured.
+            leads = select_work_leads(ordered, cap)
             leads.sort(
-                key=lambda item: (
-                    0
-                    if "upstream_of_crash" in item.signals
-                    else 1
-                    if item.hypothesis_kind == "correctness"
-                    else 2
-                )
+                key=lambda item: 0 if "upstream_of_crash" in item.signals else 1
             )
         static_rows = list(trace.get("pool_rows_static") or [])
         pick = trace.get("llm_pick")
@@ -912,7 +915,11 @@ def run_once(
         reason = external_stop or (
             f"scout_incomplete: {failed_reads} failed reads"
             if failed_reads
-            else "no_lead"
+            else (
+                "no_mechanism_hypothesis"
+                if sites and all(lead_is_local_bugfix(item) for item in sites)
+                else "no_lead"
+            )
         )
         decision = Decision(
             keep=False,

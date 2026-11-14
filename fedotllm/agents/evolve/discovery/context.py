@@ -222,6 +222,26 @@ def context_from_lead(lead: MatchSite, checkout: Path, *, max_chars: int = _MAX_
             else "File is long; this is the enclosing method. Patch here or the real cause next to it."
         ),
     ]
+    if len(lead.sites) > 1:
+        listing = [
+            f"- {site.file_path}:{site.line}" + (f" ({site.role})" if site.role else "")
+            for site in lead.sites
+        ]
+        companion_blocks = ["\n".join(listing)]
+        for site in lead.sites:
+            if (site.file_path, site.line) == (lead.file_path, lead.line):
+                continue
+            snippet = show_source(
+                site.file_path, checkout=checkout, around=site.line, radius=12
+            )
+            if snippet:
+                companion_blocks.append(
+                    f"Companion site {site.file_path}:{site.line}:\n{snippet}"
+                )
+        parts.append(
+            "Hypothesis sites (one claim; implement every listed site in one patch):\n"
+            + "\n\n".join(companion_blocks)
+        )
     if lead.why:
         parts.append(f"Research hypothesis (not evidence): {_clip(lead.why, 2_500)}")
     if lead.mechanism or lead.proposed_change or lead.expected_metric_effect:
