@@ -73,4 +73,4 @@ no quality KEEP, no OpenML registry run.
 - [x] `stock_ok` stays false when a measured stock row names a dataset that no job asked for, including a pack with no jobs.
 - [x] Two quality rows for the same dataset stay `not_evaluated`. The stored delta is the worse one, so a later gain does not hide the regression.
 - [x] A quality row with no `source_dataset` stays `not_evaluated`. It does not KEEP, and a rooted gain beside it does not KEEP either.
-- [ ] Read GOLEM `GraphVerifier`: a rule that returns nothing rejects the graph before evaluation. Check that `compare_pack` refuses KEEP when a requested lift id is missing from the stock or patch map, instead of raising `KeyError`.
+- [x] Read GOLEM `GraphVerifier`. A rule rejects the graph only when it returns `False` or raises `ValueError`. `None` does not reject, and any other exception escapes. `compare_pack` now refuses KEEP with `missing_measurement` when a requested lift or protect id is absent from the stock or patch map. It does not raise `KeyError`.

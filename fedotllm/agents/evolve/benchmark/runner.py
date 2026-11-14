@@ -604,18 +604,39 @@ def benchmark_configuration(source: Path, workspace: Path) -> dict:
         )
 
 
-def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
+def benchmark_configuration_search(
+    source: Path,
+    workspace: Path,
+    tasks: tuple[str, ...] = ("rf", "cancer", "kc2"),
+    skip_patch_hashes: set[str] | None = None,
+    prior_trials: list[dict] | None = None,
+    proposal_source: Path | None = None,
+    lift_ids: tuple[str, ...] | None = None,
+    protect_ids: tuple[str, ...] | None = None,
+) -> dict:
     """Prove generic runtime-surface search, without loading a canonical patch."""
 
     from fedotllm.agents.evolve.commands.configuration_search import (
+        choose_final_keep,
+        measured_trial_rows,
         search_configuration_variants,
+        write_kept_configuration_patch,
     )
+    from fedotllm.agents.evolve.evaluation.tasks import load_task
 
-    tasks = ("rf", "cancer", "kc2")
-    operation_hints = {task_id: ("rf",) for task_id in tasks}
+    lift = lift_ids or tasks
+    protect = protect_ids or tasks
+    measured = tuple(dict.fromkeys((*lift, *protect)))
+    specs = {task_id: load_task(task_id) for task_id in measured}
+    operation_hints = {
+        task_id: tuple(spec.nodes) for task_id, spec in specs.items()
+    }
+    # A stacked hunt clones experiments from the kept tree. Score that tree,
+    # not the bare pin, or an older default shows up as a lift of the new one.
+    baseline = proposal_source or source
     stock = measure_stock(
-        tasks,
-        checkout=source,
+        measured,
+        checkout=baseline,
         split="dev",
         seed=42,
         collect_coverage=True,
@@ -628,12 +649,18 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
         source_hash=source_fingerprint(source),
         stock=stock,
         operation_hints=operation_hints,
-        problem_by_task={task_id: "classification" for task_id in tasks},
-        lift_ids=tasks,
-        protect_ids=tasks,
+        problem_by_task={
+            task_id: spec.problem for task_id, spec in specs.items()
+        },
+        lift_ids=lift,
+        protect_ids=protect,
         baseline_tests=baseline_tests,
-        max_trials=1,
+        max_trials=3,
         dev_seed=42,
+        retain_dev_keeps=True,
+        skip_patch_hashes=skip_patch_hashes,
+        prior_trials=prior_trials,
+        proposal_source=proposal_source,
     )
     if outcome.candidate is None or outcome.experiment is None:
         return {
@@ -644,48 +671,127 @@ def benchmark_configuration_search(source: Path, workspace: Path) -> dict:
             "trials": outcome.trials,
         }
     try:
-        final_stock = measure_stock(tasks, checkout=source, split="final", seed=42)
-        final_patched = measure_patched(
-            tasks,
-            checkout=outcome.experiment,
-            split="final",
-            seed=42,
+        finalists = outcome.dev_keeps or []
+        final_stock = measure_stock(measured, checkout=baseline, split="final", seed=42)
+        finals = [
+            verdict(
+                final_stock,
+                measure_patched(
+                    measured,
+                    checkout=item.experiment,
+                    split="final",
+                    seed=42,
+                ),
+                lift_ids=lift,
+                protect_ids=protect,
+            )
+            for item in finalists
+        ]
+        chosen_index = choose_final_keep(finals)
+        if chosen_index is None:
+            chosen_index = len(finalists) - 1
+        chosen = finalists[chosen_index]
+        final = finals[chosen_index]
+        reported_patch = chosen.patch_path
+        if chosen.experiment != outcome.experiment and chosen.candidate is not None:
+            reported_patch = write_kept_configuration_patch(
+                workspace,
+                chosen.candidate,
+                source=source,
+                experiment=chosen.experiment,
+            )
+        selected = chosen.variant
+        dev_winner_keep = next(
+            (item for item in finalists if item.experiment == outcome.experiment),
+            finalists[-1],
         )
-        final = verdict(
-            final_stock,
-            final_patched,
-            lift_ids=tasks,
-            protect_ids=tasks,
+        dev_winner = dev_winner_keep.variant
+        change = (
+            f"{selected.get('operation')} {selected.get('parameter')} "
+            f"{selected.get('current_value')} -> {selected.get('value')}"
         )
-        selected = outcome.trials[-1].get("variant") or {}
+        if proposal_source is not None:
+            from fedotllm.agents.evolve.commands.configuration_search import (
+                parameters_already_in_defaults,
+            )
+
+            preserved = sorted(
+                parameters_already_in_defaults(source, proposal_source).get(
+                    str(selected.get("operation") or ""),
+                    set(),
+                )
+            )
+            if preserved:
+                change = f"{change} on top of {', '.join(preserved)}"
+        summary = {
+            "change": change,
+            "dev_target_delta": chosen.decision.target_delta,
+            "dev_task_deltas": chosen.decision.regression_deltas,
+            "dev_winner": (
+                f"{dev_winner.get('operation')} {dev_winner.get('parameter')} "
+                f"{dev_winner.get('current_value')} -> {dev_winner.get('value')}"
+            ),
+            "final_target_delta": final.target_delta,
+            "final_task_deltas": final.regression_deltas,
+            "final_keep": final.keep,
+            "selection": "highest passing FINAL target_delta",
+            "patch": str(reported_patch or outcome.patch_path or ""),
+            "measured": measured_trial_rows(outcome.trials),
+        }
+        final_by_change = {
+            (item.variant.get("parameter"), item.variant.get("value")): decision
+            for item, decision in zip(finalists, finals)
+        }
+        for row in summary["measured"]:
+            decision = final_by_change.get((row.get("parameter"), row.get("to")))
+            if decision is None:
+                continue
+            row["final_target_delta"] = decision.target_delta
+            row["final_keep"] = decision.keep
+        kept_trial = next(
+            (
+                row
+                for row in outcome.trials
+                if row.get("stage") == "dev_keep"
+                and (row.get("variant") or {}).get("parameter") == selected.get("parameter")
+                and (row.get("variant") or {}).get("value") == selected.get("value")
+            ),
+            {},
+        )
         checks = {
-            "generated_without_canonical_patch": outcome.candidate.candidate_id.startswith(
+            "generated_without_canonical_patch": chosen.candidate.candidate_id.startswith(
                 "config-"
             ),
             "quick_dev_keep": bool(
-                (outcome.trials[-1].get("quick_decision") or {}).get("keep")
+                (kept_trial.get("quick_decision") or {}).get("keep")
             ),
-            "full_dev_keep": outcome.decision.keep,
-            "behavior_changed": outcome.behavior_probe.get("status") == "changed",
-            "tests_passed_comparatively": outcome.tests is not None,
+            "full_dev_keep": chosen.decision.keep,
+            "behavior_changed": chosen.behavior_probe.get("status") == "changed",
+            "tests_passed_comparatively": chosen.tests is not None,
             "final_keep": final.keep,
         }
         return {
             "ok": all(checks.values()),
             "component": "configuration-search",
+            "summary": summary,
             "checks": checks,
             "selected_variant": selected,
-            "candidate": outcome.candidate.candidate_id,
-            "dev": asdict(outcome.decision),
+            "candidate": chosen.candidate.candidate_id,
+            "dev": asdict(chosen.decision),
             "final": asdict(final),
             "trials": outcome.trials,
         }
     finally:
-        discard_experiment_checkout(
-            outcome.experiment,
-            workspace=workspace,
-            source=source,
-        )
+        experiments = [item.experiment for item in outcome.dev_keeps]
+        if outcome.experiment is not None:
+            experiments.append(outcome.experiment)
+        discard_source = proposal_source or source
+        for experiment in dict.fromkeys(experiments):
+            discard_experiment_checkout(
+                experiment,
+                workspace=workspace,
+                source=discard_source,
+            )
 
 
 def _brief_scores(scores: dict[str, ScoreResult]) -> dict[str, dict]:

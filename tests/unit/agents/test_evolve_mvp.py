@@ -437,6 +437,143 @@ def test_generic_configuration_variants_use_runtime_surface_not_case_catalog(
     assert payload["rf"] == {"min_samples_leaf": 2, "n_jobs": 1}
 
 
+def test_unset_depth_is_capped_below_the_xgboost_default():
+    from fedotllm.agents.evolve.commands.configuration_search import generic_values
+
+    unset = generic_values("max_depth", None, classification=True)
+    assert unset
+    assert all(isinstance(value, int) and value < 6 for value, _reason in unset)
+    assert generic_values("max_depth", -1, classification=True) == [
+        (8, "bound model depth to reduce variance")
+    ]
+
+
+def test_unset_xgboost_l2_is_not_weakened():
+    from fedotllm.agents.evolve.commands.configuration_search import generic_values
+
+    stronger = generic_values(
+        "reg_lambda", None, classification=True, operation="xgboost"
+    )
+    assert stronger
+    assert all(isinstance(value, (int, float)) and value > 1 for value, _reason in stronger)
+    mild = generic_values("reg_lambda", None, classification=True, operation="lgbm")
+    assert mild[0][0] == 0.01
+
+
+def test_unset_xgboost_learning_rate_starts_from_the_booster_default():
+    from fedotllm.agents.evolve.commands.configuration_search import generic_values
+
+    values = generic_values(
+        "learning_rate", None, classification=True, operation="xgboost"
+    )
+    assert values
+    assert values[0][0] == 0.15
+    assert generic_values("learning_rate", None, classification=True, operation="lgbm") == []
+
+
+def test_historical_refinement_stays_on_the_lift_operation():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        refinements_for_operations,
+    )
+
+    trials = [
+        {
+            "stage": "quick_dev",
+            "reason": "target_delta 0.0063 below per-task threshold",
+            "quick_decision": {
+                "target_delta": 0.0063,
+                "reason": "target_delta 0.0063 below per-task threshold",
+            },
+            "variant": {
+                "operation": "catboost",
+                "parameter": "learning_rate",
+                "value": 0.015,
+                "current_value": 0.03,
+            },
+        }
+    ]
+    assert refinements_for_operations(trials, {"xgboost"}) == []
+    kept = refinements_for_operations(trials, {"catboost"})
+    assert kept
+    assert kept[0].operation == "catboost"
+
+
+def test_final_split_regression_queues_the_midpoint_of_the_booster_default():
+    from fedotllm.agents.evolve.commands.configuration_search import final_split_midpoints
+
+    trial = {
+        "stage": "final",
+        "reason": "regression kc2->xgboost delta -0.0156",
+        "final_decision": {
+            "keep": False,
+            "reason": "regression kc2->xgboost delta -0.0156",
+            "target_delta": 0.010926422400953206,
+            "regression_deltas": {
+                "xgboost": 0.010926422400953206,
+                "cancer->xgboost": 0.0034965034965035446,
+                "kc2->xgboost": -0.015607886089813783,
+            },
+        },
+        "variant": {
+            "operation": "xgboost",
+            "parameter": "reg_lambda",
+            "value": 2.0,
+            "current_value": None,
+        },
+    }
+    queued = final_split_midpoints([trial], {"xgboost"})
+    assert [item.value for item in queued] == [1.5]
+    assert queued[0].current_value == 1.0
+    weak = {
+        **trial,
+        "final_decision": {
+            **trial["final_decision"],
+            "target_delta": 0.004,
+            "regression_deltas": {"xgboost": 0.004, "kc2->xgboost": -0.02},
+        },
+    }
+    assert final_split_midpoints([weak], {"xgboost"}) == []
+
+
+def test_below_threshold_neighbor_of_a_final_lift_is_remeasured():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        follows_final_neighbor,
+        remembered_patch_hashes,
+    )
+
+    final = {
+        "stage": "final",
+        "patch_hash": "hash-2",
+        "variant": {"operation": "xgboost", "parameter": "reg_lambda", "value": 2.0},
+        "final_decision": {
+            "regression_deltas": {
+                "xgboost": 0.010926422400953206,
+                "kc2->xgboost": -0.015607886089813783,
+            }
+        },
+    }
+    quick = {
+        "stage": "quick_dev",
+        "patch_hash": "hash-10",
+        "reason": "target_delta 0.0045 below per-task threshold",
+        "variant": {"operation": "xgboost", "parameter": "reg_lambda", "value": 10.0},
+        "quick_decision": {
+            "reason": "target_delta 0.0045 below per-task threshold",
+            "regression_deltas": {
+                "xgboost": 0.004488134246847353,
+                "cancer->xgboost": -0.0034965034965034336,
+                "kc2->xgboost": 0.0005737234652897216,
+            },
+        },
+    }
+    deltas = quick["quick_decision"]["regression_deltas"]
+    assert follows_final_neighbor([final], "xgboost", "reg_lambda", deltas)
+    assert "hash-10" not in remembered_patch_hashes([final, quick])
+    assert "hash-2" in remembered_patch_hashes([final, quick])
+    finished = {**quick, "stage": "final", "reason": "regression kc2->xgboost delta -0.0100"}
+    assert "hash-10" in remembered_patch_hashes([final, quick, finished])
+
+
 def test_configuration_surface_falls_back_to_traced_wrapper_params():
     from fedotllm.agents.evolve.commands.configuration_search import (
         propose_parameter_variants,
@@ -526,7 +663,7 @@ def test_generic_lgbm_surface_reaches_regularization_and_capacity_variants():
     )
 
     pairs = [(row.parameter, row.value) for row in variants]
-    assert pairs[:2] == [("min_child_samples", 10), ("min_child_samples", 40)]
+    assert pairs[:2] == [("min_child_samples", 40), ("min_child_samples", 10)]
     assert ("reg_lambda", 0.01) in pairs
     assert ("reg_alpha", 0.01) in pairs
 
@@ -540,6 +677,412 @@ def test_generic_lgbm_surface_reaches_regularization_and_capacity_variants():
     deep_pairs = [(row.parameter, row.value) for row in deep_variants]
     assert ("learning_rate", 0.05) in deep_pairs
     assert ("num_leaves", 15) in deep_pairs
+
+
+def test_broad_surface_tries_each_parameter_before_a_second_scale():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        propose_parameter_variants,
+        spread_first_parameter_values,
+    )
+
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"max_depth": -1},
+            "supported_parameters": [
+                "min_child_samples",
+                "reg_alpha",
+                "reg_lambda",
+                "max_depth",
+                "learning_rate",
+                "num_leaves",
+            ],
+            "estimator_defaults": {
+                "min_child_samples": 20,
+                "reg_alpha": 0.0,
+                "reg_lambda": 0.0,
+                "max_depth": -1,
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+            },
+        },
+    )
+    variants = propose_parameter_variants(
+        {"lgbm": ("lgbm",)},
+        {"lgbm": ScoreResult("lgbm", "ok", 0.8, dataflow=flow)},
+        problem_by_task={"lgbm": "classification"},
+        max_variants_per_operation=20,
+        max_total=20,
+    )
+    params = [row.parameter for row in spread_first_parameter_values(variants)]
+    second_leaf_support = params.index(
+        "min_child_samples", params.index("min_child_samples") + 1
+    )
+    assert params.index("max_depth") < second_leaf_support
+    assert params.index("learning_rate") < second_leaf_support
+    assert params.index("reg_alpha") < second_leaf_support
+
+
+def test_second_scale_precedes_a_historical_refinement():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterVariant,
+        spread_first_parameter_values,
+    )
+
+    ordered = spread_first_parameter_values(
+        [
+            ParameterVariant(
+                "lgbm",
+                "num_leaves",
+                7,
+                31,
+                "execution-guided refinement: slightly farther in the promising direction",
+            ),
+            ParameterVariant("lgbm", "reg_lambda", 0.01, 0.0, "mild L2"),
+            ParameterVariant("lgbm", "reg_lambda", 0.1, 0.0, "stronger L2"),
+        ]
+    )
+    values = [(row.parameter, row.value) for row in ordered]
+    assert values.index(("reg_lambda", 0.1)) < values.index(("num_leaves", 7))
+
+
+def test_variant_budget_includes_the_first_value_of_extra_trees():
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        configuration_variant_budget,
+        propose_parameter_variants,
+    )
+
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"max_depth": -1},
+            "supported_parameters": [
+                "min_child_samples",
+                "reg_lambda",
+                "reg_alpha",
+                "max_depth",
+                "learning_rate",
+                "num_leaves",
+                "colsample_bytree",
+                "subsample",
+                "bagging_fraction",
+                "extra_trees",
+            ],
+            "estimator_defaults": {
+                "min_child_samples": 20,
+                "reg_lambda": 0.0,
+                "reg_alpha": 0.0,
+                "max_depth": -1,
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+                "colsample_bytree": 1.0,
+                "subsample": 1.0,
+                "bagging_fraction": 0.85,
+                "extra_trees": False,
+            },
+        },
+    )
+    per_operation, total = configuration_variant_budget(max_trials=3, max_operations=3)
+    variants = propose_parameter_variants(
+        {"lgbm": ("lgbm",)},
+        {"lgbm": ScoreResult("lgbm", "ok", 0.8, dataflow=flow)},
+        problem_by_task={"lgbm": "classification"},
+        max_variants_per_operation=per_operation,
+        max_total=total,
+    )
+    assert ("extra_trees", True) in [(row.parameter, row.value) for row in variants]
+
+
+def test_lift_hunt_does_not_spend_a_trial_on_a_protected_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterVariant,
+        candidate_for_variant,
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps({"lgbm": {"learning_rate": 0.1}, "rf": {"n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    source_hash = source_fingerprint(source)
+    skipped = set()
+    for value in (0.05, 0.2):
+        candidate = candidate_for_variant(
+            source,
+            ParameterVariant("lgbm", "learning_rate", value, 0.1, "already tried"),
+        )
+        assert candidate is not None
+        skipped.add(normalized_patch_hash(candidate, source_hash))
+    lgbm_flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"learning_rate": 0.1},
+            "supported_parameters": ["learning_rate"],
+            "estimator_defaults": {"learning_rate": 0.1},
+        },
+    )
+    rf_flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_split"],
+            "estimator_defaults": {"min_samples_split": 2},
+        },
+    )
+    stock = {
+        "lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=lgbm_flow),
+        "rf": ScoreResult("rf", "ok", 0.80, dataflow=rf_flow),
+    }
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.90) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(judge, "measure_stock", lambda task_ids, **_kwargs: {
+        task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+    })
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="lift-only",
+        source_hash=source_hash,
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",), "rf": ("rf",)},
+        problem_by_task={"lgbm": "classification", "rf": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm", "rf"),
+        baseline_tests=TestResult("passed", 0),
+        skip_patch_hashes=skipped,
+        max_trials=1,
+    )
+    try:
+        assert [row["variant"]["operation"] for row in outcome.trials] == ["lgbm", "lgbm"]
+        assert all(row["stage"] == "dedup" for row in outcome.trials)
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
+def test_weak_near_miss_does_not_skip_the_next_parameter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"lgbm": {"verbose": -1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {"verbose": -1},
+            "supported_parameters": ["learning_rate", "num_leaves"],
+            "estimator_defaults": {"learning_rate": 0.1, "num_leaves": 31},
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        params = json.loads((checkout / defaults_rel).read_text(encoding="utf-8"))["lgbm"]
+        score = 0.90 if params.get("num_leaves") == 15 else 0.805
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="defer-near-miss",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=2,
+    )
+    try:
+        measured = [row for row in outcome.trials if row.get("stage") != "dedup"]
+        assert [row["variant"]["parameter"] for row in measured] == [
+            "learning_rate",
+            "num_leaves",
+        ]
+        assert measured[1]["variant"]["value"] == 15
+        assert outcome.decision.keep is True
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
+def test_discarded_early_stopping_callback_is_appended(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        discarded_early_stopping_candidate,
+        write_kept_configuration_patch,
+    )
+    from fedotllm.agents.evolve.execution.patch import apply_patch
+
+    rel = (
+        "fedot/core/operations/evaluation/operation_implementations/"
+        "models/boostings_implementations.py"
+    )
+    source = tmp_path / "pin"
+    target = source / rel
+    target.parent.mkdir(parents=True)
+    body = (
+        "class FedotLightGBMImplementation:\n"
+        "    def update_callbacks(self) -> list:\n"
+        "        callback = []\n"
+        "\n"
+        "        esr = self.params.get('early_stopping_rounds')\n"
+        "        if isinstance(esr, int):\n"
+        "            lgbm_early_stopping(esr, verbose=self.params.get('verbose'))\n"
+        "\n"
+        "        return callback\n"
+    )
+    target.write_text(body, encoding="utf-8")
+    candidate = discarded_early_stopping_candidate(source)
+    assert candidate is not None
+    assert "callback.append(lgbm_early_stopping" in candidate.new_code
+    experiment = tmp_path / "experiment"
+    experiment.mkdir()
+    copied = experiment / rel
+    copied.parent.mkdir(parents=True)
+    copied.write_text(body, encoding="utf-8")
+    assert apply_patch(experiment, candidate) is True
+    assert "callback.append(lgbm_early_stopping" in copied.read_text(encoding="utf-8")
+    assert discarded_early_stopping_candidate(experiment) is None
+    defaults = "fedot/core/repository/data/default_operation_params.json"
+    (source / defaults).parent.mkdir(parents=True, exist_ok=True)
+    (source / defaults).write_text("{}\n", encoding="utf-8")
+    (experiment / defaults).parent.mkdir(parents=True, exist_ok=True)
+    (experiment / defaults).write_text('{"lgbm": {}}\n', encoding="utf-8")
+    patch = write_kept_configuration_patch(
+        tmp_path / "out",
+        PatchCandidate(
+            candidate_id="defaults",
+            file_path=defaults,
+            old_code="{}\n",
+            new_code='{"lgbm": {}}\n',
+            rationale="defaults",
+        ),
+        source=source,
+        experiment=experiment,
+    )
+    text = patch.read_text(encoding="utf-8")
+    assert "boostings_implementations.py" in text
+    assert "callback.append(lgbm_early_stopping" in text
+
+
+def test_measured_early_stopping_callback_is_not_retried(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        discarded_early_stopping_candidate,
+        measure_discarded_early_stopping,
+    )
+    from fedotllm.agents.evolve.execution.checkout import source_fingerprint
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    rel = (
+        "fedot/core/operations/evaluation/operation_implementations/"
+        "models/boostings_implementations.py"
+    )
+    source = tmp_path / "pin"
+    target = source / rel
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "        if isinstance(esr, int):\n"
+        "            lgbm_early_stopping(esr, verbose=self.params.get('verbose'))\n",
+        encoding="utf-8",
+    )
+    candidate = discarded_early_stopping_candidate(source)
+    assert candidate is not None
+    patch_hash = normalized_patch_hash(candidate, source_fingerprint(source))
+    assert (
+        measure_discarded_early_stopping(
+            source,
+            tmp_path / "work",
+            tasks=("lgbm",),
+            lift_ids=("lgbm",),
+            protect_ids=("lgbm",),
+            skip_patch_hashes={patch_hash},
+        )
+        is None
+    )
+
+
+def test_keyless_hunt_measures_the_discarded_callback_before_more_defaults(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+
+    def measure(*_args, **_kwargs):
+        return {
+            "ok": False,
+            "decision": {
+                "keep": False,
+                "reason": "target_delta 0.002 below per-task threshold",
+                "target_delta": 0.002,
+                "regression_deltas": {"lgbm": 0.002},
+            },
+            "summary": {
+                "change": "lgbm early_stopping callback discarded -> appended",
+                "final_keep": False,
+            },
+        }
+
+    def search(*_args, **_kwargs):
+        raise AssertionError("defaults must wait until the callback patch is measured")
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.configuration_search.measure_discarded_early_stopping",
+        measure,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work")])
+    payload = json.loads(capsys.readouterr().out)
+    assert code != 0
+    assert payload["change"] == "lgbm early_stopping callback discarded -> appended"
 
 
 def test_generic_decomposition_surface_proposes_existing_solver_alternatives():
@@ -679,6 +1222,333 @@ def test_positive_bundle_near_miss_produces_bounded_numeric_refinements():
     ]
 
 
+def test_historical_near_miss_waits_behind_an_unmeasured_parameter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterBundle,
+        ParameterVariant,
+        candidate_for_variant,
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps(
+            {
+                "lgbm": {
+                    "learning_rate": 0.1,
+                    "num_leaves": 31,
+                    "bagging_fraction": 0.85,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    learning = ParameterVariant("lgbm", "learning_rate", 0.05, 0.1, "slower")
+    leaves = ParameterVariant("lgbm", "num_leaves", 15, 31, "smaller")
+    bundle = ParameterBundle("lgbm", (learning, leaves), "coupled update")
+    source_hash = source_fingerprint(source)
+    skipped = {
+        normalized_patch_hash(candidate, source_hash)
+        for candidate in (
+            candidate_for_variant(source, learning),
+            candidate_for_variant(source, leaves),
+            candidate_for_variant(source, bundle),
+        )
+        if candidate is not None
+    }
+    assert len(skipped) == 3
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+                "bagging_fraction": 0.85,
+            },
+            "supported_parameters": ["learning_rate", "num_leaves", "bagging_fraction"],
+            "estimator_defaults": {
+                "learning_rate": 0.1,
+                "num_leaves": 31,
+                "bagging_fraction": 0.85,
+            },
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(judge, "measure_stock", lambda task_ids, **_kwargs: stock)
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="historical-near-miss",
+        source_hash=source_hash,
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        skip_patch_hashes=skipped,
+        prior_trials=[
+            {
+                "stage": "quick_dev",
+                "reason": "target_delta 0.0048 below per-task threshold",
+                "quick_decision": {"target_delta": 0.0048},
+                "variant": {
+                    "operation": "lgbm",
+                    "variants": [
+                        {
+                            "operation": "lgbm",
+                            "parameter": "learning_rate",
+                            "value": 0.05,
+                            "current_value": 0.1,
+                            "rationale": "slower updates",
+                        },
+                        {
+                            "operation": "lgbm",
+                            "parameter": "num_leaves",
+                            "value": 15,
+                            "current_value": 31,
+                            "rationale": "smaller trees",
+                        },
+                    ],
+                    "rationale": "coupled update",
+                },
+            }
+        ],
+        max_trials=1,
+    )
+    try:
+        measured = [row for row in outcome.trials if row.get("stage") != "dedup"]
+        assert measured[0]["variant"]["parameter"] == "bagging_fraction"
+        assert measured[0]["variant"]["value"] == 0.7
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
+def test_bundle_of_measured_values_waits_behind_an_unseen_parameter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ParameterVariant,
+        candidate_for_variant,
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.storage.hypothesis import normalized_patch_hash
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps(
+            {
+                "lgbm": {
+                    "reg_lambda": 0.0,
+                    "num_leaves": 31,
+                    "bagging_fraction": 0.85,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    regularizer = ParameterVariant("lgbm", "reg_lambda", 0.01, 0.0, "mild L2")
+    leaves = ParameterVariant("lgbm", "num_leaves", 15, 31, "smaller")
+    source_hash = source_fingerprint(source)
+    skipped = {
+        normalized_patch_hash(candidate, source_hash)
+        for candidate in (
+            candidate_for_variant(source, regularizer),
+            candidate_for_variant(source, leaves),
+        )
+        if candidate is not None
+    }
+    assert len(skipped) == 2
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {
+                "reg_lambda": 0.0,
+                "num_leaves": 31,
+                "bagging_fraction": 0.85,
+            },
+            "supported_parameters": ["reg_lambda", "num_leaves", "bagging_fraction"],
+            "estimator_defaults": {
+                "reg_lambda": 0.0,
+                "num_leaves": 31,
+                "bagging_fraction": 0.85,
+            },
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(judge, "measure_stock", lambda task_ids, **_kwargs: stock)
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+
+    def measured_single(parameter: str, value: float | int, current: float | int) -> dict:
+        return {
+            "stage": "quick_dev",
+            "reason": "target_delta 0.0057 below per-task threshold",
+            "variant": {
+                "operation": "lgbm",
+                "parameter": parameter,
+                "value": value,
+                "current_value": current,
+                "rationale": "already measured",
+            },
+        }
+
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="measured-bundle",
+        source_hash=source_hash,
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        skip_patch_hashes=skipped,
+        prior_trials=[
+            measured_single("reg_lambda", 0.01, 0.0),
+            measured_single("num_leaves", 15, 31),
+        ],
+        max_trials=1,
+    )
+    try:
+        measured = [row for row in outcome.trials if row.get("stage") != "dedup"]
+        assert measured[0]["variant"]["parameter"] == "bagging_fraction"
+        assert measured[0]["variant"]["value"] == 0.7
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
+def test_zero_delta_parameter_does_not_spend_a_bundle_trial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps(
+            {
+                "lgbm": {
+                    "colsample_bytree": 1.0,
+                    "subsample": 1.0,
+                    "bagging_fraction": 0.85,
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    flow = (
+        {
+            "operation": "lgbm",
+            "implementation": "FedotLightGBMClassificationImplementation",
+            "params": {
+                "colsample_bytree": 1.0,
+                "subsample": 1.0,
+                "bagging_fraction": 0.85,
+            },
+            "supported_parameters": [
+                "colsample_bytree",
+                "subsample",
+                "bagging_fraction",
+            ],
+            "estimator_defaults": {
+                "colsample_bytree": 1.0,
+                "subsample": 1.0,
+                "bagging_fraction": 0.85,
+            },
+        },
+    )
+    stock = {"lgbm": ScoreResult("lgbm", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        params = json.loads((checkout / defaults_rel).read_text(encoding="utf-8"))["lgbm"]
+        score = 0.90 if params.get("bagging_fraction") == 0.7 else 0.80
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="inert-bundle",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"lgbm": ("lgbm",)},
+        problem_by_task={"lgbm": "classification"},
+        lift_ids=("lgbm",),
+        protect_ids=("lgbm",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=3,
+    )
+    try:
+        assert any(row.get("stage") == "inert_part" for row in outcome.trials)
+        assert any(
+            row.get("variant", {}).get("parameter") == "bagging_fraction"
+            and row.get("stage") != "dedup"
+            for row in outcome.trials
+        )
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
 def test_configuration_candidate_adds_missing_operation_default(tmp_path: Path):
     from fedotllm.agents.evolve.commands.configuration_search import (
         ParameterVariant,
@@ -704,6 +1574,38 @@ def test_configuration_candidate_adds_missing_operation_default(tmp_path: Path):
     payload = json.loads(defaults.read_text(encoding="utf-8"))
     assert payload["ridge"] == {"alpha": 0.1}
     assert payload["rf"] == {"n_jobs": 1}
+
+
+def test_configuration_search_unmeasured_stock_is_infrastructure(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    stock = {
+        task_id: ScoreResult(task_id, "invalid", float("nan"), detail="worker exit 1")
+        for task_id in ("rf", "cancer", "kc2")
+    }
+
+    outcome = search_configuration_variants(
+        source,
+        tmp_path / "workspace",
+        run_id="configuration-unmeasured",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={task_id: ("rf",) for task_id in stock},
+        problem_by_task={task_id: "classification" for task_id in stock},
+        lift_ids=tuple(stock),
+        protect_ids=tuple(stock),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+    )
+
+    assert outcome.candidate is None
+    assert outcome.trials == []
+    assert outcome.decision.keep is False
+    assert outcome.decision.infrastructure_error is True
+    assert outcome.decision.reason == "configuration_stock_unmeasured rf"
 
 
 def test_configuration_search_requires_quick_full_probe_and_tests(
@@ -799,7 +1701,14 @@ def test_configuration_search_requires_quick_full_probe_and_tests(
         assert measured[0] == ("dev", ("rf", "cancer", "kc2"))
         assert measured[1] == ("dev", ("rf", "cancer", "kc2", "catboost"))
         assert measured[2] == ("shadow", ("rf", "cancer", "kc2"))
-        assert outcome.trials[-1]["stage"] == "dev_keep"
+        assert any(row["stage"] == "dev_keep" for row in outcome.trials)
+        assert outcome.trials[-1]["stage"] == "dev_keep_not_better"
+        patch = workspace / "kept_configuration.patch"
+        assert outcome.patch_path == patch
+        assert patch.is_file()
+        text = patch.read_text(encoding="utf-8")
+        assert "fedot/core/repository/data/default_operation_params.json" in text
+        assert '"min_samples_leaf": 2' in text
     finally:
         if outcome.experiment is not None:
             discard_experiment_checkout(
@@ -807,6 +1716,1235 @@ def test_configuration_search_requires_quick_full_probe_and_tests(
                 workspace=workspace,
                 source=source,
             )
+    assert (workspace / "kept_configuration.patch").is_file()
+
+
+def test_configuration_search_keeps_the_stronger_later_variant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps({"note": "header", "rf": {"n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf"],
+            "estimator_defaults": {"min_samples_leaf": 1},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+
+    def fake_patched(task_ids, **kwargs):
+        text = (
+            Path(kwargs["checkout"])
+            / "fedot/core/repository/data/default_operation_params.json"
+        ).read_text(encoding="utf-8")
+        score = 0.93 if '"min_samples_leaf": 4' in text else 0.85
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", fake_patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(
+        judge, "measure_fedot_tests", lambda *args, **kwargs: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop, "compare_behavior_probe", lambda *args, **kwargs: {"status": "changed"}
+    )
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="configuration-best",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=2,
+    )
+    try:
+        assert outcome.decision.keep is True
+        assert outcome.decision.target_delta == pytest.approx(0.13)
+        assert [row["stage"] for row in outcome.trials] == ["dev_keep", "dev_keep"]
+        assert outcome.trials[0]["variant"]["value"] == 2
+        assert outcome.trials[1]["variant"]["value"] == 4
+        text = (workspace / "kept_configuration.patch").read_text(encoding="utf-8")
+        assert text.endswith("\n")
+        assert '"min_samples_leaf": 4' in text
+        assert '"min_samples_leaf": 2' not in text
+        copy = tmp_path / "apply"
+        target = copy / "fedot/core/repository/data/default_operation_params.json"
+        target.parent.mkdir(parents=True)
+        target.write_text(defaults.read_text(encoding="utf-8"), encoding="utf-8")
+        applied = subprocess.run(
+            ["git", "apply", "--check", str(workspace / "kept_configuration.patch")],
+            cwd=copy,
+            capture_output=True,
+            text=True,
+        )
+        assert applied.returncode == 0, applied.stderr
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
+def test_configuration_search_measures_the_next_parameter_and_keeps_the_better(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(
+        json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+
+    def fake_patched(task_ids, **kwargs):
+        text = (
+            Path(kwargs["checkout"])
+            / "fedot/core/repository/data/default_operation_params.json"
+        ).read_text(encoding="utf-8")
+        if '"min_samples_split": 4' in text:
+            score = 0.84
+        elif '"min_samples_leaf": 6' in text:
+            score = 0.88
+        elif '"min_samples_leaf": 4' in text:
+            score = 0.93
+        else:
+            score = 0.85
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", fake_patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(
+        judge, "measure_fedot_tests", lambda *args, **kwargs: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop, "compare_behavior_probe", lambda *args, **kwargs: {"status": "changed"}
+    )
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="configuration-next-parameter",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=4,
+    )
+    try:
+        assert [row["variant"]["parameter"] for row in outcome.trials] == [
+            "min_samples_leaf",
+            "min_samples_leaf",
+            "min_samples_leaf",
+            "min_samples_split",
+        ]
+        assert [row["variant"]["value"] for row in outcome.trials] == [2, 4, 6, 4]
+        assert [row["stage"] for row in outcome.trials] == [
+            "dev_keep",
+            "dev_keep",
+            "dev_keep_not_better",
+            "dev_keep_not_better",
+        ]
+        assert outcome.decision.target_delta == pytest.approx(0.13)
+        text = (workspace / "kept_configuration.patch").read_text(encoding="utf-8")
+        assert '"min_samples_leaf": 4' in text
+        assert "min_samples_split" not in text
+        from fedotllm.agents.evolve.commands.configuration_search import (
+            measured_trial_rows,
+        )
+
+        measured = measured_trial_rows(
+            [
+                {
+                    "variant": {
+                        "parameter": "min_samples_split",
+                        "current_value": 2,
+                        "value": 4,
+                    },
+                    "stage": "quick_dev",
+                    "quick_decision": {
+                        "reason": "regression rf delta -0.0115",
+                        "target_delta": 0.00545,
+                    },
+                }
+            ]
+        )
+        assert measured[0]["reason"] == "regression rf delta -0.0115"
+        assert measured[0]["dev_target_delta"] == 0.00545
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
+def test_run_without_a_model_key_applies_the_measured_configuration(tmp_path, monkeypatch, capsys):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    seen = {}
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), **_kwargs):
+        seen["tasks"] = tasks
+        seen["workspace"] = workspace
+        patch = Path(workspace) / "kept_configuration.patch"
+        patch.write_text(
+            "diff --git a/fedot/core/repository/data/default_operation_params.json\n",
+            encoding="utf-8",
+        )
+        return {
+            "ok": True,
+            "summary": {
+                "change": "rf min_samples_leaf 1 -> 4",
+                "final_keep": True,
+                "patch": str(patch),
+            },
+            "checks": {"full_dev_keep": True, "final_keep": True},
+            "dev": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.0232,
+                "regression_deltas": {"rf": 0.0105},
+            },
+            "final": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.0249,
+                "regression_deltas": {"rf": 0.0249},
+            },
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "rf,cancer"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["keep_final"] is True
+    assert payload["change"] == "rf min_samples_leaf 1 -> 4"
+    assert Path(payload["patch"]).is_file()
+    assert seen["tasks"] == ("rf", "cancer")
+    assert "proposing measured configuration defaults" in captured.err
+
+
+def test_keyless_run_skips_configuration_trials_already_measured(tmp_path, monkeypatch, capsys):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    old = tmp_path / "work" / "runs" / "old"
+    old.mkdir(parents=True)
+    (old / "configuration_trials.jsonl").write_text(
+        json.dumps(
+            {
+                "patch_hash": "already-measured",
+                "stage": "dev_keep",
+                "variant": {
+                    "operation": "rf",
+                    "parameter": "min_samples_leaf",
+                    "value": 4,
+                    "current_value": 1,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), skip_patch_hashes=None, prior_trials=None, **_kwargs):
+        seen["skip"] = set(skip_patch_hashes or ())
+        Path(workspace, "configuration_trials.jsonl").write_text(
+            json.dumps(
+                {
+                    "patch_hash": "new-split",
+                    "stage": "quick_dev",
+                    "reason": "regression rf delta -0.0115",
+                    "variant": {
+                        "operation": "rf",
+                        "parameter": "min_samples_split",
+                        "value": 4,
+                        "current_value": 2,
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "ok": False,
+            "decision": {
+                "keep": False,
+                "reason": "regression rf delta -0.0115",
+                "target_delta": -0.0115,
+                "regression_deltas": {"rf": -0.0115},
+            },
+            "trials": [],
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "rf"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert seen["skip"] == {"already-measured"}
+    assert payload["skipped_previously_measured"] == 1
+    memory = (tmp_path / "work" / "configuration_memory.jsonl").read_text(encoding="utf-8")
+    assert "new-split" in memory
+    assert "already-measured" not in memory
+
+
+def test_keyless_run_keeps_the_stronger_remembered_final(tmp_path, monkeypatch, capsys):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    previous = tmp_path / "work" / "runs" / "previous"
+    previous.mkdir(parents=True)
+    previous_patch = previous / "kept_configuration.patch"
+    previous_patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "final_task_deltas": {"rf": 0.0249},
+                    "dev_target_delta": 0.0232,
+                    "dev_task_deltas": {"rf": 0.0105},
+                    "patch": str(previous_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), **_kwargs):
+        patch = Path(workspace) / "kept_configuration.patch"
+        patch.write_text("max-depth-8\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "summary": {
+                "change": "rf max_depth None -> 8",
+                "final_keep": True,
+                "final_target_delta": 0.0152,
+                "final_task_deltas": {"rf": 0.0152},
+                "dev_target_delta": 0.0175,
+                "patch": str(patch),
+            },
+            "checks": {"full_dev_keep": True, "final_keep": True},
+            "final": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.0152,
+                "regression_deltas": {"rf": 0.0152},
+            },
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "rf"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["change"] == "rf min_samples_leaf 1 -> 4"
+    assert payload["target_delta"] == 0.0249
+    assert Path(payload["patch"]).read_text(encoding="utf-8") == "leaf-4\n"
+
+
+def test_keyless_run_reports_the_hunted_operation_when_nothing_new_is_kept(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    previous = tmp_path / "work" / "runs" / "20261111-230000-xgb"
+    previous.mkdir(parents=True)
+    previous_patch = previous / "kept_configuration.patch"
+    previous_patch.write_text("stacked\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "xgboost reg_lambda None -> 10.0",
+                    "final_keep": True,
+                    "final_target_delta": 0.0164,
+                    "final_task_deltas": {"xgboost": 0.0023, "kc2->xgboost": 0.0164},
+                    "patch": str(previous_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def search(source, workspace, tasks=("logit",), **_kwargs):
+        return {
+            "ok": True,
+            "decision": {
+                "keep": False,
+                "reason": "target_delta 0.0000 below per-task threshold",
+                "target_delta": 0.0,
+                "regression_deltas": {"logit": 0.0},
+            },
+            "trials": [
+                {
+                    "stage": "shadow_dev",
+                    "reason": "regression logit delta -0.0287",
+                    "variant": {
+                        "operation": "logit",
+                        "parameter": "class_weight",
+                        "value": "balanced",
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work"), "--lift-tasks", "logit"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["fedot_operation"] == "logit"
+    assert payload["keep_final"] is False
+    assert payload["reason"] == "target_delta 0.0000 below per-task threshold"
+    assert payload["published_change"] == "xgboost reg_lambda None -> 10.0"
+    assert payload["change"] != "xgboost reg_lambda None -> 10.0"
+    assert Path(payload["published_patch"]).read_text(encoding="utf-8") == "stacked\n"
+    assert payload["trials"][0]["parameter"] == "class_weight"
+    assert payload["trials"][0]["stage"] == "shadow_dev"
+    assert code == 1
+
+
+def test_keyless_hunt_moves_to_the_next_fedot_operation_after_an_rf_keep(
+    tmp_path, monkeypatch, capsys
+):
+    from fedotllm.agents.evolve import __main__ as cli
+
+    monkeypatch.setattr(cli, "_stage_inferences", lambda _presets: (None, None, None))
+    previous = tmp_path / "work" / "runs" / "previous"
+    previous.mkdir(parents=True)
+    previous_patch = previous / "kept_configuration.patch"
+    previous_patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "final_task_deltas": {"rf": 0.0249},
+                    "patch": str(previous_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def search(source, workspace, tasks=("rf", "cancer", "kc2"), **kwargs):
+        seen["tasks"] = tuple(tasks)
+        seen["lift"] = tuple(kwargs.get("lift_ids") or ())
+        seen["protect"] = tuple(kwargs.get("protect_ids") or ())
+        patch = Path(workspace) / "kept_configuration.patch"
+        patch.write_text("lgbm-leaf\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "summary": {
+                "change": "lgbm min_data_in_leaf 1 -> 4",
+                "final_keep": True,
+                "final_target_delta": 0.012,
+                "final_task_deltas": {"lgbm": 0.012, "rf": 0.0249},
+                "dev_target_delta": 0.012,
+                "patch": str(patch),
+            },
+            "checks": {"full_dev_keep": True, "final_keep": True},
+            "final": {
+                "keep": True,
+                "reason": "keep",
+                "target_delta": 0.012,
+                "regression_deltas": {"lgbm": 0.012},
+            },
+        }
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.benchmark_configuration_search",
+        search,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.execution.checkout.resolve_fedot_src",
+        lambda: tmp_path,
+    )
+    code = cli.main(["run", "--workspace", str(tmp_path / "work")])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert seen["lift"] == ("lgbm", "cancer->lgbm", "kc2->lgbm")
+    assert "rf" in seen["protect"]
+    assert "cancer" in seen["protect"]
+    assert "kc2" in seen["protect"]
+    assert payload["change"] == "lgbm min_data_in_leaf 1 -> 4"
+    assert payload["target_delta"] == 0.012
+    assert Path(payload["patch"]).read_text(encoding="utf-8") == "lgbm-leaf\n"
+    assert payload["fedot_operation"] == "lgbm"
+
+
+def test_measured_second_scale_moves_the_hunt_to_catboost(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import hunt_surface
+
+    work = tmp_path / "work"
+    previous = work / "runs" / "previous"
+    previous.mkdir(parents=True)
+    patch = previous / "kept_configuration.patch"
+    patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    journal = previous / "configuration_trials.jsonl"
+    journal.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {
+                    "stage": "quick_dev",
+                    "variant": {
+                        "operation": "lgbm",
+                        "parameter": "reg_lambda",
+                        "value": 0.01,
+                    },
+                },
+                {
+                    "stage": "quick_dev",
+                    "variant": {
+                        "operation": "lgbm",
+                        "parameter": "reg_lambda",
+                        "value": 0.1,
+                    },
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    surface = hunt_surface(work)
+    assert surface["operation"] == "catboost"
+    assert surface["lift"] == ("catboost", "cancer->catboost", "kc2->catboost")
+    assert "lgbm" in surface["protect"]
+    assert "rf" in surface["protect"]
+
+    one_scale = tmp_path / "one-scale" / "runs" / "previous"
+    one_scale.mkdir(parents=True)
+    one_patch = one_scale / "kept_configuration.patch"
+    one_patch.write_text("leaf-4\n", encoding="utf-8")
+    (one_scale / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(one_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (one_scale / "configuration_trials.jsonl").write_text(
+        json.dumps(
+            {
+                "stage": "quick_dev",
+                "variant": {
+                    "operation": "lgbm",
+                    "parameter": "reg_lambda",
+                    "value": 0.01,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    still_lgbm = hunt_surface(tmp_path / "one-scale")
+    assert still_lgbm["operation"] == "lgbm"
+
+
+def test_exhausted_catboost_moves_the_hunt_to_xgboost(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import hunt_surface
+
+    work = tmp_path / "work"
+    previous = work / "runs" / "previous"
+    previous.mkdir(parents=True)
+    patch = previous / "kept_configuration.patch"
+    patch.write_text("leaf-4\n", encoding="utf-8")
+    (previous / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = [
+        {
+            "stage": "quick_dev",
+            "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.01},
+        },
+        {
+            "stage": "quick_dev",
+            "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.1},
+        },
+        {
+            "stage": "final",
+            "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.015},
+        },
+        {
+            "stage": "final",
+            "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.06},
+        },
+    ]
+    (previous / "configuration_trials.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    surface = hunt_surface(work)
+    assert surface["operation"] == "xgboost"
+    assert surface["lift"] == ("xgboost", "cancer->xgboost", "kc2->xgboost")
+    assert "catboost" in surface["protect"]
+    assert "lgbm" in surface["protect"]
+    assert "rf" in surface["protect"]
+
+
+def test_xgboost_keep_moves_the_hunt_to_logit(tmp_path: Path):
+    from fedotllm.agents.evolve.commands.configuration_search import hunt_surface
+
+    work = tmp_path / "work"
+    for name, change in (
+        ("rf-keep", "rf min_samples_leaf 1 -> 4"),
+        ("xgboost-keep", "xgboost reg_lambda None -> 10.0"),
+    ):
+        run = work / "runs" / name
+        run.mkdir(parents=True)
+        patch = run / "kept_configuration.patch"
+        patch.write_text(change + "\n", encoding="utf-8")
+        (run / "keyless_configuration.json").write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "change": change,
+                        "final_keep": True,
+                        "final_target_delta": 0.0164,
+                        "patch": str(patch),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+    rows = [
+        {"stage": "quick_dev", "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.01}},
+        {"stage": "quick_dev", "variant": {"operation": "lgbm", "parameter": "reg_lambda", "value": 0.1}},
+        {"stage": "quick_dev", "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.015}},
+        {"stage": "quick_dev", "variant": {"operation": "catboost", "parameter": "learning_rate", "value": 0.06}},
+    ]
+    (work / "runs" / "rf-keep" / "configuration_trials.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    surface = hunt_surface(work)
+    assert surface["operation"] == "logit"
+    assert surface["lift"] == ("logit", "cancer->logit", "kc2->logit")
+    assert "xgboost" in surface["protect"]
+    assert "rf" in surface["protect"]
+
+
+def test_later_operation_keep_survives_a_larger_earlier_delta(tmp_path: Path):
+    import os
+
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        strongest_remembered_final,
+    )
+
+    work = tmp_path / "work"
+    rf = work / "runs" / "20261111-220000-rf"
+    xgb = work / "runs" / "20261111-230000-xgb"
+    rf.mkdir(parents=True)
+    xgb.mkdir(parents=True)
+    rf_patch = rf / "kept_configuration.patch"
+    xgb_patch = xgb / "kept_configuration.patch"
+    rf_patch.write_text("rf-only\n", encoding="utf-8")
+    xgb_patch.write_text("rf-and-xgboost\n", encoding="utf-8")
+    (rf / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "rf min_samples_leaf 1 -> 4",
+                    "final_keep": True,
+                    "final_target_delta": 0.0249,
+                    "patch": str(rf_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (xgb / "keyless_configuration.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "change": "xgboost reg_lambda None -> 10.0",
+                    "final_keep": True,
+                    "final_target_delta": 0.0164,
+                    "patch": str(xgb_patch),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(rf / "keyless_configuration.json", (1_700_000_000, 1_700_000_000))
+    os.utime(xgb / "keyless_configuration.json", (1_700_000_100, 1_700_000_100))
+    chosen = strongest_remembered_final(work)
+    assert chosen is not None
+    assert chosen["change"] == "xgboost reg_lambda None -> 10.0"
+    assert Path(chosen["patch"]).read_text(encoding="utf-8") == "rf-and-xgboost\n"
+
+
+def test_hunt_materializes_the_improved_fedot_tree(tmp_path: Path):
+    import difflib
+
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        materialize_improved_fedot,
+    )
+
+    source = tmp_path / "pin"
+    rel = "fedot/core/repository/data/default_operation_params.json"
+    original = '{ "rf": { "n_jobs": 1 } }\n'
+    target = source / rel
+    target.parent.mkdir(parents=True)
+    target.write_text(original, encoding="utf-8")
+    updated = '{ "rf": { "n_jobs": 1, "min_samples_leaf": 4 } }\n'
+    patch = tmp_path / "kept_configuration.patch"
+    patch.write_text(
+        "".join(
+            difflib.unified_diff(
+                original.splitlines(keepends=True),
+                updated.splitlines(keepends=True),
+                fromfile=f"a/{rel}",
+                tofile=f"b/{rel}",
+            )
+        ),
+        encoding="utf-8",
+    )
+    dest = tmp_path / "improved_fedot"
+    materialized = materialize_improved_fedot(source, dest, patch)
+    improved = json.loads((materialized / rel).read_text(encoding="utf-8"))
+    assert improved["rf"]["min_samples_leaf"] == 4
+    assert "min_samples_leaf" not in target.read_text(encoding="utf-8")
+
+
+def test_configuration_search_stacks_the_next_parameter_on_a_kept_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    proposal = tmp_path / "proposal"
+    proposal.mkdir()
+    proposal_defaults = proposal / defaults_rel
+    proposal_defaults.parent.mkdir(parents=True)
+    proposal_defaults.write_text(
+        json.dumps({"rf": {"min_samples_leaf": 4, "n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for name in ("__init__.py", "a.py", "b.py"):
+        target = proposal / "fedot" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((source / "fedot" / name).read_text(encoding="utf-8"), encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+    monkeypatch.setattr(
+        judge,
+        "measure_patched",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.90) for task_id in task_ids},
+    )
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="stack-kept",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+        proposal_source=proposal,
+    )
+    try:
+        assert outcome.experiment is not None
+        measured = json.loads((outcome.experiment / defaults_rel).read_text(encoding="utf-8"))
+        assert measured["rf"]["min_samples_leaf"] == 4
+        assert measured["rf"]["min_samples_split"] == 4
+        measured_rows = [
+            row for row in outcome.trials if row.get("stage") != "kept_parameter"
+        ]
+        assert measured_rows[0]["variant"]["parameter"] == "min_samples_split"
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=proposal
+            )
+
+
+def test_stacked_hunt_scores_shadow_against_the_kept_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    proposal = tmp_path / "proposal"
+    proposal.mkdir()
+    proposal_defaults = proposal / defaults_rel
+    proposal_defaults.parent.mkdir(parents=True)
+    proposal_defaults.write_text(
+        json.dumps({"rf": {"min_samples_leaf": 4, "n_jobs": 1}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    for name in ("__init__.py", "a.py", "b.py"):
+        target = proposal / "fedot" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((source / "fedot" / name).read_text(encoding="utf-8"), encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+    shadow_checkouts: list[Path] = []
+
+    def stock_scores(task_ids, *, checkout, split="dev", **_kwargs):
+        if split == "shadow":
+            shadow_checkouts.append(Path(checkout))
+        return {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", lambda task_ids, **_kwargs: {
+        task_id: ScoreResult(task_id, "ok", 0.90) for task_id in task_ids
+    })
+    monkeypatch.setattr(judge, "measure_stock", stock_scores)
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="shadow-baseline",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+        proposal_source=proposal,
+    )
+    try:
+        assert shadow_checkouts
+        assert shadow_checkouts[0] == proposal
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=proposal
+            )
+
+
+def test_one_positive_lift_task_does_not_reach_full_dev(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults = source / "fedot/core/repository/data/default_operation_params.json"
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {
+        task_id: ScoreResult(task_id, "ok", 0.80, dataflow=flow)
+        for task_id in ("rf", "cancer", "kc2")
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def patched(task_ids, **_kwargs):
+        calls.append(tuple(task_ids))
+        scores = {"rf": 0.795, "cancer": 0.796, "kc2": 0.82}
+        return {task_id: ScoreResult(task_id, "ok", scores[task_id]) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="lone-lift",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={task_id: ("rf",) for task_id in ("rf", "cancer", "kc2")},
+        problem_by_task={task_id: "classification" for task_id in ("rf", "cancer", "kc2")},
+        lift_ids=("rf", "cancer", "kc2"),
+        protect_ids=("rf", "cancer", "kc2"),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+    )
+    try:
+        assert calls == [("rf", "cancer", "kc2")]
+        assert outcome.trials[-1]["stage"] == "quick_dev"
+        assert outcome.trials[-1]["reason"] == "single_task_lift"
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
+def test_final_regression_does_not_spend_pytest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+    test_calls = {"n": 0}
+
+    def patched(task_ids, *, split="dev", **_kwargs):
+        score = 0.70 if split == "final" else 0.90
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    def run_tests(*_args, **_kwargs):
+        test_calls["n"] += 1
+        return TestResult("passed", 0)
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", run_tests)
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="final-before-pytest",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=1,
+    )
+    try:
+        assert test_calls["n"] == 0
+        assert outcome.trials[-1]["stage"] == "final"
+        assert "regression" in outcome.trials[-1]["reason"]
+    finally:
+        if outcome.experiment is not None:
+            discard_experiment_checkout(
+                outcome.experiment, workspace=workspace, source=source
+            )
+
+
+def test_stacked_configuration_search_scores_against_the_kept_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.benchmark.runner import benchmark_configuration_search
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        ConfigurationSearchOutcome,
+    )
+
+    source = tmp_path / "pin"
+    source.mkdir()
+    proposal = tmp_path / "kept"
+    proposal.mkdir()
+    seen: list[Path] = []
+
+    def stock(task_ids, *, checkout, **_kwargs):
+        seen.append(Path(checkout))
+        return {task_id: ScoreResult(task_id, "ok", 0.8) for task_id in task_ids}
+
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.measure_stock",
+        stock,
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.benchmark.runner.measure_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.configuration_search.search_configuration_variants",
+        lambda *_a, **_k: ConfigurationSearchOutcome(
+            decision=Decision(False, "no_configuration_keep", None)
+        ),
+    )
+    benchmark_configuration_search(
+        source,
+        tmp_path / "work",
+        tasks=("rf",),
+        proposal_source=proposal,
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+    )
+    assert seen
+    assert seen[0] == proposal
+
+
+def test_retained_dev_keeps_include_a_passing_trial_that_lost_the_dev_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.evaluation import judge
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.execution.checkout import discard_experiment_checkout
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        search_configuration_variants,
+    )
+
+    source = _source(tmp_path)
+    defaults_rel = "fedot/core/repository/data/default_operation_params.json"
+    defaults = source / defaults_rel
+    defaults.parent.mkdir(parents=True)
+    defaults.write_text(json.dumps({"rf": {"n_jobs": 1}}, indent=2) + "\n", encoding="utf-8")
+    flow = (
+        {
+            "operation": "rf",
+            "implementation": "RandomForestClassifier",
+            "params": {"n_jobs": 1},
+            "supported_parameters": ["min_samples_leaf", "min_samples_split"],
+            "estimator_defaults": {"min_samples_leaf": 1, "min_samples_split": 2},
+        },
+    )
+    stock = {"rf": ScoreResult("rf", "ok", 0.80, dataflow=flow)}
+
+    def patched(task_ids, *, checkout, **_kwargs):
+        params = json.loads((checkout / defaults_rel).read_text(encoding="utf-8"))["rf"]
+        score = 0.90 if params.get("min_samples_leaf") == 2 else 0.86
+        return {task_id: ScoreResult(task_id, "ok", score) for task_id in task_ids}
+
+    monkeypatch.setattr(judge, "measure_patched", patched)
+    monkeypatch.setattr(
+        judge,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {task_id: ScoreResult(task_id, "ok", 0.80) for task_id in task_ids},
+    )
+    monkeypatch.setattr(judge, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0))
+    monkeypatch.setattr(loop, "compare_behavior_probe", lambda *_a, **_k: {"status": "changed"})
+    workspace = tmp_path / "workspace"
+    outcome = search_configuration_variants(
+        source,
+        workspace,
+        run_id="final-near-miss",
+        source_hash=source_fingerprint(source),
+        stock=stock,
+        operation_hints={"rf": ("rf",)},
+        problem_by_task={"rf": "classification"},
+        lift_ids=("rf",),
+        protect_ids=("rf",),
+        baseline_tests=TestResult("passed", 0),
+        max_trials=2,
+        retain_dev_keeps=True,
+    )
+    try:
+        assert [row["stage"] for row in outcome.trials] == ["dev_keep", "dev_keep_not_better"]
+        assert len(outcome.dev_keeps) == 2
+        assert outcome.dev_keeps[0].decision.target_delta == pytest.approx(0.10)
+        assert outcome.dev_keeps[1].decision.target_delta == pytest.approx(0.06)
+        assert outcome.dev_keeps[1].experiment.is_dir()
+    finally:
+        for item in outcome.dev_keeps:
+            discard_experiment_checkout(item.experiment, workspace=workspace, source=source)
+        if outcome.experiment is not None and outcome.experiment.is_dir():
+            discard_experiment_checkout(outcome.experiment, workspace=workspace, source=source)
+
+
+def test_final_target_delta_beats_a_higher_dev_default():
+    from fedotllm.agents.evolve.commands.configuration_search import choose_final_keep
+
+    finals = [
+        Decision(True, "keep", 0.0170),
+        Decision(True, "keep", 0.0249),
+        Decision(True, "keep", 0.0198),
+    ]
+    assert choose_final_keep(finals) == 1
+    assert choose_final_keep([Decision(False, "regression rf", 0.01), Decision(True, "keep", 0.002)]) == 1
+    assert choose_final_keep([Decision(False, "regression rf", -0.02)]) is None
 
 
 def test_configuration_search_durable_dedup_does_not_consume_new_trial_budget(
@@ -6443,6 +8581,39 @@ def test_behavior_probe_requires_declared_observation_and_real_stock_execution(
     assert result["status"] == "invalid"
     assert result["probe_valid"] is False
     assert result["hypothesis_result"] == "inconclusive_invalid_probe"
+
+
+def test_behavior_probe_shared_import_failure_is_infrastructure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    marker = (
+        'EVOLVE_PREFLIGHT {"dask": false, "import_error": '
+        '"ModuleNotFoundError: No module named \'dask\'"}\n'
+    )
+    monkeypatch.setattr(
+        loop,
+        "run_fedot_snippet",
+        lambda *_a, **_k: SnippetResult(
+            "runtime_error", "probe", stdout=marker, exit_code=1
+        ),
+    )
+
+    result = loop.compare_behavior_probe(
+        tmp_path / "source", tmp_path / "experiment", "print('EVOLVE_OBSERVATION=1')"
+    )
+
+    assert result["status"] == "infrastructure"
+    assert result["probe_valid"] is False
+    assert result["hypothesis_result"] == "environment_import_failed"
+    assert "No module named 'dask'" in result["import_error"]
+    decision = loop.infrastructure_probe_decision(result, experiment_id="exp")
+    assert decision is not None
+    assert decision.infrastructure_error is True
+    assert decision.keep is False
+    assert decision.reason.startswith("behavior_probe_infrastructure")
 
 
 def test_verifier_rejects_model_quality_threshold_as_bug_proof():

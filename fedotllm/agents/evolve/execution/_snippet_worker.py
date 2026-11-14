@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import runpy
 import sys
@@ -23,7 +24,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     checkout = args.checkout.resolve()
 
-    import fedot
+    try:
+        import fedot
+    except Exception as exc:
+        # The script never starts when the checkout cannot be imported. Emit
+        # the same preflight record the script would, so doctor can name the
+        # import error instead of a bare exit code.
+        payload = {
+            "dask": importlib.util.find_spec("dask") is not None,
+            "import_error": f"{type(exc).__name__}: {exc}",
+        }
+        print("EVOLVE_PREFLIGHT " + json.dumps(payload, sort_keys=True))
+        return 1
 
     loaded = Path(fedot.__file__).resolve()
     if checkout != loaded and checkout not in loaded.parents:
