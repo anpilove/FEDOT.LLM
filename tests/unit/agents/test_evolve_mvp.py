@@ -8506,7 +8506,7 @@ def test_protect_only_workload_does_not_steer_scout(
 
 
 @pytest.mark.parametrize("read_failed", [False, True])
-@pytest.mark.parametrize("max_actions,expected_scout_limit", [(20, 10), (80, 40)])
+@pytest.mark.parametrize("max_actions,expected_scout_limit", [(20, 14), (80, 40)])
 def test_run_once_passes_recent_completed_site_cooldown_to_scout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8707,12 +8707,78 @@ def test_scout_returns_existing_picks_when_llm_stage_reserve_is_reached(
     assert [item.file_path for item in result] == ["fedot/a.py"]
     assert inference.calls == 2
     assert trace["scout_budget_exhausted"] is True
-    assert trace["scout_external_stop"] == "llm_budget_exhausted"
+    assert trace["scout_external_stop"] == "scout_stage_reserve"
     assert trace["llm_pick_rounds"][-1] == {
         "file_path": "fedot/b.py",
         "status": "budget_exhausted",
         "error_type": "EvolveBudgetExhausted",
     }
+
+
+def test_hard_query_cap_stays_an_infrastructure_stop(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.selection import _llm_pick
+    from fedotllm.agents.evolve.storage.run_budget import EvolveBudgetExhausted
+
+    source = _source(tmp_path)
+
+    class CappedInference:
+        def create(self, *_args, **_kwargs):
+            raise EvolveBudgetExhausted(
+                "evolve_run_query_budget_exhausted: started=24, limit=24"
+            )
+
+    trace: dict = {}
+    result = _llm_pick(
+        CappedInference(),
+        source,
+        [MatchSite("execution", "fedot/a.py", 1, "first executed site")],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert result == []
+    assert trace["scout_external_stop"] == "llm_budget_exhausted"
+
+
+def test_stage_reserve_with_no_site_is_an_empty_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+
+    source = _source(tmp_path)
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda task_ids, **_kwargs: {
+            task_id: ScoreResult(task_id, "ok", 0.8) for task_id in task_ids
+        },
+    )
+    monkeypatch.setattr(loop, "_hydrate_configuration_surfaces", lambda *_a, **_k: 0)
+
+    def fake_scout(_checkout, **kwargs):
+        kwargs["trace"]["scout_external_stop"] = "scout_stage_reserve"
+        kwargs["trace"]["scout_budget_exhausted"] = True
+        return []
+
+    monkeypatch.setattr(loop, "scout", fake_scout)
+    inference = SimpleNamespace(usage={})
+    decision = loop.run_once(
+        checkout=source,
+        scout_inference=inference,
+        verifier_inference=inference,
+        fixer_inference=inference,
+        workspace=tmp_path / "workspace",
+        findings_path=tmp_path / "findings.jsonl",
+        lift_ids=("logit",),
+        protect_ids=("logit",),
+        max_leads=1,
+        policy=FAST_RUN_POLICY,
+    )
+
+    assert decision.reason == "no_lead"
+    assert decision.infrastructure_error is False
+    assert decision.stage == "dev"
 
 
 def test_protect_only_crash_does_not_suppress_healthy_lift_evaluation():
