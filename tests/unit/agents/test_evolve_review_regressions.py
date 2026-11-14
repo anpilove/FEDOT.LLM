@@ -222,6 +222,84 @@ def test_annotated_int_or_recognizes_a_zero_seed():
     assert annotated_int_or_coerces_zero(untouched, 2) == ""
 
 
+def test_integrality_gate_pytest_does_not_open_another_revision():
+    from fedotllm.agents.evolve.controller.campaign import categorical_integrality_locked
+
+    candidate = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit(
+            "fedot/preprocessing/data_types.py",
+            "num_df = num_df.loc[:, (2 < nuniques)]",
+            "is_integral = num_df.apply(lambda s: np.all(np.mod(s.dropna(), 1) == 0))\n"
+            "num_df = num_df.loc[:, (2 < nuniques) & is_integral]",
+        )],
+    )
+    reason = (
+        "fedot_tests_regressed "
+        "test/unit/preprocessing/test_preprocessors.py::test_column_types_converting_correctly, "
+        "test/unit/preprocessing/test_pipeline_preprocessing.py::"
+        "test_data_with_mixed_types_per_column_processed_correctly"
+    )
+    assert categorical_integrality_locked(candidate, reason)
+    other = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit("fedot/a.py", "x = 1", "x = 2")],
+    )
+    assert not categorical_integrality_locked(other, reason)
+
+
+def test_indicator_width_crash_skips_another_revision():
+    from fedotllm.agents.evolve.controller.campaign import indicator_width_crash
+
+    candidate = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit(
+            "fedot/a.py",
+            "SimpleImputer(**self.params_num)",
+            "SimpleImputer(**{**self.params_num, 'add_indicator': True})",
+        )],
+    )
+    crash = {
+        "patched": {
+            "stderr_tail": (
+                "File \"fedot/utilities/memory.py\", line 69, in reduce_mem_usage\n"
+                "IndexError: list index out of range"
+            ),
+        }
+    }
+    assert indicator_width_crash(candidate, crash)
+    other = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit("fedot/a.py", "x = 1", "x = 2")],
+    )
+    assert not indicator_width_crash(other, crash)
+
+
+def test_indicator_width_pytest_does_not_open_another_revision():
+    from fedotllm.agents.evolve.controller.campaign import indicator_width_pytest
+
+    candidate = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit(
+            "fedot/a.py",
+            "self.imputer_cat = SimpleImputer(**self.params_cat)",
+            "self.imputer_cat = SimpleImputer(**self.params_cat, add_indicator=True)",
+        )],
+    )
+    output = (
+        "fedot/utilities/memory.py:69: in reduce_mem_usage\n"
+        "    df[col] = df[col].astype(types_array[index])\n"
+        "E   IndexError: list index out of range\n"
+    )
+    assert indicator_width_pytest(candidate, output)
+    assert not indicator_width_pytest(candidate, "AssertionError: 3 == 4")
+    other = PatchCandidate(
+        candidate_id="c",
+        edits=[PatchEdit("fedot/a.py", "x = 1", "x = 2")],
+    )
+    assert not indicator_width_pytest(other, output)
+
+
 def test_dict_params_resume_names_operation_parameters(tmp_path):
     findings = tmp_path / "findings.jsonl"
     findings.write_text(json.dumps({
@@ -259,6 +337,199 @@ def test_discarded_early_stopping_callback_is_a_contract():
     )
     assert "callbacks=" in discarded_callback_return(source, 5)
     assert discarded_callback_return(source, 9) == ""
+
+
+def test_equal_category_mean_is_required_by_the_frozen_test():
+    from fedotllm.agents.evolve.agents.verifier import (
+        binary_midpoint_left_unchanged,
+        equal_category_mean_is_required,
+    )
+
+    source = (
+        "def _correct_binary_ids_features(self, filled):\n"
+        "    \"\"\"Tip: [1, 1, 0.75, 0] will be transformed to [1, 1, 1, 0]\"\"\"\n"
+        "    mean_value = (max_value + min_value) / 2\n"
+        "    filled_column[filled_column > mean_value] = max_value\n"
+        "    filled_column[filled_column < mean_value] = min_value\n"
+    )
+    stderr = (
+        "AssertionError: imputed binary column contains out-of-domain values, "
+        "expected only {0.0, 1.0}: [0.0, 0.5, 1.0]\n"
+    )
+    reason = equal_category_mean_is_required(source, 449, stderr)
+    assert "test_imputation_binary_features_with_equal_categories_correct" in reason
+    assert "0.5" in reason
+    assert equal_category_mean_is_required(source, 449, "AssertionError: other") == ""
+    assert equal_category_mean_is_required("def other():\n    return 1\n", 449, stderr) == ""
+    assert binary_midpoint_left_unchanged(source, 449, stderr) == ""
+
+
+def _midpoint_source() -> str:
+    return (
+        "def _correct_binary_ids_features(self, filled):\n"
+        "    \"\"\"Tip: [1, 1, 0.75, 0] will be transformed to [1, 1, 1, 0]\"\"\"\n"
+        "    mean_value = (max_value + min_value) / 2\n"
+        "    filled_column[filled_column > mean_value] = max_value\n"
+        "    filled_column[filled_column < mean_value] = min_value\n"
+    )
+
+
+def _reaching_then_denied(tmp_path, *, later_detail, later_observed=""):
+    workspace = tmp_path / "run"
+    folder = workspace / "verifications" / "sklearn_transformations-449"
+    folder.mkdir(parents=True)
+    (folder / "verification.json").write_text(json.dumps({
+        "status": "inconclusive",
+        "claim": "mean fill stays 0.5",
+        "expected": "domain is {0.0, 1.0}",
+        "reproduction_code": "assert unique.issubset({0.0, 1.0})\n",
+        "stock_probe": {
+            "target_reached": True,
+            "stderr": "AssertionError: [0.0, 0.5, 1.0]\n",
+            "code": "assert unique.issubset({0.0, 1.0})\n",
+        },
+    }))
+    findings = tmp_path / "findings.jsonl"
+    rows = [
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "workspace": str(workspace),
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 449,
+                "hypothesis_kind": "correctness",
+                "why": "midpoint fill stays 0.5",
+            },
+            "reproduction": {
+                "status": "inconclusive",
+                "detail": "contract support inconclusive: binary cell remains 0.5",
+            },
+        },
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 449,
+                "hypothesis_kind": "correctness",
+                "why": "midpoint fill stays 0.5",
+            },
+            "reproduction": {
+                "status": "rejected",
+                "detail": later_detail,
+                "observed": later_observed,
+            },
+        },
+    ]
+    findings.write_text("\n".join(map(json.dumps, rows)) + "\n")
+    return findings
+
+
+def test_denied_midpoint_stays_open_for_the_stored_probe(tmp_path):
+    findings = _reaching_then_denied(
+        tmp_path,
+        later_detail=(
+            "Three reproduction attempts could not produce a clean probe "
+            "that reaches the midpoint"
+        ),
+        later_observed="No stock run ever demonstrated the 0.5 midpoint edge",
+    )
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/sklearn_transformations.py", 449),
+    ]
+    assert "Replay that probe" in resumed[0].why
+    assert ("fedot/sklearn_transformations.py", 449) not in replay.closed_correctness_sites(
+        findings
+    )
+    stored = replay.reaching_assertion_replays(findings)
+    assert stored[("fedot/sklearn_transformations.py", 449)]["code"].startswith("assert")
+
+
+def test_replayed_reaching_assertion_closes_the_line(tmp_path):
+    findings = _reaching_then_denied(
+        tmp_path,
+        later_detail="replayed stored reaching assertion: contract still unsupported",
+    )
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/sklearn_transformations.py", 449) in replay.closed_correctness_sites(
+        findings
+    )
+    assert replay.reaching_assertion_replays(findings) == {}
+
+
+def test_ordinary_reject_stays_closed_without_a_reaching_probe(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/categorical.py",
+            "line": 41,
+            "hypothesis_kind": "correctness",
+            "why": "sentinel write",
+        },
+        "reproduction": {
+            "status": "rejected",
+            "detail": "advanced indexing returns a copy",
+        },
+    }) + "\n")
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/categorical.py", 41) in replay.closed_correctness_sites(findings)
+
+
+def test_replay_reaching_assertion_supports_the_midpoint(tmp_path, monkeypatch):
+    relative = "fedot/sklearn_transformations.py"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text(_midpoint_source())
+    monkeypatch.setattr(
+        verifier,
+        "run_fedot_snippet",
+        lambda checkout, code: SnippetResult(
+            "runtime_error",
+            code,
+            stderr="AssertionError: [0.0, 0.5, 1.0]\n",
+            exit_code=1,
+            target_reached=True,
+        ),
+    )
+    result = verifier.replay_reaching_assertion(
+        tmp_path,
+        MatchSite("llm", relative, 449, hypothesis_kind="correctness", why="midpoint"),
+        {"code": "assert unique.issubset({0.0, 1.0})\n", "claim": "0.5 stays", "expected": "{0,1}"},
+    )
+    assert result.status == "rejected"
+    assert result.proceed is False
+    assert result.reproduction_code.startswith("assert")
+    assert "test_imputation_binary_features_with_equal_categories_correct" in result.detail
+    assert "replayed stored reaching assertion" in result.detail
+
+
+def test_replay_reaching_assertion_without_the_tip_stays_unsupported(tmp_path, monkeypatch):
+    relative = "fedot/other.py"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("def other():\n    return 1\n")
+    monkeypatch.setattr(
+        verifier,
+        "run_fedot_snippet",
+        lambda checkout, code: SnippetResult(
+            "runtime_error",
+            code,
+            stderr="AssertionError: [0.0, 0.5, 1.0]\n",
+            exit_code=1,
+            target_reached=True,
+        ),
+    )
+    result = verifier.replay_reaching_assertion(
+        tmp_path,
+        MatchSite("llm", relative, 10, hypothesis_kind="correctness"),
+        {"code": "assert False\n"},
+    )
+    assert result.status == "inconclusive"
+    assert result.detail == "replayed stored reaching assertion: contract still unsupported"
 
 
 def test_private_callback_class_does_not_keep_the_empty_list_failing(tmp_path, monkeypatch):
@@ -319,6 +590,257 @@ def test_unresolved_callback_patch_stays_open(tmp_path):
     assert resumed[0].line == 220
     assert "no public EarlyStoppingCallback" in resumed[0].why
     assert ("fedot/boostings_implementations.py", 220) not in replay.closed_correctness_sites(findings)
+
+
+def test_empty_categorical_index_setup_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/categorical.py",
+            "line": 58,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "line 58 converts an empty categorical_idx list to np.array "
+                "without a dtype, so the empty result is float64"
+            ),
+        },
+        "reproduction": {
+            "status": "inconclusive",
+            "observed": (
+                "probe crashed before its contract assertion: "
+                "probe did not use a public FEDOT entry point"
+            ),
+            "detail": "verification step budget exhausted",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/categorical.py", 58),
+    ]
+    assert "Do not pass features_types" in resumed[0].why
+    assert ("fedot/preprocessing/categorical.py", 58) not in replay.closed_correctness_sites(
+        findings
+    )
+
+
+def test_mixed_int_str_unique_stays_outside_the_string_contract():
+    source = (
+        "def fit(self, input_data):\n"
+        "    \"\"\"Binary features and at the same time has str objects.\"\"\"\n"
+        "    return len(np.unique(col))\n"
+    )
+    code = (
+        "features[:, 1] = [1, 'x', 2, 'y', 3, 'z']\n"
+        "assert caught is None, f'valid supported call crashed: {caught}'\n"
+    )
+    stderr = (
+        "AssertionError: valid supported call crashed: "
+        "'<' not supported between instances of 'str' and 'int'\n"
+    )
+    reason = verifier.mixed_int_str_unique_is_outside_contract(source, 31, stderr, code)
+    assert "has str objects" in reason
+    assert verifier.mixed_int_str_unique_is_outside_contract(
+        "def fit(self):\n    return 1\n", 31, stderr, code
+    ) == ""
+    assert verifier.mixed_int_str_unique_is_outside_contract(
+        source, 31, "AssertionError: other", code
+    ) == ""
+
+
+def test_subset_features_docstring_reject_closes_the_line(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/core/data/data.py",
+            "line": 643,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_to_dataframe raises IndexError: index 2 is out of "
+                "bounds for axis 0 with size 2"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "code": "",
+            "detail": (
+                "The docstring of subset_features only promises a subset of "
+                "features based on feature_ids"
+            ),
+        },
+    }) + "\n")
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/core/data/data.py", 643) in replay.closed_correctness_sites(findings)
+
+
+def test_subset_index_reject_without_the_call_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/core/data/data.py",
+            "line": 643,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_to_dataframe raises IndexError: index 2 is out of "
+                "bounds for axis 0 with size 2"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "code": "",
+            "detail": (
+                "Without documented evidence of a failure caused by the "
+                "current setdiff behavior, this proposal is unsupported"
+            ),
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/core/data/data.py", 643),
+    ]
+    assert "boostings_implementations" in resumed[0].why
+    assert ("fedot/core/data/data.py", 643) not in replay.closed_correctness_sites(
+        findings
+    )
+    reached = json.loads(findings.read_text())
+    reached["reproduction"]["observed"] = (
+        "IndexError: index 2 is out of bounds for axis 0 with size 2"
+    )
+    findings.write_text(json.dumps(reached) + "\n")
+    assert replay.unfinished_correctness_leads(findings, limit=1) == []
+    assert ("fedot/core/data/data.py", 643) in replay.closed_correctness_sites(
+        findings
+    )
+
+
+def test_choice_coerced_mixed_column_is_not_a_disproof():
+    code = (
+        "features[:, 1] = rng.choice(['a', 'b', 1], size=n)\n"
+        "assert caught is None, f'valid supported call crashed: {caught}'\n"
+        "assert isinstance(data.categorical_idx, list), "
+        "'categorical_idx must remain a list after fit'\n"
+    )
+    stderr = (
+        "AssertionError: categorical_idx must remain a list after fit\n"
+    )
+    reason = verifier.choice_coerced_mixed_column(code, stderr)
+    assert "stores the int as the string '1'" in reason
+    assert "raises TypeError" in reason
+    strings_only = code.replace("['a', 'b', 1]", "['a', 'b', '1']")
+    assert verifier.choice_coerced_mixed_column(strings_only, stderr) == ""
+    assert verifier.choice_coerced_mixed_column(code, "TypeError: '<'") == ""
+
+
+def test_choice_coerced_unique_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/categorical.py",
+            "line": 31,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "Executed line 31 uses np.unique on object arrays; "
+                "mixed-type categorical columns raise TypeError"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "code": (
+                "features[:, 1] = rng.choice(['a', 'b', 1], size=n)\n"
+                "assert caught is None\n"
+                "assert isinstance(data.categorical_idx, list)\n"
+            ),
+            "detail": (
+                "fit() completed without a TypeError, contradicting the "
+                "claim that np.unique raises"
+            ),
+            "stock_stderr": (
+                "AssertionError: categorical_idx must remain a list after fit"
+            ),
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/categorical.py", 31),
+    ]
+    assert "stores the int as the string '1'" in resumed[0].why
+    assert "raises TypeError" in resumed[0].why
+    assert ("fedot/preprocessing/categorical.py", 31) not in replay.closed_correctness_sites(
+        findings
+    )
+
+
+def test_upcast_string_set_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/data_types.py",
+            "line": 473,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_num_column_into_string_array turns int 1 into '1' "
+                "and float 1.0 into '1.0'. Reshape the target to (-1, 1)."
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "observed": (
+                "Both fit and predict string sets are ['0.0','1.0','2.0','3.0']; "
+                "sets equal: True"
+            ),
+            "detail": "upstream type-unification already canonicalizes the strings",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/data_types.py", 473),
+    ]
+    assert "object array" in resumed[0].why
+    assert ("fedot/preprocessing/data_types.py", 473) not in replay.closed_correctness_sites(
+        findings
+    )
+
+
+def test_string_domain_reject_stays_open(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps({
+        "record_type": "finding",
+        "outcome": "unverified_no_patch",
+        "lead": {
+            "file_path": "fedot/preprocessing/data_types.py",
+            "line": 473,
+            "hypothesis_kind": "correctness",
+            "why": (
+                "convert_num_column_into_string_array turns int 1 into '1' "
+                "and float 1.0 into '1.0'"
+            ),
+        },
+        "reproduction": {
+            "status": "rejected",
+            "observed": (
+                "the attempted direct probe failed on probe setup "
+                "(1-D target shape)"
+            ),
+            "detail": "preprocessing docs convert predict data to fit-time types",
+        },
+    }) + "\n")
+    resumed = replay.unfinished_correctness_leads(findings, limit=1)
+    assert [(item.file_path, item.line) for item in resumed] == [
+        ("fedot/preprocessing/data_types.py", 473),
+    ]
+    assert "Reshape the target to (-1, 1)" in resumed[0].why
+    assert ("fedot/preprocessing/data_types.py", 473) not in replay.closed_correctness_sites(
+        findings
+    )
 
 
 def test_discarded_callback_reject_stays_open(tmp_path):
@@ -1166,3 +1688,85 @@ def test_operation_info_resume_names_imputation_implementation(tmp_path):
     resumed = replay.unfinished_correctness_leads(findings, limit=1)
     assert resumed[0].line == 391
     assert "ImputationImplementation()" in resumed[0].why
+
+
+def test_categorical_most_frequent_inconclusive_stays_closed(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, [
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/sklearn_transformations.py",
+                "line": 315,
+                "hypothesis_kind": "correctness",
+                "why": (
+                    "most_frequent silently overrides a user-supplied strategy "
+                    "for the categorical imputer"
+                ),
+            },
+            "reproduction": {
+                "status": "inconclusive",
+                "detail": (
+                    "bounded correctness verification did not establish a "
+                    "public contract violation"
+                ),
+            },
+        },
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/open.py",
+                "line": 3,
+                "hypothesis_kind": "correctness",
+                "why": "an open probe",
+            },
+            "reproduction": {"status": "inconclusive"},
+        },
+    ])))
+    assert ("fedot/sklearn_transformations.py", 315) in replay.closed_correctness_sites(
+        findings
+    )
+    resumed = replay.unfinished_correctness_leads(findings, limit=2)
+    assert [(item.file_path, item.line) for item in resumed] == [("fedot/open.py", 3)]
+
+
+def test_numerical_min_uniques_inconclusive_stays_closed(tmp_path):
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text("\n".join(map(json.dumps, [
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/preprocessing/data_types.py",
+                "line": 44,
+                "hypothesis_kind": "correctness",
+                "why": "the parameter contract is dropped silently",
+                "mechanism": (
+                    "TableTypesCorrector hardcodes the threshold and never "
+                    "reads numerical_min_uniques"
+                ),
+            },
+            "reproduction": {
+                "status": "inconclusive",
+                "detail": "llm_invalid_response: EmptyLLMResponse",
+            },
+        },
+        {
+            "record_type": "finding",
+            "outcome": "unverified_no_patch",
+            "lead": {
+                "file_path": "fedot/open.py",
+                "line": 3,
+                "hypothesis_kind": "correctness",
+                "why": "an open probe",
+            },
+            "reproduction": {"status": "inconclusive"},
+        },
+    ])))
+    assert ("fedot/preprocessing/data_types.py", 44) in replay.closed_correctness_sites(
+        findings
+    )
+    resumed = replay.unfinished_correctness_leads(findings, limit=2)
+    assert [(item.file_path, item.line) for item in resumed] == [("fedot/open.py", 3)]

@@ -317,6 +317,170 @@ def test_campaign_enqueues_no_change_and_bit_identical_toy(tmp_path, monkeypatch
     ]
 
 
+def _lgbm_base_source(tmp_path: Path) -> Path:
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "boost.py").write_text(
+        "class FedotLightGBMImplementation:\n"
+        "    def fit(self, data):\n"
+        "        return data\n\n"
+        "class FedotLightGBMClassificationImplementation(FedotLightGBMImplementation):\n"
+        "    pass\n\n"
+        "class FedotLightGBMRegressionImplementation(FedotLightGBMImplementation):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    (source / "fedot" / "registry.py").write_text(
+        "OPS = {\n"
+        "    'lgbm': FedotLightGBMClassificationImplementation,\n"
+        "    'lgbmreg': FedotLightGBMRegressionImplementation,\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (source / "fedot" / "leaf.py").write_text(
+        "class OnlyLeaf:\n"
+        "    def fit(self, data):\n"
+        "        return data\n",
+        encoding="utf-8",
+    )
+    return source
+
+
+def test_shared_base_sibling_scope_names_lgbm_dataset_tasks(tmp_path: Path):
+    from fedotllm.agents.evolve.controller.feedback import (
+        shared_base_sibling_scope,
+        sibling_regression_blocks_queue,
+    )
+    from fedotllm.agents.evolve.types import PatchCandidate, PatchEdit
+
+    source = _lgbm_base_source(tmp_path)
+    candidate = PatchCandidate(
+        "refit",
+        edits=[
+            PatchEdit(
+                "fedot/boost.py",
+                "        return data",
+                "        return data\n        return data",
+            )
+        ],
+    )
+    scope = shared_base_sibling_scope(
+        source,
+        candidate,
+        ("rf", "cancer", "kc2", "lgbm", "catboost", "xgboost", "logit"),
+    )
+    assert scope == ("lgbm", "cancer->lgbm", "kc2->lgbm")
+    leaf = PatchCandidate(
+        "leaf",
+        edits=[PatchEdit("fedot/leaf.py", "        return data", "        return None")],
+    )
+    assert shared_base_sibling_scope(source, leaf, ("lgbm",)) is None
+    assert sibling_regression_blocks_queue(
+        {"dev": {"reason": "regression kc2->lgbm crashed after patch"}}
+    ) == ""
+    assert sibling_regression_blocks_queue(
+        {"dev": {"reason": "target_delta -0.0009 below numerical signal floor"}}
+    ) == ""
+    blocked = sibling_regression_blocks_queue(
+        {"dev": {"reason": "regression kc2->lgbm delta -0.0143"}}
+    )
+    assert "kc2->lgbm delta -0.0143" in blocked
+    assert "40-task queue" in blocked
+
+
+def test_shared_base_sibling_regression_blocks_the_quality_queue(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import (
+        EvolveRunPolicy,
+        MatchSite,
+        PatchCandidate,
+        PatchEdit,
+    )
+
+    source = _lgbm_base_source(tmp_path)
+    lead = MatchSite("execution", "fedot/boost.py", 2, "full data refit")
+    screens: list[tuple[str, ...]] = []
+
+    def fake_screen(_experiment, exam_ids, *_args, **_kwargs):
+        screens.append(tuple(exam_ids))
+        return True, {
+            "passed": True,
+            "reason": "technically_valid",
+            "target_delta": -0.0143,
+            "dev": {
+                "reason": "regression kc2->lgbm delta -0.0143",
+                "keep": False,
+                "regression_deltas": {
+                    "lgbm": -0.0009,
+                    "cancer->lgbm": 0.0035,
+                    "kc2->lgbm": -0.0143,
+                },
+            },
+            "shadow": {"evaluated": False},
+        }
+
+    def fake_stock(task_ids, **_kwargs):
+        return {task_id: ScoreResult(task_id, "ok", 0.8) for task_id in task_ids}
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(
+        loop,
+        "fix_lead",
+        lambda *_a, **_k: PatchCandidate(
+            "lgbm-refit",
+            edits=[
+                PatchEdit(
+                    "fedot/boost.py",
+                    "        return data",
+                    "        return data\n        return data",
+                )
+            ],
+            file_path="fedot/boost.py",
+            behavior_probe="print(1)",
+        ),
+    )
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {"status": "changed", "code": "print(1)"},
+    )
+    monkeypatch.setattr(loop, "measure_stock", fake_stock)
+    monkeypatch.setattr(loop, "measure_patched", fake_stock)
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(loop, "_quick_quality_screen", fake_screen)
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    workspace = tmp_path / "work"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("rf", "cancer", "kc2", "lgbm"),
+        protect_ids=("rf", "cancer", "kc2", "lgbm"),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+    assert screens == [("lgbm", "cancer->lgbm", "kc2->lgbm")]
+    assert decision.reason == "sibling_lift_regression"
+    assert not (workspace / "quality_queue").exists()
+    trace = (workspace / "trace.jsonl").read_text(encoding="utf-8")
+    assert "sibling_lift_screen" in trace
+
+
 def test_single_column_datetime_probe_gets_one_mixed_table_revision(tmp_path, monkeypatch):
     from fedotllm.agents.evolve.controller import campaign as loop
     from fedotllm.agents.evolve.types import EvolveRunPolicy, PatchCandidate, PatchEdit, MatchSite
@@ -698,6 +862,113 @@ def test_tied_auc_does_not_get_a_pytest_revision(tmp_path, monkeypatch):
     assert [row for row in rows if row.get("event") == "targeted_revision_extension"] == []
     attempt = next(row for row in rows if row.get("event") == "decision" and row.get("revision") == 1)
     assert "auc=0.540" in str(attempt.get("feedback") or "")
+
+
+def test_subset_index_print_does_not_enter_the_quality_queue(tmp_path, monkeypatch):
+    from fedotllm.agents.evolve.controller import campaign as loop
+    from fedotllm.agents.evolve.types import EvolveRunPolicy, MatchSite, PatchCandidate, PatchEdit
+
+    source = tmp_path / "source"
+    (source / "fedot").mkdir(parents=True)
+    (source / "fedot" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "fedot" / "a.py").write_text("def value():\n    return 1\n", encoding="utf-8")
+    lead = MatchSite("execution", "fedot/a.py", 1, "re-base subset indices")
+    probe = (
+        "sub = data.subset_features(np.array([0, 1]))\n"
+        "print('EVOLVE_OBSERVATION=cat_idx_[]')\n"
+    )
+    patch = (
+        "def _local_indices(original_idx):\n"
+        "    return np.where(np.isin(feature_ids, original_idx))[0]\n"
+    )
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(
+        loop,
+        "fix_lead",
+        lambda *_a, **_k: PatchCandidate(
+            "subset-idx",
+            edits=[PatchEdit("fedot/a.py", "return 1", patch)],
+            file_path="fedot/a.py",
+            behavior_probe=probe,
+        ),
+    )
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: {
+            "status": "changed",
+            "code": probe,
+            "stock": {"observation": "cat_idx_[]"},
+            "patched": {"observation": "cat_idx_[0, 1]"},
+        },
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda *_a, **_k: {"logit": ScoreResult("logit", "ok", 0.8)},
+    )
+    monkeypatch.setattr(
+        loop, "measure_fedot_tests", lambda *_a, **_k: TestResult("passed", 0)
+    )
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+    workspace = tmp_path / "work"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("logit",),
+        protect_ids=("logit",),
+        max_leads=1,
+        max_revisions=1,
+        policy=EvolveRunPolicy(
+            verify_manifest=False,
+            confirm_and_ablate=False,
+            confirm_small_signals=False,
+            evaluate_final=False,
+            fedot_quality_jobs=True,
+        ),
+    )
+    assert decision.reason == "subset_index_out_of_range"
+    assert not (workspace / "quality_queue").exists()
+
+
+def test_queued_subset_index_resumes_as_correctness(tmp_path):
+    from fedotllm.agents.evolve.storage.replay import subset_index_resume
+
+    row = {
+        "record_type": "finding",
+        "source_hash": "src",
+        "lead": {
+            "file_path": "fedot/core/data/data.py",
+            "line": 643,
+            "hypothesis_kind": "quality",
+            "why": "setdiff leaves categorical_idx empty",
+        },
+        "dev": {"reason": "queued_for_fedot_quality"},
+        "edits": [{"new_code": "def _local_indices(original_idx):\n    return local\n"}],
+        "behavior_probe": {
+            "status": "changed",
+            "code": "sub = data.subset_features(np.array([0, 1]))\n",
+            "stock": {"observation": "cat_idx_[]"},
+            "patched": {"observation": "cat_idx_[0, 1]"},
+        },
+    }
+    findings = tmp_path / "findings.jsonl"
+    findings.write_text(json.dumps(row) + "\n")
+    resumed = subset_index_resume(findings, source_hash="src")
+    assert resumed is not None
+    site, note = resumed
+    assert (site.file_path, site.line) == ("fedot/core/data/data.py", 643)
+    assert site.hypothesis_kind == "correctness"
+    assert "index 2 is out of bounds" in note
+    row["lead"] = {**row["lead"], "hypothesis_kind": "correctness", "why": note}
+    findings.write_text(json.dumps(row) + "\n")
+    assert subset_index_resume(findings, source_hash="src") is None
 
 
 def test_queued_day_count_flag_resumes_once(tmp_path):
