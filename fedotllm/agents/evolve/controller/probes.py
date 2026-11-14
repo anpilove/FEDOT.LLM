@@ -357,6 +357,38 @@ def tied_named_metric(behavior_probe: dict | None) -> str:
     return ", ".join(f"{name}={stock_metrics[name]}" for name in sorted(stock_metrics))
 
 
+def categorical_rule_not_exercised(
+    behavior_probe: dict | None,
+    patch_text: str,
+) -> str:
+    """A relative unique-count edit whose probe never classified a column.
+
+    The 17:49 Europe/Moscow probe tiled twelve values into a 20-by-12 table.
+    Every column had one unique value, so the corrector logged that it could
+    not define categorical columns. The features dtype was still object, and
+    that shared label entered the 40-task queue. A column of 240 rows with
+    twelve distinct values is classified as categorical on the pin.
+    """
+
+    probe = behavior_probe or {}
+    if str(probe.get("status") or "") != "no_change":
+        return ""
+    patch = patch_text or ""
+    if "nuniques" not in patch or "observed_counts" not in patch:
+        return ""
+    marker = "unable to define the categorical columns"
+    stock = str((probe.get("stock") or {}).get("stdout_tail") or "")
+    patched = str((probe.get("patched") or {}).get("stdout_tail") or "")
+    if marker not in stock or marker not in patched:
+        return ""
+    return (
+        "The unique-count edit did not run. Both sides logged that "
+        "preprocessing could not define categorical columns. Build one "
+        "column with 3 to 12 distinct values and at least 100 rows, and "
+        "print categorical_idx. Do not label the result by features.dtype."
+    )
+
+
 def _behavior_probe_blocks_candidate(result: dict) -> bool:
     """Cheap technical filter only. Toy no_change is not a quality veto.
 
