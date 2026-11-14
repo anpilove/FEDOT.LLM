@@ -2,12 +2,10 @@
 
 Анализ выполнен 14 ноября 2026 года для зафиксированного набора из
 [`quality_registry.json`](../evaluation/quality_registry.json). Это анализ входных
-датасетов проверки, а не результат обучения FEDOT. Таблица по каждой задаче —
-[`task_inventory.csv`](eda_assets/task_inventory.csv); код построения таблицы и графиков —
-[`research/evolve/hw2_eda.py`](../../../../research/evolve/hw2_eda.py).
-Проверка сырых таблиц и разбиений выполнена
-[`eda_raw_audit.py`](../../../../research/evolve/eda_raw_audit.py).
-Шаги анализа с выполненными ячейками и графиками — в [ноутбуке](eda.ipynb).
+датасетов проверки, а не результат обучения FEDOT. Код анализа, выполненные ячейки
+и графики — в [ноутбуке](eda.ipynb). Он создаёт сводные таблицы
+[`task_inventory.csv`](eda_assets/task_inventory.csv) и
+[`raw_audit.csv`](eda_assets/raw_audit.csv) из исходных источников.
 
 ## Источники и метод
 
@@ -30,17 +28,11 @@
 - В репозиторий добавлены только метаданные, сводная таблица и графики. Сырые
   датасеты остаются в публичных источниках и локальном кэше.
 
-Повторить анализ при наличии FEDOT checkout:
-
-```bash
-python research/evolve/hw2_eda.py --fedot-checkout /absolute/path/to/FEDOT --raw-samples
-python research/evolve/eda_raw_audit.py
-```
-
-Для повторного выполнения ноутбука задайте переменную окружения
+Для повторного анализа откройте [ноутбук](eda.ipynb) из его каталога и
+выполните ячейки сверху вниз. Перед запуском задайте переменную окружения
 `FEDOT_CHECKOUT=/absolute/path/to/FEDOT`. Нужны `pandas`, `numpy`,
 `matplotlib` и `openml`; таблицы OpenML должны быть доступны по сети
-или в локальном кэше.
+или в локальном кэше. Ячейки пересоздают CSV и PNG в `eda_assets/`.
 
 ## Состав и объём
 
