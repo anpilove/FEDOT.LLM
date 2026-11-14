@@ -103,6 +103,7 @@ from fedotllm.agents.evolve.controller.probes import (
     _behavior_probe_blocks_candidate,
     compare_behavior_probe as run_behavior_probe,
     compare_with_prior_probe,
+    infrastructure_probe_decision,
 )
 from fedotllm.agents.evolve.controller.finalization import (
     record_final,
@@ -1583,6 +1584,28 @@ def run_once(
                         behavior_probe=behavior_probe,
                     )
                     behavior_status = behavior_probe.get("status")
+                    infrastructure = infrastructure_probe_decision(
+                        behavior_probe, experiment_id=experiment_id
+                    )
+                    if infrastructure is not None:
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            infrastructure,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            patch_hash=patch_hash,
+                            feedback=(
+                                "outcome=behavior_probe_infrastructure; both checkouts "
+                                "failed before the diagnostic ran. Do not rewrite the probe.\n"
+                                + json.dumps(behavior_probe, ensure_ascii=False)[:7_000]
+                            ),
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        return infrastructure
                     if _behavior_probe_blocks_candidate(behavior_probe):
                         # No metric trial has happened yet. A new diagnostic may
                         # expose the effect of these same edits; the same pair may not.

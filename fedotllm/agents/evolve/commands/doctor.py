@@ -92,12 +92,14 @@ def run_doctor(
         except (OSError, ValueError) as exc:
             probe_error = f"{type(exc).__name__}: {exc}"
         else:
-            if probe.status != "ok":
-                probe_error = probe.detail or probe.output[-500:]
-            else:
-                runtime = parse_preflight_stdout(probe.stdout)
-                if runtime is None:
-                    probe_error = "preflight probe did not emit EVOLVE_PREFLIGHT"
+            runtime = parse_preflight_stdout(probe.stdout)
+            if runtime is not None and runtime.get("import_error"):
+                probe_error = str(runtime["import_error"])
+            elif probe.status != "ok":
+                body = (probe.output or "").strip()
+                probe_error = body[-500:] if body else (probe.detail or "preflight probe failed")
+            elif runtime is None:
+                probe_error = "preflight probe did not emit EVOLVE_PREFLIGHT"
         checks.update(dependency_checks(experiment, runtime, probe_error=probe_error))
         preflight_ok = all(
             checks[name]["ok"] for name in ("return_best", "dask", "path")
