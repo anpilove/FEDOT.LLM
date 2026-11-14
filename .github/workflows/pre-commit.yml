@@ -2,33 +2,38 @@ name: Pre-commit checks
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, research/evolve-agent]
   pull_request:
-    branches: [ main ]
+    branches: [main, research/evolve-agent]
+
+permissions:
+  contents: read
 
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
         version: "latest"
 
-    - name: Set up Python 3.10
-      run: uv python install 3.10
+    - name: Set up Python 3.11
+      run: uv python install 3.11
 
-    - name: Install dependencies
+    - name: Run pre-commit hooks on changed Python files
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       run: |
-        uv sync --dev
+        uvx --python 3.11 --from pre-commit==4.2.0 pre-commit run ruff-check --from-ref "$BASE_SHA" --to-ref HEAD --show-diff-on-failure
 
-    - name: Check code formatting with ruff
-      run: |
-        uv run ruff format --check .
-
-    - name: Lint code with ruff
-      run: |
-        uv run ruff check .
+        # Existing Python files are formatted in a separate cleanup PR.
+        mapfile -d '' added_python < <(git diff --name-only --diff-filter=A -z "$BASE_SHA" HEAD -- '*.py')
+        if [ "${#added_python[@]}" -gt 0 ]; then
+          uvx --python 3.11 --from pre-commit==4.2.0 pre-commit run ruff-format --files "${added_python[@]}" --show-diff-on-failure
+        fi

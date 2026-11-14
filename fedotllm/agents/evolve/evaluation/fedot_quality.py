@@ -2012,10 +2012,6 @@ def decision_from_quality_jobs(rows: list[dict]) -> Decision:
         outcome = "broad_positive"
         keep = True
         reason = "quality_improved"
-    elif len(improved_task_ids) >= 2:
-        outcome = "local_positive"
-        keep = True
-        reason = "quality_improved"
     else:
         outcome = "insufficient_effect"
         keep = False

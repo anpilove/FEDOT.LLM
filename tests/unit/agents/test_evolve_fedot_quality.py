@@ -474,11 +474,7 @@ def _quality_rows_for_deltas(deltas, *, invalid_index=None):
     from fedotllm.agents.evolve.evaluation.quality_registry import load_quality_registry
 
     registry = load_quality_registry()
-    task_ids = [
-        dataset.task_id
-        for dataset in registry.datasets
-        if dataset.problem == "classification"
-    ][: len(deltas)]
+    task_ids = [dataset.task_id for dataset in registry.datasets][: len(deltas)]
     rows = []
     for index, (task_id, delta) in enumerate(zip(task_ids, deltas, strict=True)):
         spec = job_spec(get_dataset(task_id, registry), registry=registry)
@@ -487,7 +483,9 @@ def _quality_rows_for_deltas(deltas, *, invalid_index=None):
         patched = ScoreResult(
             task_id,
             "invalid" if index == invalid_index else "ok",
-            float("nan") if index == invalid_index else 0.70 + delta,
+            float("nan") if index == invalid_index else (
+                0.70 + delta if spec["higher_is_better"] else 0.70 - delta
+            ),
             metric_observations={
                 "metric_valid": True,
                 "search_ran": True,
@@ -507,18 +505,24 @@ def _quality_rows_for_deltas(deltas, *, invalid_index=None):
     return rows
 
 
-def test_quality_verdict_uses_majority_for_broad_and_two_wins_for_local():
+def test_quality_verdict_requires_strict_majority_of_required_datasets():
     broad = decision_from_quality_jobs(_quality_rows_for_deltas([0.02] * 5 + [0.0] * 3))
+    tied = decision_from_quality_jobs(_quality_rows_for_deltas([0.02] * 4 + [0.0] * 4))
     local = decision_from_quality_jobs(_quality_rows_for_deltas([0.02, 0.02] + [0.0] * 6))
+    full_scope = decision_from_quality_jobs(_quality_rows_for_deltas([0.02] * 2 + [0.0] * 38))
 
     assert broad.keep is True
     assert broad.quality_outcome == "broad_positive"
     assert broad.improved_task_count == 5
     assert broad.target_delta is None
-    assert local.keep is True
-    assert local.quality_outcome == "local_positive"
+    assert tied.keep is False
+    assert tied.quality_outcome == "insufficient_effect"
+    assert local.keep is False
+    assert local.quality_outcome == "insufficient_effect"
     assert local.improved_task_count == 2
     assert local.target_delta is None
+    assert full_scope.keep is False
+    assert full_scope.improved_task_count == 2
 
 
 def test_any_real_loss_is_visible_even_below_gain_threshold():
