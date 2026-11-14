@@ -10,7 +10,7 @@ flowchart LR
     ok -- "нет: до 2 ревизий;<br/>+1 после сбоя safety-проверки" --> fixer
     ok -- "нет, лимит исчерпан" --> rejected["Отказ от гипотезы"]
     ok -- "да" --> queue["Очередь"]
-    queue --> controller["Контроллер / Judge"]
+    queue --> controller["Контроллер"]
     registry["Реестр задач"] --> controller
     controller --> stock["Исходный FEDOT"] --> patched["FEDOT с патчем"]
     patched --> metrics{"Метрики получены?"}
