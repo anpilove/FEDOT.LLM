@@ -1,0 +1,31 @@
+flowchart LR
+    source["FEDOT<br/>и код"] --> scout["Scout"]
+    scout --> kind{"Дефект?"}
+    kind -- "да" --> verifier["Verifier"]
+    kind -- "гипотеза о качестве" --> fixer["Fixer"]
+    verifier --> confirmed{"Подтверждён?"}
+    confirmed -- "да" --> fixer
+    confirmed -- "нет: следующая гипотеза;<br/>до 5 за запуск" --> scout
+    fixer --> tests["Тесты"] --> ok{"Ок?"}
+    ok -- "нет: до 2 ревизий;<br/>+1 после сбоя safety-проверки" --> fixer
+    ok -- "нет, лимит исчерпан" --> rejected["Отказ от гипотезы"]
+    ok -- "да" --> queue["Очередь"]
+    queue --> controller["Контроллер / Judge"]
+    registry["Реестр задач"] --> controller
+    controller --> stock["Исходный FEDOT"] --> patched["FEDOT с патчем"]
+    patched --> metrics{"Метрики получены?"}
+    metrics -- "нет" --> incomplete["Не завершено"]
+    metrics -- "да" --> decision["KEEP / DROP"]
+    incomplete --> report["Отчёт"]
+    decision --> report --> review["Ревью"]
+
+    classDef llm fill:#ede3ff,stroke:#9d7bc5,color:#1e293b
+    classDef automatic fill:#e3f5e9,stroke:#7da994,color:#1e293b
+    classDef data fill:#e8efff,stroke:#a7b8d5,color:#1e293b
+    classDef choice fill:#fff3d1,stroke:#d5bb77,color:#1e293b
+    classDef human fill:#f1f2f4,stroke:#a5aab2,color:#1e293b
+    class scout,verifier,fixer llm
+    class tests,queue,controller,stock,patched,metrics,incomplete,decision,report,rejected automatic
+    class source,registry data
+    class kind,confirmed,ok choice
+    class review human
