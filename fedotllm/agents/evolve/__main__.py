@@ -134,14 +134,35 @@ def _decision_exit_code(decision) -> int:
     return 0 if decision.dev_keep else 1
 
 
+# Catalog turn plus the five-step file decision (four evidence turns and one
+# pick/skip turn). A tighter cap must not reserve these calls away: the live
+# GLM pick stopped at zero sites after the catalog request because nine of ten
+# queries were held for verifier and fixer.
+DISCOVERY_QUERY_FLOOR = 6
+# Catalog plan plus two full file decisions. The 07:17 Moscow walk finished
+# preprocessing.py without a site and died on the second file.
+SECOND_FILE_DISCOVERY_FLOOR = 11
+
+
+def _discovery_floor(max_queries: int | None) -> int:
+    """Leave one file on a small cap, and a second file when the cap can hold it."""
+
+    if (
+        max_queries is not None
+        and max_queries >= 3 + 8 + SECOND_FILE_DISCOVERY_FLOOR
+    ):
+        return SECOND_FILE_DISCOVERY_FLOOR
+    return DISCOVERY_QUERY_FLOOR
+
+
 def _bounded_fixer_reserve(max_queries: int | None, requested: int) -> int:
-    """Keep repair/probe capacity while always leaving discovery one request."""
+    """Keep repair/probe capacity while leaving discovery a full file decision."""
 
     if requested < 0:
         raise ValueError("--llm-reserve-fixer-queries must be non-negative")
     if max_queries is None:
         return requested
-    return min(requested, max(0, max_queries - 1))
+    return min(requested, max(0, max_queries - DISCOVERY_QUERY_FLOOR))
 
 
 def _campaign_reserves(
@@ -155,7 +176,7 @@ def _campaign_reserves(
 
     if fixer_requested < 0:
         raise ValueError("--llm-reserve-fixer-queries must be non-negative")
-    available = None if max_queries is None else max(0, max_queries - 1)
+    available = None if max_queries is None else max(0, max_queries - _discovery_floor(max_queries))
     verifier = 3 if has_verifier else 0
     if available is not None:
         verifier = min(verifier, available)
@@ -1185,6 +1206,8 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         if isinstance(summary, dict):
             summary["run_budget"] = budget_payload
             _write_json(summary_path, summary)
+    from fedotllm.agents.evolve.controller.session import kept_patch_report
+
     _print_json(
         {
             "keep_dev": decision.dev_keep,
@@ -1195,6 +1218,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "target_delta": decision.target_delta,
             "regression_deltas": decision.regression_deltas,
             "workspace": str(run_workspace),
+            "change": kept_patch_report(run_workspace, summary),
             "run_budget": budget_payload,
             "quality_queue": (summary or {}).get("quality_queue"),
         }

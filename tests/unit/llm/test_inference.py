@@ -153,6 +153,28 @@ def test_query_falls_back_after_timeout(mock_litellm, llm_config):
 
 
 @patch("fedotllm.llm.litellm")
+def test_query_does_not_treat_a_run_budget_stop_as_a_model_timeout(llm_config, caplog):
+    """A stage reserve is not a provider timeout and must not walk fallbacks."""
+
+    class EvolveBudgetExhausted(LLMRequestTimeout):
+        pass
+
+    llm_config.fallback_models = "small-model"
+    inference = AIInference(llm_config)
+
+    def blocked(_messages):
+        raise EvolveBudgetExhausted(
+            "evolve_run_stage_reserve_exhausted: stage=scout; no provider request sent"
+        )
+
+    inference._complete = blocked
+    with caplog.at_level("WARNING"):
+        with pytest.raises(EvolveBudgetExhausted):
+            inference.query("pick a site")
+    assert "trying fallback" not in caplog.text
+
+
+@patch("fedotllm.llm.litellm")
 def test_query_does_not_stick_on_fallback(mock_litellm, llm_config):
     llm_config.completion_params["timeout"] = 0.01
     llm_config.fallback_models = "small-model"

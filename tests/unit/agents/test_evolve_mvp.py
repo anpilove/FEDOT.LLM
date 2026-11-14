@@ -3999,6 +3999,44 @@ def test_fixer_corrects_ambiguous_search_after_apply_feedback(tmp_path: Path):
     assert "SEARCH occurs 2 times" in failures[0].read_text(encoding="utf-8")
 
 
+def test_fixer_asks_again_when_the_patch_response_has_no_edits(tmp_path: Path):
+    from fedotllm.agents.evolve.agents.fixer import fix_lead
+    from fedotllm.agents.evolve.agents.propose import PatchHunk, PatchProposal
+
+    source = _source(tmp_path)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, _schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return PatchProposal(status="patch", file_path="")
+            return PatchProposal(
+                status="patch",
+                file_path="fedot/a.py",
+                edits=[
+                    PatchHunk(
+                        file_path="fedot/a.py",
+                        old_code="return 1",
+                        new_code="return 3",
+                    )
+                ],
+            )
+
+    candidate = fix_lead(
+        source,
+        MatchSite("oracle", "fedot/a.py", 1, "quality-changing behavior"),
+        inference=Inference(),
+        workspace=tmp_path / "work",
+        max_edits=1,
+    )
+
+    assert candidate is not None
+    assert len(prompts) == 2
+    assert "no edits" in prompts[1]
+    assert "return 3" in (source / "fedot" / "a.py").read_text(encoding="utf-8")
+
+
 def test_fixer_repairs_invalid_behavior_probe_before_applying_patch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -4203,6 +4241,85 @@ def test_probe_builder_reserves_final_synthesis_after_navigation(
     assert repaired == "print('EVOLVE_OBSERVATION=working')"
     assert len(inference.prompts) == 3
     assert "Final synthesis after navigation" in inference.prompts[-1]
+
+
+def test_probe_builder_corrects_a_crashed_final_probe_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.agents import probe_builder
+    from fedotllm.agents.evolve.agents.probe_builder import (
+        ProbeProposal,
+        repair_behavior_probe,
+    )
+
+    source = _source(tmp_path)
+    crashes = iter(
+        [
+            SnippetResult(
+                "runtime_error",
+                "arity",
+                exit_code=1,
+                stderr="TypeError: transform() takes 2 positional arguments but 3 were given",
+            ),
+            SnippetResult(
+                "runtime_error",
+                "ctor",
+                exit_code=1,
+                stderr="TypeError: InputData.__init__() got an unexpected keyword argument 'features_types'",
+            ),
+            SnippetResult(
+                "runtime_error",
+                "final",
+                exit_code=1,
+                stderr="TypeError: InputData.__init__() got an unexpected keyword argument 'features_types'",
+            ),
+            SnippetResult("ok", "fixed", stdout="EVOLVE_OBSERVATION=width\n"),
+        ]
+    )
+
+    class Inference:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def create(self, prompt, _schema):
+            self.prompts.append(prompt)
+            if len(self.prompts) > 4:
+                raise AssertionError("probe builder took more than one correction")
+            if len(self.prompts) < 4:
+                return ProbeProposal(action="run", run_code=f"bad probe {len(self.prompts)}")
+            return ProbeProposal(
+                action="run",
+                run_code="print('EVOLVE_OBSERVATION=width')",
+            )
+
+    inference = Inference()
+    monkeypatch.setattr(
+        probe_builder,
+        "run_fedot_snippet",
+        lambda *_a, **_k: next(crashes),
+    )
+    monkeypatch.setattr(
+        probe_builder,
+        "format_snippet_feedback",
+        lambda _checkout, result, **_k: result.stderr,
+    )
+
+    repaired = repair_behavior_probe(
+        source,
+        inference=inference,
+        frozen_patch="EDIT 1 fedot/a.py\nSEARCH: imputer\nREPLACE: imputer add_indicator",
+        verification="missingness width",
+        failed_probe="broken()",
+        failed_result=SnippetResult("runtime_error", "bad", stderr="IndentationError"),
+    )
+
+    assert repaired == "print('EVOLVE_OBSERVATION=width')"
+    assert len(inference.prompts) == 4
+    assert "unexpected keyword argument 'features_types'" in inference.prompts[-1]
+    assert "data_type=DataTypesEnum.table" in inference.prompts[0]
+    assert "transform(data)" in inference.prompts[0]
+    assert "out.predict" in inference.prompts[0]
+    assert "out.predict" in inference.prompts[-1]
 
 
 def test_confirmed_fixer_benchmark_uses_workload_evidence_not_provisional_files(
@@ -5225,6 +5342,89 @@ def test_last_revision_pytest_feedback_gets_one_contract_repair_extension(
     ]
     assert len(extension) == 1
     assert extension[0]["gate"] == "pytest"
+
+
+def test_patched_probe_crash_gets_one_source_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from fedotllm.agents.evolve.controller import campaign as loop
+
+    source = _source(tmp_path)
+    lead = MatchSite("execution", "fedot/a.py", 1, "datetime conversion")
+    crashing = PatchCandidate(
+        "datetime-subtract",
+        edits=[PatchEdit("fedot/a.py", "return 1", "return 2")],
+        behavior_probe="print('EVOLVE_OBSERVATION=width')",
+    )
+    feedback_seen: list[str] = []
+    probes = [
+        {
+            "status": "patched_error",
+            "hypothesis_result": "patch_regression",
+            "stock": {"status": "ok", "observation": "r2=0.99"},
+            "patched": {
+                "status": "runtime_error",
+                "stderr_tail": (
+                    "ufunc 'subtract' cannot use operands with types "
+                    "dtype('float64') and dtype('<M8[D]')"
+                ),
+            },
+        }
+    ]
+
+    def fake_fix(*_args, **kwargs):
+        feedback_seen.append(kwargs.get("feedback", ""))
+        if len(feedback_seen) == 1:
+            return crashing
+        return None
+
+    monkeypatch.setattr(loop, "scout", lambda *_a, **_k: [lead])
+    monkeypatch.setattr(loop, "fix_lead", fake_fix)
+    monkeypatch.setattr(
+        loop,
+        "measure_stock",
+        lambda ids, **_k: {task_id: ScoreResult(task_id, "ok", 0.8) for task_id in ids},
+    )
+    monkeypatch.setattr(loop, "_hydrate_configuration_surfaces", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        loop,
+        "measure_baseline_fedot_tests",
+        lambda *_a, **_k: TestResult("passed", 0),
+    )
+    monkeypatch.setattr(
+        loop,
+        "compare_behavior_probe",
+        lambda *_a, **_k: probes.pop(0),
+    )
+    monkeypatch.setattr(loop, "snapshot_diff", lambda *_a, **_k: "diff")
+
+    workspace = tmp_path / "probe-crash-repair"
+    decision = loop.run_once(
+        checkout=source,
+        workspace=workspace,
+        inference=object(),
+        lift_ids=("catboost",),
+        protect_ids=("catboost",),
+        max_leads=1,
+        max_revisions=1,
+        policy=FAST_RUN_POLICY,
+    )
+
+    assert decision.keep is False
+    assert len(feedback_seen) == 2
+    assert "dtype('float64')" in feedback_seen[1]
+    assert "repair the source change" in feedback_seen[1]
+    rows = [
+        json.loads(line)
+        for line in (workspace / "journal.jsonl").read_text().splitlines()
+    ]
+    extension = [
+        row for row in rows if row.get("event") == "targeted_revision_extension"
+    ]
+    assert len(extension) == 1
+    assert extension[0]["gate"] == "behavior_probe"
+    assert extension[0]["candidate"] == "datetime-subtract"
 
 
 def test_fixer_budget_exhaustion_preserves_reproducible_pytest_rejection(
@@ -6671,16 +6871,15 @@ def test_scout_rejects_cooled_site_after_llm_selects_change_line(tmp_path: Path)
             assert "fedot/a.py:1" in prompt
             if "Catalog site: fedot/a.py:1" in prompt:
                 self.a_calls += 1
-                if self.a_calls == 1:
-                    return SiteProposal(status="pick", **_causal_fields(1))
-                assert "pick rejected: that exact change_line is cooling down" in prompt
-                return SiteProposal(status="skip")
+                assert "Final decision turn" in prompt
+                return SiteProposal(status="pick", **_causal_fields(1))
             assert "Catalog site: fedot/b.py:1" in prompt
             return SiteProposal(status="pick", **_causal_fields(1))
 
     trace: dict = {}
+    inference = Inference()
     selected = _llm_pick(
-        Inference(),
+        inference,
         source,
         [
             MatchSite("execution", "fedot/a.py", 1, "executed value"),
@@ -6693,12 +6892,179 @@ def test_scout_rejects_cooled_site_after_llm_selects_change_line(tmp_path: Path)
     )
 
     assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
-    assert any(
+    assert trace and any(
         row["status"] == "recent_site_cooldown"
         and row["file_path"] == "fedot/a.py"
         and row["line"] == 1
         for row in trace["llm_pick_rounds"]
     )
+    assert inference.a_calls == 1
+
+
+def test_integer_inf_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "Executed line mutates integer-dtype columns containing infinities"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "cannot store inf" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "impossible_integer_nonfinite" for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_advanced_index_view_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["why"] = (
+                        "line 41 writes FEDOT_STR_NAN through a transposed view "
+                        "directly into the caller's feature array"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "already returns a copy" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "advanced_index_is_copy" for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_empty_categorical_features_claim_is_rejected_and_the_walk_continues(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.a_calls = 0
+
+        def create(self, prompt, _schema):
+            if "Catalog site: fedot/a.py:1" in prompt:
+                self.a_calls += 1
+                if self.a_calls == 1:
+                    fields = _causal_fields(1)
+                    fields["mechanism"] = (
+                        "from_numpy/array_to_input_data set categorical_idx "
+                        "without populating categorical_features"
+                    )
+                    return SiteProposal(status="pick", **fields)
+                assert "copies features" in prompt
+                return SiteProposal(status="skip")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    selected = _llm_pick(
+        Inference(),
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=4,
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert any(
+        row.get("status") == "constructor_fills_categorical_features"
+        for row in trace["llm_pick_rounds"]
+    )
+
+
+def test_closed_catalog_line_does_not_run_and_reaches_the_next_file(tmp_path: Path):
+    from fedotllm.agents.evolve.discovery.discover import SiteProposal, _llm_pick
+
+    source = _source(tmp_path)
+    (source / "fedot" / "b.py").write_text("def other():\n    return 1\n", encoding="utf-8")
+
+    class Inference:
+        def __init__(self):
+            self.prompts: list[str] = []
+
+        def create(self, prompt, _schema):
+            self.prompts.append(prompt)
+            if "Catalog site: fedot/a.py:1" in prompt:
+                return SiteProposal(status="run", run_code="print('EVOLVE_OBSERVATION=1')")
+            return SiteProposal(status="pick", file_path="fedot/b.py", **_causal_fields(1))
+
+    trace: dict = {}
+    inference = Inference()
+    selected = _llm_pick(
+        inference,
+        source,
+        [
+            MatchSite("execution", "fedot/a.py", 1, "executed value"),
+            MatchSite("execution", "fedot/b.py", 1, "executed other value"),
+        ],
+        max_picks=1,
+        max_actions=2,
+        excluded_sites={("fedot/a.py", 1)},
+        trace=trace,
+    )
+
+    assert [(item.file_path, item.line) for item in selected] == [("fedot/b.py", 1)]
+    assert sum("Catalog site: fedot/a.py:1" in prompt for prompt in inference.prompts) == 1
+    assert any(row.get("status") == "closed_catalog_no_run" for row in trace["llm_pick_rounds"])
+    assert not any("EVOLVE_OBSERVATION" in prompt for prompt in inference.prompts)
 
 
 def test_scout_rejects_cooled_default_operation_after_neighbor_navigation(

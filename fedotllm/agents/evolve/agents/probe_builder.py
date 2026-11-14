@@ -42,6 +42,14 @@ Never return an unexecuted probe. A successful `run` with exactly one observatio
 accepted immediately. Every run_code is standalone and must repeat imports and setup.
 FEDOT implementation classes accept `OperationParameters`, not a raw `dict`; use
 `OperationParameters(key=value, ...)` for direct construction, or PipelineBuilder.
+Construct tabular data with exactly these InputData fields: idx, features, target,
+task, data_type. Example:
+data = InputData(idx=np.arange(n), features=X, target=y.reshape(-1, 1), task=Task(TaskTypesEnum.classification), data_type=DataTypesEnum.table)
+Then call fit(data) and transform(data). transform accepts only that one InputData.
+Data-operation transform returns OutputData. The transformed matrix is predict.
+features on that object is still the input table, so it can still contain the original strings.
+Measure np.asarray(out.predict), not out.features. If transform already returned, correct that read.
+Do not replace the implementation class with another API.
 Do not inspect source text from the probe, import EvolveAgent evaluators, use mocks, or
 read benchmark data. Prefer PipelineBuilder/PipelineNode and valid InputData. Treat the
 runtime traceback and automatic API recovery below as ground truth."""
@@ -129,6 +137,39 @@ def repair_behavior_probe(
         ProbeProposal,
         stage="probe_builder",
         metadata={**(audit_metadata or {}), "tool_step": max_steps + 1, "final": True},
+    )
+    if parsed.action != "run" or not (parsed.run_code or "").strip():
+        return None
+    code = parsed.run_code.strip()
+    result = run_fedot_snippet(checkout, code)
+    if result.status == "ok" and _observation_count(result.stdout) == 1:
+        return code
+    # The final probe is the first complete program after navigation. One crash
+    # still has the recovered API in hand; discarding it drops the source patch.
+    history.append(
+        "action=final run failed\n"
+        + format_snippet_feedback(checkout, result, max_chars=6_000)
+    )
+    correction_prompt = (
+        f"{stable}\n\nThe final probe crashed. Previous tool results:\n"
+        + ("\n\n".join(history)[-10_000:] or "(none)")
+        + "\n\nIf the crash reads out.features after transform returned, the "
+        "transformed matrix is out.predict. features is still the input table. "
+        "Correct that read and keep the same implementation class.\n"
+        "Return action=run with one corrected complete probe, or "
+        "action=cannot_fix. No more read, symbol, or docs actions are available."
+    )
+    parsed, _ = capture_structured_create(
+        inference,
+        correction_prompt,
+        ProbeProposal,
+        stage="probe_builder",
+        metadata={
+            **(audit_metadata or {}),
+            "tool_step": max_steps + 2,
+            "final": True,
+            "correction": True,
+        },
     )
     if parsed.action != "run" or not (parsed.run_code or "").strip():
         return None

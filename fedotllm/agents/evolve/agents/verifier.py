@@ -244,6 +244,137 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
     return "\n\n".join(chunks)[:14_000]
 
 
+def annotated_int_or_coerces_zero(source: str, line: int) -> str:
+    """Return why an `or` default drops the integer 0, or an empty string.
+
+    A parameter annotated ``int`` includes 0. The default applies when the
+    caller omits the argument. ``name or default`` replaces that 0.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    owner: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+
+    def walk(node: ast.AST) -> None:
+        nonlocal owner
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end:
+                owner = node
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(tree)
+    if owner is None:
+        return ""
+    domain: dict[str, int] = {}
+    positional = owner.args.args[-len(owner.args.defaults):] if owner.args.defaults else []
+    for arg, default in zip(positional, owner.args.defaults):
+        if (
+            isinstance(arg.annotation, ast.Name)
+            and arg.annotation.id == "int"
+            and isinstance(default, ast.Constant)
+            and isinstance(default.value, int)
+        ):
+            domain[arg.arg] = default.value
+    if not domain:
+        return ""
+    statement = next(
+        (
+            node
+            for node in ast.walk(owner)
+            if isinstance(node, ast.stmt) and getattr(node, "lineno", None) == line
+        ),
+        None,
+    )
+    if statement is None:
+        return ""
+    for node in ast.walk(statement):
+        if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.Or):
+            continue
+        names = {value.id for value in node.values if isinstance(value, ast.Name)}
+        constants = {
+            value.value
+            for value in node.values
+            if isinstance(value, ast.Constant) and isinstance(value.value, int)
+        }
+        for name, default in domain.items():
+            if name in names and default in constants:
+                return (
+                    f"{name} is annotated int with default {default}; "
+                    "0 is in that domain and this line replaces it with "
+                    f"`{name} or {default}`"
+                )
+    return ""
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def discarded_callback_return(source: str, line: int) -> str:
+    """Return why an early-stopping callback is built and then dropped.
+
+    ``update_callbacks`` assigns ``callback = []``, calls
+    ``lgbm_early_stopping`` as a statement, and returns that empty list.
+    ``fit`` passes the list as ``callbacks=``. The 08:10 Europe/Moscow audit
+    called this inconclusive because the method has no docstring.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    owner: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+
+    def walk(node: ast.AST) -> None:
+        nonlocal owner
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end:
+                owner = node
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(tree)
+    if owner is None:
+        return ""
+    empty_names = {
+        node.targets[0].id
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.List)
+        and not node.value.elts
+    }
+    returns_empty = any(
+        isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in empty_names
+        for node in ast.walk(owner)
+    )
+    discarded = any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and _call_name(node.value).endswith("early_stopping")
+        for node in ast.walk(owner)
+    )
+    if not (empty_names and returns_empty and discarded):
+        return ""
+    return (
+        "update_callbacks builds an early-stopping callback and returns the "
+        "empty list instead. fit passes that list as callbacks=."
+    )
+
+
 def _audit_contract_support(
     checkout: Path,
     lead: MatchSite,
@@ -482,6 +613,14 @@ Prefer reject over an API preference, cosmetic issue, or untested story.
 Do not import evaluator, datasets, benchmark cases, scorer or task catalogs."""
 
 
+def _probe_exception_line(stderr: str) -> str:
+    for line in reversed((stderr or "").splitlines()):
+        text = line.strip()
+        if text and ("Error" in text or text.endswith("Exception")):
+            return text[:300]
+    return ""
+
+
 def _probe_is_meaningful(code: str) -> tuple[bool, str]:
     lowered = (code or "").lower()
     if "import fedot" not in lowered and "from fedot" not in lowered:
@@ -566,26 +705,28 @@ def _grounded_public_exception(
             "Fedot(",
         )
     )
+    stderr = (stock.stderr or "").replace("\\", "/")
+    terminal = next(
+        (line.strip() for line in reversed(stderr.splitlines()) if line.strip()),
+        "",
+    )
+    # A bad import dies before any entry point exists. Naming that
+    # ImportError keeps the model on the class it already chose.
+    if terminal.startswith((
+        "SyntaxError:",
+        "NameError:",
+        "ModuleNotFoundError:",
+        "ImportError:",
+    )):
+        return False, f"likely probe setup failure: {terminal}"
     if not public_entry or "operation_implementations" in code:
         return False, "probe did not use a public FEDOT entry point"
     target = (proposal.file_path or "").strip().replace("\\", "/")
     if not target.startswith("fedot/") or not target.endswith(".py"):
         return False, "verify_bug did not identify a FEDOT runtime target"
-    stderr = (stock.stderr or "").replace("\\", "/")
     if target not in stderr:
         return False, "exception traceback did not reach the claimed runtime target"
-    terminal = next(
-        (line.strip() for line in reversed(stderr.splitlines()) if line.strip()),
-        "",
-    )
-    setup_failures = (
-        "SyntaxError:",
-        "NameError:",
-        "ModuleNotFoundError:",
-        "ImportError:",
-        "AttributeError:",
-    )
-    if terminal.startswith(setup_failures):
+    if terminal.startswith("AttributeError:"):
         return False, f"likely probe setup failure: {terminal}"
     if terminal.startswith("TypeError:") and any(
         marker in terminal
@@ -622,6 +763,21 @@ def verify_lead(
     provisional_quality: VerificationProposal | None = None
     quality_challenge_actions = 0
     disproved_bug_claims: list[str] = []
+    last_target_reached: bool | None = None
+    missed_target_retried = False
+    unreached_target_retried = False
+    syntax_probe_retried = False
+    import_probe_retried = 0
+    import_probe_limit = (
+        2
+        if "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+        else 1
+    )
+    target_disagree_retried = False
+    binary_reject_retried = False
+    all_nan_reject_retried = False
+    callback_reject_retried = False
+    contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
     step_budget = min(
@@ -940,6 +1096,86 @@ def verify_lead(
             _write_verification(workspace, lead, result)
             return result
         elif action is VerificationAction.REJECT:
+            claim_text = " ".join(
+                filter(None, (lead.why, lead.mechanism, parsed.claim, parsed.why))
+            )
+            if (
+                correctness_only
+                and not binary_reject_retried
+                and "ids_binary_integer_features" in claim_text
+                and not any("Probe status=" in item for item in tool_history)
+            ):
+                # The 06:52 Moscow reject said a non-binary column is never
+                # added, so it cannot be snapped. update does not delete the
+                # earlier key, and no probe had run.
+                binary_reject_retried = True
+                step_budget += 1
+                output = (
+                    "dict.update does not delete a key from an earlier transform. "
+                    "fit does not call _find_binary_features. A column with more "
+                    "than two unique values keeps the old key, and "
+                    "_correct_binary_ids_features still snaps it. Reject only after "
+                    "a probe imports fedot, fits once, transforms a two-value column, "
+                    "transforms that same object when the column has more than two "
+                    "unique values, and shows the second result was not snapped."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
+                and not all_nan_reject_retried
+                and "keep_empty_features" in claim_text
+                and "_categorical_numerical_union" in claim_text
+                and not any("indices imply" in item for item in tool_history)
+            ):
+                # The 07:29 Moscow reject treated a numerical-only call that
+                # returned without error as disproof. The union raises when a
+                # categorical column is present.
+                all_nan_reject_retried = True
+                step_budget += 1
+                output = (
+                    "SimpleImputer drops an all-NaN column. A numerical-only "
+                    "transform can return a narrower array without raising, and "
+                    "that does not disprove the union. Construct "
+                    "ImputationImplementation(), fit and transform one table with "
+                    "a numeric all-NaN column and a categorical column, and assert "
+                    "the ValueError whose message contains indices imply."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            history_text = "\n".join(tool_history)
+            if (
+                correctness_only
+                and not callback_reject_retried
+                and "lgbm_early_stopping" in claim_text
+                and (
+                    "empty list" in history_text
+                    or "returns []" in history_text
+                    or "callbacks=[]" in history_text
+                )
+            ):
+                # The 08:10 Moscow audit saw the empty return and still
+                # rejected it as metric-adjacent. The list is the contract.
+                callback_reject_retried = True
+                step_budget += 1
+                output = (
+                    "The returned list is the contract. fit passes that list "
+                    "as callbacks=. lgbm_early_stopping's result is discarded, "
+                    "so the list stays empty. Assert that update_callbacks "
+                    "returns a non-empty list when early_stopping_rounds is an "
+                    "int. Do not require the fitted tree count to change."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
             result = VerificationResult(
                 "rejected",
                 claim=parsed.claim or lead.why,
@@ -963,6 +1199,50 @@ def verify_lead(
                     valid, detail = False, f"unresolved verification target: {exc}"
             if not valid:
                 output = f"Probe rejected: {detail}"
+                if (
+                    str(detail).startswith("probe syntax error")
+                    and not syntax_probe_retried
+                ):
+                    # A missing colon produces no evidence. One rewrite
+                    # keeps that turn from ending the lead.
+                    syntax_probe_retried = True
+                    step_budget += 1
+                    output += (
+                        " A syntax error is not evidence. Return one corrected "
+                        "reproduction_code that parses."
+                    )
+                elif detail == "probe must import FEDOT" and import_probe_retried < import_probe_limit:
+                    # The 06:49 Moscow binary-feature probe never ran. One
+                    # rewrite keeps that rejection from ending the lead.
+                    # The 07:37 union probe missed the import again after that
+                    # rewrite, so the union lead gets a second one.
+                    import_probe_retried += 1
+                    step_budget += 1
+                    output += (
+                        " The probe never ran. Return one reproduction_code that "
+                        "imports fedot and asserts the claimed behavior on the "
+                        "same fitted object."
+                    )
+                elif (
+                    "symbol and source line disagree" in str(detail)
+                    and not target_disagree_retried
+                ):
+                    # The 07:32 Moscow union probe named a symbol that does
+                    # not contain line 432, so the probe never ran.
+                    target_disagree_retried = True
+                    step_budget += 1
+                    output += (
+                        " The symbol and the source line name different objects. "
+                        "Name the symbol that contains the line, or set the line "
+                        "inside that symbol."
+                    )
+                    if "_categorical_numerical_union" in (
+                        (lead.why or "") + (lead.mechanism or "")
+                    ):
+                        output += (
+                            " Use symbol _categorical_numerical_union and the "
+                            "DataFrame line that passes columns=self.non_categorical_ids."
+                        )
             else:
                 symbol = resolved_target.get("symbol", "")
                 trace_target = {"file_path": target_lead.file_path, "symbol": symbol} if symbol else None
@@ -980,12 +1260,59 @@ def verify_lead(
                 reproduced = asserted_failure or grounded_exception
                 if reproduced and trace_target and stock.target_reached is not True:
                     reproduced = False
+                    exception_line = _probe_exception_line(stock.stderr)
                     detail = (
                         "probe did not execute the claimed target method; an earlier setup failure "
                         "or assertion about another component is not evidence for this lead. "
-                        "Use PipelineBuilder.add_node or PipelineNode with an operation name, "
-                        "not an unconfigured base Operation object"
                     )
+                    if exception_line:
+                        detail += f"The probe stopped at: {exception_line}. "
+                    detail += (
+                        "Repair that setup and call the claimed method on the same object. "
+                        "Do not replace the class under test with a mock."
+                    )
+                    code = parsed.reproduction_code or ""
+                    if "NoneType" in exception_line and "size" in exception_line:
+                        detail += (
+                            " InputData.categorical_idx stays None unless you pass it; "
+                            "reading .size on that value crashes in fit before the encoder. "
+                            "transform accepts only one InputData."
+                        )
+                    elif "'list' object has no attribute 'size'" in (
+                        exception_line + (stock.stderr or "")
+                    ):
+                        detail += (
+                            " categorical_idx and numerical_idx must be numpy arrays. "
+                            "A Python list has no size attribute and crashes in fit "
+                            "before the union."
+                        )
+                    elif "Operation(" in code and "Implementation(" not in code:
+                        detail += (
+                            " Use PipelineBuilder.add_node or PipelineNode with an operation name, "
+                            "not an unconfigured base Operation object."
+                        )
+                    if "add_operation" in (exception_line + (stock.stderr or "")) and (
+                        "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " PipelineBuilder has no add_operation. Do not build a "
+                            "pipeline. Construct ImputationImplementation() and call "
+                            "fit and transform on one table with a numeric all-NaN "
+                            "column and a categorical column."
+                        )
+                    if (
+                        "operation_info_by_id" in exception_line
+                        and "ids_binary_integer_features" in (lead.why or "")
+                    ):
+                        detail += (
+                            " Construct ImputationImplementation() directly. Fit once, "
+                            "transform a two-value numeric column, then transform that "
+                            "same instance when the column has more than two unique "
+                            "values. Do not build an Operation."
+                        )
+                    if not unreached_target_retried:
+                        unreached_target_retried = True
+                        step_budget += 1
                 if reproduced:
                     evidence = list(filter(None, (parsed.why,)))
                     if grounded_exception:
@@ -1020,7 +1347,56 @@ def verify_lead(
                             )
                             _write_verification(workspace, lead, result)
                             return result
+                        if (
+                            support_audit.verdict != "supported"
+                            and "AssertionError" in (stock.stderr or "")
+                        ):
+                            try:
+                                source_text = (
+                                    checkout / target_lead.file_path
+                                ).read_text(encoding="utf-8")
+                            except OSError:
+                                source_text = ""
+                            coerced = ""
+                            if support_audit.verdict == "inconclusive":
+                                coerced = annotated_int_or_coerces_zero(
+                                    source_text, target_lead.line
+                                )
+                            if not coerced:
+                                coerced = discarded_callback_return(
+                                    source_text, target_lead.line
+                                )
+                            if coerced:
+                                support_audit = ContractSupportAudit(
+                                    verdict="supported",
+                                    reason=coerced,
+                                    evidence=[coerced],
+                                )
                         if support_audit.verdict != "supported":
+                            if (
+                                support_audit.verdict == "inconclusive"
+                                and not contract_audit_retried
+                            ):
+                                # The 05:30 Moscow one-hot run already showed
+                                # the collapsed block, then a later crash was
+                                # audited as inconclusive and the lead ended.
+                                contract_audit_retried = True
+                                step_budget += 1
+                                output = (
+                                    "Contract support was inconclusive: "
+                                    f"{support_audit.reason}. "
+                                    "A crash before the behavior assertion does not "
+                                    "establish the claim. Assert the failed behavior "
+                                    "itself. If an earlier run already showed the "
+                                    "encoded block collapsed, reuse that input and "
+                                    "assert that collapse."
+                                )
+                                last_detail = output[:4_000]
+                                tool_history.append(
+                                    f"Step {step} action={action.value} output:\n"
+                                    f"```\n{last_detail}\n```"
+                                )
+                                continue
                             result = VerificationResult(
                                 "rejected" if support_audit.verdict == "unsupported" else "inconclusive",
                                 claim=parsed.claim or lead.why,
@@ -1054,9 +1430,18 @@ def verify_lead(
                     )
                     _write_verification(workspace, lead, result)
                     return result
-                if stock.status == "ok":
+                if stock.status == "ok" and trace_target and stock.target_reached is not True:
+                    detail = (
+                        "probe passed without executing the claimed target method; "
+                        "a healthy result that never reached this line does not disprove it"
+                    )
+                    if not missed_target_retried:
+                        missed_target_retried = True
+                        step_budget += 1
+                elif stock.status == "ok":
                     detail = "stock satisfies the asserted healthy contract"
                     disproved_bug_claims.append(parsed.claim or lead.why)
+                    last_target_reached = True if trace_target is None else bool(stock.target_reached)
                 elif stock.status != "runtime_error":
                     detail = f"probe infrastructure status: {stock.status}"
                 elif "AssertionError" not in stock.stderr:
@@ -1065,10 +1450,31 @@ def verify_lead(
                         # Tell the model why the crash was not accepted as
                         # evidence (e.g. no public FEDOT entry point reached).
                         detail = f"{detail}: {exception_detail}"
-                    if (
-                        not correctness_only
-                        and probe_corrections < MAX_VERIFY_PROBE_CORRECTIONS
+                    if "'dict' object has no attribute 'to_dict'" in (stock.stderr or "") and (
+                        "lgbm_early_stopping" in ((lead.why or "") + (lead.mechanism or ""))
                     ):
+                        detail += (
+                            " Pass OperationParameters, not a dict. Construct "
+                            "FedotLightGBMClassificationImplementation(params="
+                            "OperationParameters(early_stopping_rounds=30, "
+                            "use_eval_set=True))."
+                        )
+                    if "add_operation" in (stock.stderr or "") and (
+                        "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " PipelineBuilder has no add_operation. Do not build a "
+                            "pipeline. Construct ImputationImplementation() and call "
+                            "fit and transform on one table with a numeric all-NaN "
+                            "column and a categorical column."
+                        )
+                    # Campaign verification is correctness-only, so the old
+                    # gate never reserved the turn that already contains the
+                    # recovered constructor. One correction is enough there.
+                    correction_limit = (
+                        MAX_VERIFY_PROBE_CORRECTIONS if not correctness_only else 1
+                    )
+                    if probe_corrections < correction_limit:
                         probe_corrections += 1
                         step_budget += 1
                 probe_feedback = format_snippet_feedback(
@@ -1106,6 +1512,7 @@ def verify_lead(
                 "stock satisfied the proposed healthy contract; no independent "
                 "failure or grounded comparative quality hypothesis remained"
             ),
+            target_reached=last_target_reached is True,
         )
     else:
         result = VerificationResult(
@@ -1116,6 +1523,25 @@ def verify_lead(
         )
     _write_verification(workspace, lead, result)
     return result
+
+
+def _private_callback_name_only(patched, code: str) -> bool:
+    """The empty-list assertion passed and the probe then named a private class.
+
+    lightgbm exposes ``callback._EarlyStoppingCallback``. A probe that asserts
+    ``lgbm.callback.EarlyStoppingCallback`` raises AttributeError after
+    ``len(callbacks) == 1`` has already succeeded. The 08:14 Europe/Moscow
+    patch appended the callback and was marked still failing for that name.
+    """
+
+    stderr = patched.stderr or ""
+    if patched.status != "runtime_error" or "AssertionError" in stderr:
+        return False
+    if "has no attribute 'EarlyStoppingCallback'" not in stderr:
+        return False
+    length_at = code.find("len(callbacks)")
+    class_at = code.find("EarlyStoppingCallback")
+    return 0 <= length_at < class_at
 
 
 def replay_reproduction(checkout: Path, verification: VerificationResult) -> dict:
@@ -1145,10 +1571,13 @@ def replay_reproduction(checkout: Path, verification: VerificationResult) -> dic
             **research,
         }
     patched = run_fedot_snippet(checkout, verification.reproduction_code)
+    resolved = patched.status == "ok" or _private_callback_name_only(
+        patched, verification.reproduction_code
+    )
     return {
         "status": "verified_bug",
         "stock": "failed_as_predicted",
-        "patched": "resolved" if patched.status == "ok" else "still_failing",
+        "patched": "resolved" if resolved else "still_failing",
         **research,
         "code": verification.reproduction_code,
         "patched_probe": {

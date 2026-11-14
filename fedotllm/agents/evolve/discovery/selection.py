@@ -742,6 +742,72 @@ def _matches_confirmed_defect_proposal(
 
 
 _DEFAULTS_GATE_STATUSES = {"unexecuted_operation_default", "inert_operation_default"}
+_INTEGER_HOLDS_INF = re.compile(
+    r"integer(?:-dtype)?\s+columns?\s+containing\s+[+\-/]*inf|"
+    r"integer(?:\s+|-)?dtype[^\n]{0,400}(?:\+/- ?inf|\binf(?:inities|inity)?\b)",
+    re.IGNORECASE,
+)
+
+
+def _impossible_integer_nonfinite(parsed: SiteProposal) -> bool:
+    """An integer array cannot store inf, so that input class is unreachable.
+
+    The 06:40 Moscow catalog claimed integer-dtype columns containing
+    infinities. The verifier then spent the campaign rejecting it.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _INTEGER_HOLDS_INF.search(text) is not None
+
+
+_ADVANCED_INDEX_VIEW = re.compile(
+    r"features\s*\[\s*:?\s*,\s*[^\]]+\]\s*\.T[^\n]{0,60}\bis a view\b|"
+    r"transposed view[^\n]{0,180}caller",
+    re.IGNORECASE,
+)
+
+
+def _advanced_index_claimed_as_view(parsed: SiteProposal) -> bool:
+    """NumPy advanced indexing returns a copy, so the slice cannot write back.
+
+    The 06:44 Moscow catalog claimed ``features[:, categorical_idx].T`` is a
+    view that writes ``FEDOT_STR_NAN`` into the caller's array. The verifier
+    then spent the campaign on that false premise.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _ADVANCED_INDEX_VIEW.search(text) is not None
+
+
+_CONSTRUCTOR_OMITS_CATEGORICAL = re.compile(
+    r"(?:from_numpy|array_to_input_data).{0,220}without populating categorical_features",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _constructor_omits_categorical_features(parsed: SiteProposal) -> bool:
+    """``array_to_input_data`` copies the categorical block when the index is set.
+
+    The 07:24 Moscow catalog claimed ``from_numpy`` leaves
+    ``categorical_features`` empty. The constructor assigns
+    ``features[:, categorical_idx]`` when that index is non-empty, and the
+    verifier then spent the campaign rejecting the claim.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _CONSTRUCTOR_OMITS_CATEGORICAL.search(text) is not None
 
 
 def _first_pick_rejection(
@@ -760,6 +826,25 @@ def _first_pick_rejection(
     semantic-site cooldowns.
     """
 
+    if _impossible_integer_nonfinite(parsed):
+        return (
+            "impossible_integer_nonfinite",
+            "an integer dtype cannot store inf, so that input class is unreachable; "
+            "pick a different executed line or skip",
+        )
+    if _advanced_index_claimed_as_view(parsed):
+        return (
+            "advanced_index_is_copy",
+            "NumPy advanced indexing already returns a copy, so that slice does not "
+            "write back into the caller; pick a different executed line or skip",
+        )
+    if _constructor_omits_categorical_features(parsed):
+        return (
+            "constructor_fills_categorical_features",
+            "array_to_input_data copies features[:, categorical_idx] into "
+            "categorical_features when the index is non-empty; pick a different "
+            "executed line or skip",
+        )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
         return (
@@ -1131,7 +1216,12 @@ def _llm_pick(
         shown = {lead.file_path}
         picked: MatchSite | None = None
         runs = 0
-        for step in range(1, per_file_steps + 1):
+        # A closed catalog line already has a judgment. One decision turn can
+        # name a different line or skip. A run on that line spent the 06:34
+        # Moscow budget and the walk stopped at 2 of 190 files.
+        closed_catalog_line = (lead.file_path, lead.line) in excluded_exact
+        file_steps = 1 if closed_catalog_line else per_file_steps
+        for step in range(1, file_steps + 1):
             if actions >= action_limit:
                 budget_exhausted = True
                 rounds.append({"file_path": lead.file_path, "status": "action_limit"})
@@ -1140,7 +1230,7 @@ def _llm_pick(
             architecture_block = f"\n\n{architecture}" if architecture else ""
             prompt = (
                 f"{_LOCATE}\n\n"
-                f"Step {step}/{per_file_steps}; campaign actions "
+                f"Step {step}/{file_steps}; campaign actions "
                 f"{actions}/{action_limit}.\n"
                 f"Catalog site: {lead.file_path}:{lead.line} {lead.why}\n\n"
                 f"File:\n{text}"
@@ -1198,7 +1288,7 @@ def _llm_pick(
                         for file_path, line in sorted(excluded_exact)
                     )
                 )
-            if step == per_file_steps:
+            if step == file_steps:
                 prompt += (
                     "\n\nFinal decision turn for this catalog file. "
                     "Return status=pick (the current file_path may be omitted) "
@@ -1272,7 +1362,23 @@ def _llm_pick(
             if raw:
                 raws.append(raw)
             status = (parsed.status or "pick").strip().lower()
-            if step == per_file_steps and status not in {"pick", "skip"}:
+            if closed_catalog_line and status == "run":
+                rounds.append(
+                    {
+                        "file_path": lead.file_path,
+                        "status": "closed_catalog_no_run",
+                        "line": lead.line,
+                    }
+                )
+                logger.info(
+                    "evolve pick %s/%s closed no-run %s:%s",
+                    walked,
+                    n_files,
+                    lead.file_path,
+                    lead.line,
+                )
+                break
+            if step == file_steps and status not in {"pick", "skip"}:
                 rounds.append(
                     {
                         "file_path": lead.file_path,
@@ -1423,14 +1529,14 @@ def _llm_pick(
                     rejection,
                     parsed.file_path or lead.file_path,
                 )
-                if step < per_file_steps:
+                if step < file_steps:
                     continue
                 break
             requested_target = parsed.file_path or lead.file_path
             if (
                 status == "pick"
                 and requested_target not in shown
-                and step < per_file_steps
+                and step < file_steps
                 and actions < action_limit
             ):
                 rel, opened, _ = _open_requested_runtime(
@@ -1545,7 +1651,7 @@ def _llm_pick(
                     picked.line,
                 )
                 picked = None
-                if step < per_file_steps:
+                if step < file_steps:
                     continue
                 break
             if (
