@@ -954,6 +954,29 @@ def _preprocess_already_copies_multimodal(parsed: SiteProposal) -> bool:
     return re.search(r"mutat|_preprocess|is_auto_preprocessed", text, re.IGNORECASE) is not None
 
 
+def _eval_split_already_stratified(parsed: SiteProposal) -> bool:
+    """``train_test_data_setup`` already stratifies a classification table.
+
+    The 18:31 Europe/Moscow catalog picked ``boostings_implementations.py:164``
+    and said ``train_test_data_setup(input_data)`` makes an unstratified
+    80/20 split, so the change is ``stratify=True``. The parameter already
+    defaults to ``True``. A 200-row classification table with classes 180
+    and 20 puts 36 and 4 rows in the eval partition. The same call with
+    ``stratify=False`` puts 38 and 2 there.
+    """
+
+    claim = " ".join(part for part in (parsed.why, parsed.mechanism) if part)
+    change = parsed.proposed_change or ""
+    text = f"{claim} {change}"
+    if "train_test_data_setup" not in text:
+        return False
+    if re.search(r"stratify\s*=\s*False", text) is not None:
+        return False
+    if re.search(r"unstratified|plain random", claim, re.IGNORECASE) is None:
+        return False
+    return re.search(r"stratify\s*=\s*True", change) is not None
+
+
 def _predict_reuses_fit_column_types(parsed: SiteProposal) -> bool:
     """Predict keeps the column types chosen at fit.
 
@@ -1401,6 +1424,14 @@ def _first_pick_rejection(
             "Pipeline._preprocess deepcopies every input at line 143 regardless "
             "of type. MultiModalData fit inputs are already isolated from the "
             "caller. Pick a different executed line or skip",
+        )
+    if _eval_split_already_stratified(parsed):
+        return (
+            "eval_split_already_stratified",
+            "train_test_data_setup defaults to stratify=True. On a 200-row "
+            "classification table with classes 180 and 20, that call puts 36 "
+            "and 4 rows in the eval partition. Passing stratify=True again "
+            "does not change the split. Pick a different executed line or skip",
         )
     if _predict_reuses_fit_column_types(parsed):
         return (
