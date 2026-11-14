@@ -10318,6 +10318,92 @@ def test_missing_module_rewrites_unique_nearby_file(tmp_path: Path):
     assert rewrite_missing_module_import(source, probe, error) is None
 
 
+def test_column_type_crash_fills_types_before_transform():
+    from fedotllm.agents.evolve.discovery.research_tools import (
+        rewrite_missing_column_types,
+        snippet_failure_context,
+    )
+    from fedotllm.agents.evolve.types import SnippetResult
+
+    probe = (
+        "import numpy as np\n"
+        "data.categorical_idx = np.array([0])\n"
+        "out = op.transform(data)\n"
+        "print('EVOLVE_OBSERVATION=cols')\n"
+    )
+    error = (
+        "File \"categorical_encoders.py\", line 82, in _update_column_types\n"
+        "    feature_type_ids = output_data.supplementary_data.col_type_ids['features']\n"
+        "TypeError: 'NoneType' object is not subscriptable\n"
+    )
+
+    rewritten = rewrite_missing_column_types(probe, error)
+    recovery = snippet_failure_context(
+        Path("."),
+        SnippetResult("runtime_error", probe, stderr=error),
+    )
+
+    assert rewritten is not None
+    assert rewritten.index("col_type_ids") < rewritten.index("op.transform(data)")
+    assert "TYPE_TO_ID[str]" in rewritten
+    assert rewrite_missing_column_types(rewritten, error) is None
+    assert rewrite_missing_column_types(probe, "TypeError: other") is None
+    assert "col_type_ids['features']" in recovery
+
+
+def test_probe_builder_fills_column_types_without_another_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from fedotllm.agents.evolve.agents import probe_builder
+    from fedotllm.agents.evolve.agents.probe_builder import (
+        ProbeProposal,
+        repair_behavior_probe,
+    )
+
+    source = _source(tmp_path)
+    probe = (
+        "import numpy as np\n"
+        "data.categorical_idx = np.array([0])\n"
+        "out = op.transform(data)\n"
+        "print('EVOLVE_OBSERVATION=cols')\n"
+    )
+    crash = (
+        "feature_type_ids = output_data.supplementary_data.col_type_ids['features']\n"
+        "TypeError: 'NoneType' object is not subscriptable\n"
+    )
+
+    class Inference:
+        def __init__(self):
+            self.calls = 0
+
+        def create(self, _prompt, _schema):
+            self.calls += 1
+            return ProbeProposal(action="run", run_code=probe)
+
+    def run(_checkout, code, *_args, **_kwargs):
+        if "col_type_ids" in code:
+            return SnippetResult("ok", code, stdout="EVOLVE_OBSERVATION=cols_3\n")
+        return SnippetResult("runtime_error", code, stderr=crash)
+
+    inference = Inference()
+    monkeypatch.setattr(probe_builder, "run_fedot_snippet", run)
+
+    repaired = repair_behavior_probe(
+        source,
+        inference=inference,
+        frozen_patch="EDIT 1 fedot/a.py\nSEARCH: a\nREPLACE: b",
+        verification="",
+        failed_probe="bad",
+        failed_result=SnippetResult("runtime_error", "bad", stderr=crash),
+        max_steps=1,
+    )
+
+    assert inference.calls == 1
+    assert repaired is not None
+    assert "col_type_ids" in repaired
+    assert "EVOLVE_OBSERVATION=cols" in repaired
+
+
 def test_snippet_failure_recovers_inherited_constructor_fields(tmp_path: Path):
     from fedotllm.agents.evolve.discovery.research_tools import snippet_failure_context
     from fedotllm.agents.evolve.types import SnippetResult
