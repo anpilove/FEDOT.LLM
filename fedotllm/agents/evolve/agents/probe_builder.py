@@ -11,6 +11,7 @@ from fedotllm.agents.evolve.discovery.context import open_runtime
 from fedotllm.agents.evolve.discovery.research_tools import (
     docs_runtime,
     format_snippet_feedback,
+    rewrite_missing_column_types,
     symbol_runtime,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
@@ -59,6 +60,22 @@ def _observation_count(stdout: str) -> int:
     return sum(
         line.startswith("EVOLVE_OBSERVATION=") for line in (stdout or "").splitlines()
     )
+
+
+def _execute_probe(checkout: Path, code: str):
+    """Run a probe, and fill missing column types when transform cannot read them."""
+
+    result = run_fedot_snippet(checkout, code)
+    if result.status == "ok" and _observation_count(result.stdout) == 1:
+        return code, result
+    error = "\n".join(part for part in (result.stderr, result.detail) if part)
+    rewritten = rewrite_missing_column_types(code, error)
+    if not rewritten:
+        return None, result
+    retried = run_fedot_snippet(checkout, rewritten)
+    if retried.status == "ok" and _observation_count(retried.stdout) == 1:
+        return rewritten, retried
+    return None, retried
 
 
 def repair_behavior_probe(
@@ -118,9 +135,9 @@ def repair_behavior_probe(
         if not code:
             history.append("action=run rejected: run_code is empty")
             continue
-        result = run_fedot_snippet(checkout, code)
-        if result.status == "ok" and _observation_count(result.stdout) == 1:
-            return code
+        accepted, result = _execute_probe(checkout, code)
+        if accepted:
+            return accepted
         history.append(
             "action=run failed\n"
             + format_snippet_feedback(checkout, result, max_chars=6_000)
@@ -141,9 +158,9 @@ def repair_behavior_probe(
     if parsed.action != "run" or not (parsed.run_code or "").strip():
         return None
     code = parsed.run_code.strip()
-    result = run_fedot_snippet(checkout, code)
-    if result.status == "ok" and _observation_count(result.stdout) == 1:
-        return code
+    accepted, result = _execute_probe(checkout, code)
+    if accepted:
+        return accepted
     # The final probe is the first complete program after navigation. One crash
     # still has the recovered API in hand; discarding it drops the source patch.
     history.append(
@@ -174,7 +191,5 @@ def repair_behavior_probe(
     if parsed.action != "run" or not (parsed.run_code or "").strip():
         return None
     code = parsed.run_code.strip()
-    result = run_fedot_snippet(checkout, code)
-    if result.status == "ok" and _observation_count(result.stdout) == 1:
-        return code
-    return None
+    accepted, _result = _execute_probe(checkout, code)
+    return accepted

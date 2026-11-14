@@ -12,7 +12,10 @@ from fedotllm.agents.evolve.discovery.context import (
     context_from_lead,
 )
 from fedotllm.agents.evolve.discovery.fedot_context import build_fedot_context
-from fedotllm.agents.evolve.discovery.research_tools import rewrite_missing_module_import
+from fedotllm.agents.evolve.discovery.research_tools import (
+    rewrite_missing_column_types,
+    rewrite_missing_module_import,
+)
 from fedotllm.agents.evolve.storage.journal import write_artifact
 from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
@@ -430,6 +433,21 @@ def fix_lead(
                     retried = run_fedot_snippet(checkout, rewritten)
                     candidate.behavior_probe = rewritten
                     candidate_note(candidate, "behavior_probe_repaired.py", rewritten)
+                    preflight_result = retried
+                    probe_diagnostic = _probe_preflight_diagnostic(retried)
+            if probe_diagnostic:
+                typed = rewrite_missing_column_types(
+                    candidate.behavior_probe,
+                    "\n".join(
+                        part
+                        for part in (preflight_result.stderr, preflight_result.detail)
+                        if part
+                    ),
+                )
+                if typed:
+                    retried = run_fedot_snippet(checkout, typed)
+                    candidate.behavior_probe = typed
+                    candidate_note(candidate, "behavior_probe_repaired.py", typed)
                     preflight_result = retried
                     probe_diagnostic = _probe_preflight_diagnostic(retried)
             if probe_diagnostic:

@@ -285,6 +285,49 @@ def _unique_module_file(checkout: Path, missing_module: str) -> str | None:
     return None
 
 
+def rewrite_missing_column_types(code: str, error: str) -> str | None:
+    """Fill column types before a data-operation transform that reads them.
+
+    OneHotEncodingImplementation.transform reads
+    supplementary_data.col_type_ids['features']. A hand-built InputData leaves
+    that map as None, so the 17:32 Moscow one-hot probe passed the encoder and
+    died on the subscript. The same call with string types on categorical_idx
+    and float types on the other columns returns the encoded matrix.
+    """
+
+    if not code or not error:
+        return None
+    if "col_type_ids" not in error or "NoneType" not in error:
+        return None
+    if "col_type_ids" in code or "np." not in code:
+        return None
+    match = re.search(r"\.transform\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", code)
+    if match is None:
+        return None
+    name = match.group(1)
+    if f"{name}.categorical_idx" not in code:
+        return None
+    block = [
+        "from fedot.preprocessing.data_types import TYPE_TO_ID as _EVOLVE_TYPE_TO_ID",
+        f"_evolve_width = int(np.asarray({name}.features).shape[1])",
+        "_evolve_type_ids = np.full(_evolve_width, _EVOLVE_TYPE_TO_ID[float])",
+        f"for _evolve_index in np.atleast_1d({name}.categorical_idx):",
+        "    _evolve_type_ids[int(_evolve_index)] = _EVOLVE_TYPE_TO_ID[str]",
+        f"{name}.supplementary_data.col_type_ids = {{'features': _evolve_type_ids}}",
+    ]
+    lines = code.splitlines()
+    for index, line in enumerate(lines):
+        if ".transform(" not in line or name not in line:
+            continue
+        indent = re.match(r"[ \t]*", line).group(0)
+        lines[index:index] = [indent + item for item in block]
+        rewritten = "\n".join(lines)
+        if code.endswith("\n"):
+            rewritten += "\n"
+        return rewritten
+    return None
+
+
 def rewrite_missing_module_import(
     checkout: Path,
     code: str,
@@ -329,6 +372,14 @@ def snippet_failure_context(
         "Automatic FEDOT API recovery (ground truth from this checkout; "
         "repair the probe before drawing a conclusion):"
     ]
+
+    if "col_type_ids" in error and "NoneType" in error:
+        parts.append(
+            "Hand-built InputData leaves supplementary_data.col_type_ids as None. "
+            "Before transform, set col_type_ids['features'] from "
+            "fedot.preprocessing.data_types.TYPE_TO_ID: str on categorical_idx "
+            "and float on the other columns."
+        )
 
     missing_module = _MISSING_MODULE.search(error)
     if missing_module:
