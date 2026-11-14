@@ -954,6 +954,37 @@ def _preprocess_already_copies_multimodal(parsed: SiteProposal) -> bool:
     return re.search(r"mutat|_preprocess|is_auto_preprocessed", text, re.IGNORECASE) is not None
 
 
+def _predict_reuses_fit_column_types(parsed: SiteProposal) -> bool:
+    """Predict keeps the column types chosen at fit.
+
+    The 17:58 Europe/Moscow catalog said ``convert_data_for_predict``
+    recomputes ``col_type_ids`` from the predict batch, so line 240 can
+    classify a column differently from fit. Fit stores
+    ``feature_type_ids``, and predict applies those ids. A 240-row column
+    with twelve distinct values stays categorical on a many-unique predict
+    batch and on a two-unique predict batch. A continuous fit stays numeric
+    on a low-cardinality predict batch.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"col_type_ids|categorical_idx|numerical_idx", text) is None:
+        return False
+    if re.search(r"predict", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"re-?comput|predict[- ]batch|predict-time|unique",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _n_jobs_rewrite_is_the_contract(parsed: SiteProposal) -> bool:
     """``fit`` writes ``n_jobs`` because that argument is the job count.
 
@@ -1370,6 +1401,13 @@ def _first_pick_rejection(
             "Pipeline._preprocess deepcopies every input at line 143 regardless "
             "of type. MultiModalData fit inputs are already isolated from the "
             "caller. Pick a different executed line or skip",
+        )
+    if _predict_reuses_fit_column_types(parsed):
+        return (
+            "predict_reuses_fit_column_types",
+            "convert_data_for_predict applies the feature_type_ids stored at "
+            "fit. A later predict batch does not choose a new categorical_idx "
+            "from its own unique counts. Pick a different executed line or skip",
         )
     if _n_jobs_rewrite_is_the_contract(parsed):
         return (
