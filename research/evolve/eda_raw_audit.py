@@ -46,12 +46,16 @@ def audit_task(spec: dict) -> dict:
         "duplicate_feature_rows": int(features.duplicated().sum()),
         "train_rows": len(train),
         "test_rows": len(test),
-        "test_rows_seen_in_train": int(fingerprints.iloc[test].isin(train_fingerprints).sum()),
+        "test_rows_seen_in_train": int(
+            fingerprints.iloc[test].isin(train_fingerprints).sum()
+        ),
         "target_unique": int(pd.Series(target).nunique(dropna=True)),
     }
     if spec["problem"] == "classification":
         counts = pd.Series(target).value_counts(dropna=True)
-        row["smallest_class_share_percent"] = round(100 * counts.min() / counts.sum(), 3)
+        row["smallest_class_share_percent"] = round(
+            100 * counts.min() / counts.sum(), 3
+        )
     else:
         numeric = pd.to_numeric(target, errors="coerce")
         row["target_min"] = float(numeric.min())
