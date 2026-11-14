@@ -78,6 +78,14 @@ from fedotllm.agents.evolve.storage.replay import (
     solved_lift_tasks_from_findings,
     tried_patch_hashes_from_findings,
     tried_sites,
+    closed_hunt_sites,
+    proven_correctness_replay,
+    reaching_assertion_replays,
+    unfinished_correctness_leads,
+    narrow_datetime_resume,
+    scored_day_count_resume,
+    subset_index_resume,
+    whole_scale_resume,
 )
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
 from fedotllm.agents.evolve.storage.scoreboard import append_attempt
@@ -92,6 +100,8 @@ from fedotllm.agents.evolve.controller.feedback import (
     _revision_feedback_context,
     _runtime_operation_evidence,
     _test_result_diagnostics,
+    shared_base_sibling_scope,
+    sibling_regression_blocks_queue,
 )
 from fedotllm.agents.evolve.controller.confirmation import (
     affected_metric_moved,
@@ -103,6 +113,12 @@ from fedotllm.agents.evolve.controller.probes import (
     _behavior_probe_blocks_candidate,
     compare_behavior_probe as run_behavior_probe,
     compare_with_prior_probe,
+    infrastructure_probe_decision,
+    mechanism_only_day_count,
+    tied_named_metric,
+    narrow_datetime_revision,
+    subset_index_print,
+    whole_conversion_scale_revision,
 )
 from fedotllm.agents.evolve.controller.finalization import (
     record_final,
@@ -143,6 +159,7 @@ from fedotllm.agents.evolve.types import (
 )
 from fedotllm.agents.evolve.agents.verifier import (
     is_controller_observed_crash,
+    replay_reaching_assertion,
     replay_reproduction,
     verification_from_observed_crash,
     verification_context,
@@ -208,6 +225,70 @@ def _render_candidate_patch(*args, **kwargs) -> str:
         **kwargs,
         snapshot_diff_fn=snapshot_diff,
     )
+
+
+def categorical_integrality_locked(candidate: PatchCandidate, reason: str) -> bool:
+    """The categorical heuristic tests reject an integer-only gate.
+
+    The 08:56 Europe/Moscow patch kept only integer-valued columns. Pytest
+    failed ``test_column_types_converting_correctly`` and
+    ``test_data_with_mixed_types_per_column_processed_correctly``. The repair
+    revision produced no edit.
+    """
+
+    edits = "\n".join(edit.new_code for edit in candidate.edits)
+    if "is_integral" not in edits and "np.mod" not in edits:
+        return False
+    return (
+        "test_column_types_converting_correctly" in reason
+        and "test_data_with_mixed_types_per_column_processed_correctly" in reason
+    )
+
+
+def indicator_width_crash(candidate: PatchCandidate, behavior_probe: dict) -> bool:
+    """An ``add_indicator`` edit that makes ``reduce_mem_usage`` index past ids.
+
+    The 08:32 Europe/Moscow patch widened the matrix. Stock stayed the original
+    width. The patched pipeline died in ``reduce_mem_usage`` with
+    ``IndexError: list index out of range``. A second revision kept the
+    indicator and failed the column-count tests.
+    """
+
+    edits = "\n".join(edit.new_code for edit in candidate.edits)
+    if "add_indicator" not in edits:
+        return False
+    stderr = str((behavior_probe.get("patched") or {}).get("stderr_tail") or "")
+    return "IndexError" in stderr and "reduce_mem_usage" in stderr
+
+
+def indicator_width_pytest(candidate: PatchCandidate, output: str) -> bool:
+    """An ``add_indicator`` edit whose pytest run dies in ``reduce_mem_usage``.
+
+    The 12:21 Europe/Moscow categorical imputer probe widened the matrix from
+    2 columns to 3 and stayed green. Pytest then raised ``IndexError: list
+    index out of range`` inside ``reduce_mem_usage``. A later source revision
+    keeps the extra columns and hits the same traceback.
+    """
+
+    edits = "\n".join(edit.new_code for edit in candidate.edits)
+    if "add_indicator" not in edits:
+        return False
+    return "IndexError" in output and "reduce_mem_usage" in output
+
+
+def scout_action_limit_for(max_actions: int) -> int:
+    """Cover a second catalog file when the action budget can hold it.
+
+    Half of the budget stays available for later repair. The 07:17 Moscow
+    walk used the catalog plan plus five turns on the first file and stopped
+    at action 8 while the second file was still open. Eleven actions are the
+    plan plus two five-step file decisions.
+    """
+
+    limit = max(1, max_actions // 2)
+    if max_actions >= 11:
+        limit = max(limit, 11)
+    return limit
 
 
 def run_once(
@@ -483,9 +564,7 @@ def run_once(
     signal_confirmations_used = 0
     pool_n = max(cap * 8, 40)
     trace: dict = {}
-    # Reserve half the campaign budget for repairs, but let a larger explicit
-    # budget expand source exploration instead of silently stopping at 20.
-    scout_action_limit = max(1, max_actions // 2)
+    scout_action_limit = scout_action_limit_for(max_actions)
     logger.info("evolve run stock+pick cap=%s tasks=%s", cap, len(exam_ids))
     scout_checkout = create_experiment_checkout(
         source, workspace, run_id=run_id, candidate_id="scout"
@@ -645,12 +724,66 @@ def run_once(
                     "violations": len(contract_leads),
                 },
             )
+        forced_site: MatchSite | None = None
+        forced_note = ""
+        if resume_lead is None:
+            resumed_subset = subset_index_resume(
+                findings_path, source_hash=source_hash
+            )
+            resumed_score = (
+                None
+                if resumed_subset is not None
+                else scored_day_count_resume(
+                    findings_path, source_hash=source_hash
+                )
+            )
+            resumed_scale = (
+                None
+                if resumed_subset is not None or resumed_score is not None
+                else whole_scale_resume(findings_path, source_hash=source_hash)
+            )
+            resumed_narrow = (
+                None
+                if (
+                    resumed_subset is not None
+                    or resumed_score is not None
+                    or resumed_scale is not None
+                )
+                else narrow_datetime_resume(findings_path, source_hash=source_hash)
+            )
+            resumed = resumed_subset or resumed_score or resumed_scale or resumed_narrow
+            if resumed is not None:
+                forced_site, forced_note = resumed
         if resume_lead is not None:
             sites = [resume_lead]
             leads = [resume_lead]
             trace["scout_actions"] = 0
             trace["resumed_branch"] = True
         else:
+            pending_unverified = unfinished_correctness_leads(
+                findings_path, limit=cap
+            )
+            if forced_site is not None:
+                pending_unverified = [
+                    forced_site,
+                    *[
+                        item
+                        for item in pending_unverified
+                        if (item.file_path, item.line)
+                        != (forced_site.file_path, forced_site.line)
+                    ],
+                ]
+            trace["resumed_unverified_leads"] = [
+                {"file_path": item.file_path, "line": item.line}
+                for item in pending_unverified
+            ]
+            resumed_sites = {
+                (item.file_path, item.line) for item in pending_unverified
+            }
+            closed_sites = closed_hunt_sites(
+                findings_path, source_hash=source_hash
+            )
+            remaining_picks = max(0, cap - len(pending_unverified))
             try:
                 def persist_scout_picks(selected: list[MatchSite]) -> None:
                     save_checkpoint(
@@ -660,22 +793,30 @@ def run_once(
                         selected_leads=[asdict(item) for item in selected],
                     )
 
-                sites = scout(
-                    scout_checkout,
-                    inference=scout_inference,
-                    max_leads=pool_n,
-                    max_picks=cap,
-                    trace=trace,
-                    execution=execution,
-                    trace_leads=[*contract_leads, *crash_leads, *parameter_leads],
-                    max_actions=scout_action_limit,
-                    max_runs_per_file=2,
-                    excluded_sites=durable_tried | recent_site_cooldown,
-                    excluded_semantic_sites=recent_semantic_cooldown,
-                    prior_hypotheses=prior_hypotheses,
-                    present_full_catalog=True,
-                    on_pick=persist_scout_picks,
-                )
+                discovered: list[MatchSite] = []
+                if remaining_picks:
+                    discovered = scout(
+                        scout_checkout,
+                        inference=scout_inference,
+                        max_leads=pool_n,
+                        max_picks=remaining_picks,
+                        trace=trace,
+                        execution=execution,
+                        trace_leads=[*contract_leads, *crash_leads, *parameter_leads],
+                        max_actions=scout_action_limit,
+                        max_runs_per_file=2,
+                        excluded_sites=(
+                            durable_tried
+                            | recent_site_cooldown
+                            | resumed_sites
+                            | closed_sites
+                        ),
+                        excluded_semantic_sites=recent_semantic_cooldown,
+                        prior_hypotheses=prior_hypotheses,
+                        present_full_catalog=True,
+                        on_pick=persist_scout_picks,
+                    )
+                sites = [*pending_unverified, *discovered]
             except AgentModelFailure as exc:
                 return finish(
                     Decision(
@@ -1121,6 +1262,8 @@ def run_once(
         path.write_text(text, encoding="utf-8")
         return path
 
+    proven_replay = proven_correctness_replay(findings_path)
+    stored_assertions = reaching_assertion_replays(findings_path)
     for i, lead in enumerate(leads, start=1):
         safety_extension_granted = False
         prior_behavior_probe: tuple[str, str] | None = None
@@ -1152,12 +1295,35 @@ def run_once(
         )
         observed_crash = verification_from_observed_crash(lead)
         observed_contract = verification_from_contract_lead(lead)
+        replayed = proven_replay.get((lead.file_path, lead.line))
+        replay_candidate = None
         if i == 1 and resume_verification is not None:
             verification = resume_verification
+        elif replayed is not None:
+            verification, replay_candidate = replayed
         elif observed_contract is not None:
             verification = observed_contract
         elif observed_crash is not None:
             verification = observed_crash
+        elif (lead.file_path, lead.line) in stored_assertions:
+            verification_checkout = create_experiment_checkout(
+                source,
+                workspace,
+                run_id=run_id,
+                candidate_id=f"replay-{i}-{uuid.uuid4().hex[:8]}",
+            )
+            try:
+                verification = replay_reaching_assertion(
+                    verification_checkout,
+                    lead,
+                    stored_assertions[(lead.file_path, lead.line)],
+                )
+            finally:
+                discard_experiment_checkout(
+                    verification_checkout,
+                    workspace=workspace,
+                    source=source,
+                )
         elif verifier_inference is None or lead.hypothesis_kind != "correctness":
             verification = VerificationResult(
                 "quality_hypothesis",
@@ -1267,6 +1433,7 @@ def run_once(
                 stage="verification",
                 infrastructure_error=verification.status == "infrastructure_error",
             )
+            stock_probe = verification.stock_probe
             reproduction = {
                 "status": verification.status,
                 "stock": None,
@@ -1275,6 +1442,15 @@ def run_once(
                 "expected": verification.expected,
                 "observed": verification.observed,
                 "detail": verification.detail,
+                "code": verification.reproduction_code,
+                "target_reached": (
+                    verification.target_reached
+                    if verification.target_reached is not None
+                    else None if stock_probe is None else stock_probe.target_reached
+                ),
+                "stock_stderr": (
+                    "" if stock_probe is None else (stock_probe.stderr or "")[-1_500:]
+                ),
             }
             record_attempt(
                 lead,
@@ -1289,7 +1465,13 @@ def run_once(
                 _record_final_skipped(journal, reason=last.reason)
                 return finish(last)
             continue
-        initial_feedback = resume_feedback if i == 1 else ""
+        site_note = (
+            forced_note
+            if forced_site is not None
+            and (lead.file_path, lead.line) == (forced_site.file_path, forced_site.line)
+            else ""
+        )
+        initial_feedback = resume_feedback if i == 1 and resume_feedback.strip() else site_note
         feedback_history = [initial_feedback] if initial_feedback.strip() else []
         feedback = _revision_feedback_context(feedback_history)
         verification_record = {
@@ -1307,6 +1489,8 @@ def run_once(
             "generality": verification.generality,
             "risks": list(verification.risks),
             "resolved_target": verification.resolved_target,
+            "detail": verification.detail,
+            "code": verification.reproduction_code,
         }
         # One additional attempt may be unlocked only by a local KEEP that the
         # mandatory global protect suite rejects. It repairs patch scope; it is
@@ -1366,7 +1550,9 @@ def run_once(
                         hypothesis_id=hypothesis.id,
                         saved_candidate=(
                             resume_candidate
-                            if i == 1 and revision == 1
+                            if i == 1 and revision == 1 and resume_candidate is not None
+                            else replay_candidate
+                            if revision == 1
                             else retry_saved_candidate
                         ),
                     )
@@ -1583,6 +1769,28 @@ def run_once(
                         behavior_probe=behavior_probe,
                     )
                     behavior_status = behavior_probe.get("status")
+                    infrastructure = infrastructure_probe_decision(
+                        behavior_probe, experiment_id=experiment_id
+                    )
+                    if infrastructure is not None:
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            infrastructure,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            patch_hash=patch_hash,
+                            feedback=(
+                                "outcome=behavior_probe_infrastructure; both checkouts "
+                                "failed before the diagnostic ran. Do not rewrite the probe.\n"
+                                + json.dumps(behavior_probe, ensure_ascii=False)[:7_000]
+                            ),
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        return infrastructure
                     if _behavior_probe_blocks_candidate(behavior_probe):
                         # No metric trial has happened yet. A new diagnostic may
                         # expose the effect of these same edits; the same pair may not.
@@ -1603,6 +1811,20 @@ def run_once(
                                 "is still supported and repair only the probe. The exact "
                                 "probe code, exit status, traceback, stdout, stderr, and "
                                 "observations from both runs follow."
+                            )
+                            if behavior_probe.get("shared_exception"):
+                                diagnosis = (
+                                    "Both sides printed the same ERR: exception, so the "
+                                    "diagnostic did not measure the edit. Keep the source "
+                                    "edit and print the width and the unseen row without "
+                                    "that exception."
+                                )
+                        elif indicator_width_crash(candidate, behavior_probe):
+                            diagnosis = (
+                                "add_indicator appends columns that are not in "
+                                "col_type_ids['features']. reduce_mem_usage then raises "
+                                "IndexError. The preprocessing tests require the original "
+                                "width. Do not add indicator columns."
                             )
                         else:
                             diagnosis = (
@@ -1635,6 +1857,16 @@ def run_once(
                             reproduction=reproduction,
                             behavior_probe=behavior_probe,
                         )
+                        if (
+                            behavior_status == "patched_error"
+                            and not indicator_width_crash(candidate, behavior_probe)
+                        ):
+                            # Stock ran the diagnostic. The patched traceback is
+                            # a source regression, so one repair revision stays
+                            # available after the nominal revision limit. An
+                            # add_indicator width crash is not that repair: the
+                            # extra columns are outside the id contract.
+                            grant_safety_extension("behavior_probe", candidate, reason)
                         if advance_revision(reason):
                             continue
                         break
@@ -1795,6 +2027,75 @@ def run_once(
                             continue
                         break
 
+                score_note = mechanism_only_day_count(
+                    behavior_probe,
+                    "\n".join(edit.new_code for edit in candidate.edits),
+                )
+                if score_note:
+                    # The 06:15 probe only checked that dates became day counts.
+                    grant_safety_extension(
+                        "scored_probe", candidate, "day-count probe has no model score"
+                    )
+                    feedback = push_feedback(score_note)
+                    last = Decision(
+                        False,
+                        "mechanism_only_day_count",
+                        None,
+                        stage="dev",
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if advance_revision("mechanism_only_day_count"):
+                        continue
+                    break
+
+                scale_note = whole_conversion_scale_revision(
+                    behavior_probe,
+                    "\n".join(edit.new_code for edit in candidate.edits),
+                )
+                if scale_note:
+                    # Dividing every converted column failed three API safety
+                    # tests at 06:07 Moscow. Say that before the pytest suite.
+                    grant_safety_extension(
+                        "whole_scale", candidate, "whole conversion scaled"
+                    )
+                    feedback = push_feedback(scale_note)
+                    last = Decision(
+                        False,
+                        "whole_conversion_scaled",
+                        None,
+                        stage="dev",
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if advance_revision("whole_conversion_scaled"):
+                        continue
+                    break
+
                 first_tests = normalize_test_result(measure_fedot_tests(experiment))
                 after_tests, blocked, test_attempts = confirm_candidate_tests(
                     baseline_tests,
@@ -1874,6 +2175,37 @@ def run_once(
                         + "\nPreserve the causal hypothesis, but correct the implementation "
                         "and all existing FEDOT contracts before DEV evaluation."
                     )
+                    tie = tied_named_metric(behavior_probe)
+                    locked = categorical_integrality_locked(candidate, blocked.reason)
+                    width = indicator_width_pytest(candidate, after_tests.output)
+                    if tie:
+                        # auc stayed 0.540 while the magnitude fell. Another
+                        # revision then deleted the helper and left the call.
+                        feedback = (
+                            f"The probe scored {tie} on both sides, so the metric "
+                            "did not move. A tied score does not get another "
+                            "source revision.\n"
+                            + feedback
+                        )
+                    elif locked:
+                        feedback = (
+                            "test_column_types_converting_correctly requires the "
+                            "low-cardinality numeric columns to become str, and "
+                            "test_data_with_mixed_types_per_column_processed_correctly "
+                            "expects 7 importances. An integrality gate removes "
+                            "columns those tests convert. Do not gate the heuristic "
+                            "on integrality.\n"
+                            + feedback
+                        )
+                    elif width:
+                        feedback = (
+                            "add_indicator appends columns that are not in "
+                            "col_type_ids['features']. reduce_mem_usage then raises "
+                            "IndexError: list index out of range. The preprocessing "
+                            "tests require the original width. Do not add indicator "
+                            "columns. This failure does not get another source revision.\n"
+                            + feedback
+                        )
                     feedback = push_feedback(feedback)
                     record_attempt(
                         lead,
@@ -1891,8 +2223,46 @@ def run_once(
                     if blocked.infrastructure_error:
                         _record_final_skipped(journal, reason=blocked.reason)
                         return finish(blocked)
+                    if tie or locked or width:
+                        break
                     grant_safety_extension("pytest", candidate, last.reason)
                     if advance_revision(last.reason):
+                        continue
+                    break
+
+                patch_body = "\n".join(
+                    edit.new_code for edit in candidate.edits
+                )
+                datetime_note = narrow_datetime_revision(behavior_probe, patch_body)
+                if datetime_note:
+                    # A pure datetime64 column made logit accuracy jump from
+                    # 0 to 0.958, but a mixed table never takes this branch.
+                    grant_safety_extension(
+                        "narrow_probe", candidate, "single-column datetime probe"
+                    )
+                    feedback = push_feedback(datetime_note)
+                    last = Decision(
+                        False,
+                        "narrow_datetime_probe",
+                        None,
+                        stage="dev",
+                        experiment_id=experiment_id,
+                    )
+                    record_attempt(
+                        lead,
+                        candidate,
+                        stock,
+                        None,
+                        last,
+                        revision,
+                        diff=_candidate_diff(experiment, source, candidate),
+                        tests=after_tests,
+                        patch_hash=patch_hash,
+                        feedback=feedback,
+                        reproduction=reproduction,
+                        behavior_probe=behavior_probe,
+                    )
+                    if advance_revision("narrow_datetime_probe"):
                         continue
                     break
 
@@ -1901,6 +2271,106 @@ def run_once(
                     and verification.status == "quality_hypothesis"
                     and not config.metric_only
                 ):
+                    if quick_scope is None:
+                        sibling_scope = shared_base_sibling_scope(
+                            source, candidate, lift_ids
+                        )
+                        if sibling_scope:
+                            missing = tuple(
+                                task_id
+                                for task_id in sibling_scope
+                                if task_id not in stock
+                            )
+                            if missing:
+                                stock.update(
+                                    measure_stock(
+                                        missing,
+                                        checkout=source,
+                                        seed=config.dev_seed,
+                                    )
+                                )
+                            _sibling_passed, sibling_screen = _quick_quality_screen(
+                                experiment,
+                                sibling_scope,
+                                sibling_scope,
+                                sibling_scope,
+                                stock,
+                                seed=config.dev_seed,
+                            )
+                            append_journal(
+                                workspace / "trace.jsonl",
+                                {
+                                    "event": "sibling_lift_screen",
+                                    "candidate": candidate.candidate_id,
+                                    "tasks": list(sibling_scope),
+                                    **sibling_screen,
+                                },
+                            )
+                            block = sibling_regression_blocks_queue(sibling_screen)
+                            if block:
+                                last = Decision(
+                                    False,
+                                    "sibling_lift_regression",
+                                    sibling_screen.get("target_delta"),
+                                    stage="dev",
+                                    experiment_id=experiment_id,
+                                )
+                                feedback = push_feedback(
+                                    block
+                                    + "\n"
+                                    + json.dumps(
+                                        sibling_screen,
+                                        ensure_ascii=False,
+                                        default=str,
+                                    )[:5_000]
+                                )
+                                record_attempt(
+                                    lead,
+                                    candidate,
+                                    {
+                                        task_id: stock[task_id]
+                                        for task_id in sibling_scope
+                                        if task_id in stock
+                                    },
+                                    None,
+                                    last,
+                                    revision,
+                                    diff=_candidate_diff(
+                                        experiment, source, candidate
+                                    ),
+                                    patch_hash=patch_hash,
+                                    feedback=feedback,
+                                    reproduction=reproduction,
+                                    behavior_probe=behavior_probe,
+                                )
+                                if advance_revision("sibling_lift_regression"):
+                                    continue
+                                break
+                    index_note = subset_index_print(behavior_probe, patch_body)
+                    if index_note:
+                        last = Decision(
+                            False,
+                            "subset_index_out_of_range",
+                            None,
+                            stage="dev",
+                            experiment_id=experiment_id,
+                        )
+                        feedback = push_feedback(index_note)
+                        record_attempt(
+                            lead,
+                            candidate,
+                            stock,
+                            None,
+                            last,
+                            revision,
+                            diff=_candidate_diff(experiment, source, candidate),
+                            tests=after_tests,
+                            patch_hash=patch_hash,
+                            feedback=feedback,
+                            reproduction=reproduction,
+                            behavior_probe=behavior_probe,
+                        )
+                        break
                     probe_status = str((behavior_probe or {}).get("status") or "")
                     toy_moved = str(quick_result.get("reason") or "") == "early_gain"
                     priority = queue_priority(

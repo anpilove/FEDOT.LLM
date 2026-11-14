@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -486,6 +487,1284 @@ def _recent_completed_findings(
     return seen
 
 
+def _shared_protect_crash(row: dict[str, Any]) -> bool:
+    """A verified patch dropped because stock already crashed the same task."""
+
+    dev_reason = str((row.get("dev") or {}).get("reason") or "")
+    return (
+        row.get("outcome") == "infrastructure_error"
+        and (row.get("tests") or {}).get("status") == "passed"
+        and "timeout_or_invalid" in dev_reason
+    )
+
+
+def _stale_binary_key_unproved(row: dict[str, Any]) -> bool:
+    """A reject that says a non-binary column is never added, without a probe.
+
+    ``dict.update`` does not delete the key from the earlier transform, so
+    ``_correct_binary_ids_features`` still snaps that column. The 06:52
+    Europe/Moscow reject stated the opposite and never ran the two transforms.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    detail = str(reproduction.get("detail") or "")
+    return "more than two unique values" in detail and "never added" in detail
+
+
+def _empty_categorical_index_unproved(row: dict[str, Any]) -> bool:
+    """The empty binary-index probe died in ``InputData`` setup.
+
+    ``np.array([])`` is float64. A fit of ``BinaryCategoricalPreprocessor`` on
+    two binary string columns printed ``array([], dtype=float64)`` and
+    ``IndexError: arrays used as indices must be of integer``. Later probes
+    passed ``features_types`` or omitted ``idx``, ``task``, and ``data_type``,
+    and the 09:39 Europe/Moscow budget ended.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "inconclusive":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "categorical_idx" not in why or "float64" not in why:
+        return False
+    if "Do not pass features_types" in why:
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return (
+        "verification step budget exhausted" in text
+        or "public FEDOT entry point" in text
+    )
+
+
+def _categorical_most_frequent_is_the_guard(row: dict[str, Any]) -> bool:
+    """``most_frequent`` keeps a string column off a numeric imputer strategy.
+
+    The 10:32 Europe/Moscow lead asked the user strategy to override that
+    default. Mean on a string column raises ``ValueError``. The correctness
+    check stored a quality hypothesis as inconclusive.
+    """
+
+    lead = row.get("lead") or {}
+    if not isinstance(lead, dict):
+        return False
+    text = " ".join(
+        str(lead.get(part) or "")
+        for part in ("why", "mechanism", "proposed_change")
+    )
+    if "most_frequent" not in text:
+        return False
+    if re.search(r"categorical", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"override|silently|user-supplied|user strategy|reverse the merge",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _numerical_min_uniques_is_docs_only(row: dict[str, Any]) -> bool:
+    """The name ``numerical_min_uniques`` is not a runtime parameter.
+
+    The 10:14 Europe/Moscow lead said ``TableTypesCorrector`` silently drops
+    that setting. The name is only in ``data_preprocessing.rst``. The test
+    helper takes ``categorical_max_uniques_th`` and raises ``TypeError`` on
+    the documented keyword. An empty model response left the lead inconclusive.
+    """
+
+    lead = row.get("lead") or {}
+    if not isinstance(lead, dict):
+        return False
+    text = " ".join(
+        str(lead.get(part) or "")
+        for part in ("why", "mechanism", "proposed_change")
+    )
+    if "numerical_min_uniques" not in text:
+        return False
+    return re.search(r"silently|never reads|hardcod", text, re.IGNORECASE) is not None
+
+
+def _choice_coerced_mixed_unique(row: dict[str, Any]) -> bool:
+    """A reject whose mixed column was built by ``np.random.choice``.
+
+    ``choice(['a', 'b', 1])`` stores the int as the string ``'1'``. The
+    12:46 Europe/Moscow probe then saw ``fit()`` complete and failed the
+    assertion that ``categorical_idx`` stays a list. ``fit`` assigns
+    ``np.array``. A cell-wise object column of ``str`` and ``int`` makes
+    ``np.unique`` raise ``TypeError``.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "np.unique" not in why:
+        return False
+    code = str(reproduction.get("code") or "")
+    if "caught is None" not in code and "remain a list" not in code:
+        return False
+    mixed = False
+    for match in re.finditer(r"\.choice\(\s*(\[[^\]]*\])", code):
+        group = match.group(1)
+        if not re.search(r"""['"][^'"]+['"]""", group):
+            continue
+        bare = re.sub(r"""['"][^'"]*['"]""", "", group)
+        if re.search(r"(?<![\w.])\d+", bare):
+            mixed = True
+            break
+    if not mixed:
+        return False
+    observed = (
+        f"{reproduction.get('detail') or ''}\n"
+        f"{reproduction.get('stock_stderr') or ''}\n"
+        f"{reproduction.get('observed') or ''}"
+    )
+    return "without a TypeError" in observed or (
+        "categorical_idx" in observed and "list" in observed
+    )
+
+
+def _subset_index_unproved(row: dict[str, Any]) -> bool:
+    """A reject that never called ``convert_to_dataframe``.
+
+    The 13:10 Europe/Moscow audit said ``setdiff1d`` has no documented
+    failure. The probes died on imports and on an empty ``categorical_idx``.
+    None called ``convert_to_dataframe``. On a width-2 categorical subset,
+    ``numerical_idx`` stays ``[2, 3, 4]`` and that call raises
+    ``IndexError: index 2 is out of bounds``.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "convert_to_dataframe" not in why or "index 2 is out of bounds" not in why:
+        return False
+    observed = "\n".join(
+        str(reproduction.get(part) or "")
+        for part in ("detail", "observed", "stock_stderr", "code")
+    )
+    if "index 2 is out of bounds" in observed:
+        return False
+    # The 13:14 Europe/Moscow audit saw the IndexError and cited the
+    # subset_features docstring. That contract decision closes the line.
+    if "only promises a subset of features" in observed:
+        return False
+    return (
+        "no documented evidence of a failure" in observed
+        or not str(reproduction.get("code") or "").strip()
+    )
+
+
+def _string_domain_upcast_unproved(row: dict[str, Any]) -> bool:
+    """An equal string-set reject that fit the ints through a float upcast.
+
+    ``np.column_stack`` of an int column and a float column promotes the ints
+    to float64 before fit, so both sets print ``'0.0'``. An object array of
+    Python ints fits as ``'0'`` and predicts the same floats as ``'0.0'``. The
+    09:27 Europe/Moscow reject used the upcast and called the sets equal.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "convert_num_column_into_string_array" not in why:
+        return False
+    if "object array" in why:
+        return False
+    observed = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    lowered = observed.lower()
+    return "sets equal" in lowered and "0.0" in observed
+
+
+def _string_domain_unproved(row: dict[str, Any]) -> bool:
+    """A docs reject after the string-domain probe died on target shape.
+
+    ``convert_num_column_into_string_array`` uses ``astype(str)``. Fit on ints
+    stores ``'1'``. Predict on the same values as floats stores ``'1.0'``. The
+    09:19 Europe/Moscow probe passed a 1-D target and died unpacking its shape.
+    The reject then cited the preprocessing docs and never printed the sets.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    lead = row.get("lead") or {}
+    text = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "convert_num_column_into_string_array" not in text:
+        return False
+    observed = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return "1-D target" in observed or "not enough values to unpack" in observed
+
+
+def _discarded_callback_unproved(row: dict[str, Any]) -> bool:
+    """A reject that treats the dropped early-stopping callback as undocumented.
+
+    ``update_callbacks`` calls ``lgbm_early_stopping`` and returns ``[]``.
+    ``fit`` passes that list as ``callbacks=``. The 08:10 Europe/Moscow audit
+    saw the empty return and rejected it because the method has no docstring.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return False
+    lead = row.get("lead") or {}
+    why = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    if "lgbm_early_stopping" not in why:
+        return False
+    if reproduction.get("patched") == "still_failing":
+        return True
+    if reproduction.get("status") != "rejected":
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return "returns []" in text or "empty list" in text or "callbacks=[]" in text
+
+
+def _union_symbol_unresolved(row: dict[str, Any]) -> bool:
+    """The short union name was rejected before any mixed-table probe ran.
+
+    ``ImputationImplementation._categorical_numerical_union`` is the qualified
+    symbol. A proposal that names only ``_categorical_numerical_union`` on that
+    function's line is the same target. The 07:47 Europe/Moscow run was the
+    third recorded inconclusive, which would close the line without a probe.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "inconclusive":
+        return False
+    if "symbol and source line disagree" not in str(reproduction.get("observed") or ""):
+        return False
+    lead = row.get("lead") or {}
+    text = str(lead.get("why") or "") + str(lead.get("mechanism") or "")
+    return "_categorical_numerical_union" in text
+
+
+def _all_nan_union_unproved(row: dict[str, Any]) -> bool:
+    """A reject that treats a silent narrower array as disproof of the union.
+
+    sklearn 1.3 SimpleImputer drops an all-NaN column. A numerical-only
+    transform returns that narrower array without raising. The union with a
+    categorical column raises ``ValueError: Shape of passed values is (4, 1),
+    indices imply (4, 2)``. The 07:29 Europe/Moscow reject stopped on the
+    numerical-only call.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    detail = str(reproduction.get("detail") or "")
+    return "all-NaN column completed without error" in detail
+
+
+def _correctness_site(key: tuple[str, int], row: dict[str, Any]) -> MatchSite:
+    lead = row["lead"]
+    evidence = lead.get("evidence") or ()
+    signals = lead.get("signals") or ()
+    why = str(lead.get("why") or "")
+    observed = str((row.get("reproduction") or {}).get("observed") or "")
+    if "probe must import FEDOT" in observed and "import fedot" not in why.lower():
+        why = (
+            f"{why} The previous probe was rejected before it ran because it did "
+            "not import fedot. The next reproduction must import fedot and assert "
+            "the claimed behavior on the same fitted object."
+        ).strip()
+    if (
+        "operation_info_by_id" in observed
+        and "ImputationImplementation()" not in why
+    ):
+        why = (
+            f"{why} The previous probe built an Operation and crashed with "
+            "operation_info_by_id. Construct ImputationImplementation() directly. "
+            "Fit once, transform a two-value numeric column, then transform that "
+            "same instance when the column has more than two unique values."
+        ).strip()
+    reproduction = row.get("reproduction") or {}
+    if (
+        "'dict' object has no attribute 'to_dict'" in observed
+        and "lgbm_early_stopping" in (why + str(lead.get("mechanism") or ""))
+        and "Pass OperationParameters" not in why
+    ):
+        why = (
+            f"{why} Pass OperationParameters, not a dict. Construct "
+            "FedotLightGBMClassificationImplementation(params=OperationParameters("
+            "early_stopping_rounds=30, use_eval_set=True))."
+        ).strip()
+    probe = reproduction.get("patched_probe") or {}
+    if (
+        reproduction.get("patched") == "still_failing"
+        and "EarlyStoppingCallback" in str(probe.get("stderr") or "")
+        and "no public EarlyStoppingCallback" not in why
+    ):
+        why = (
+            f"{why} The length assertion passed. lightgbm.callback has no public "
+            "EarlyStoppingCallback; the class is _EarlyStoppingCallback. Keep "
+            "callback.append(lgbm_early_stopping(...)). The contract is a list of "
+            "length 1 whose stopping_rounds equals early_stopping_rounds."
+        ).strip()
+    if _empty_categorical_index_unproved(row) and "Do not pass features_types" not in why:
+        why = (
+            f"{why} A diagnostic fit already printed categorical_idx "
+            "array([], dtype=float64) and IndexError: arrays used as indices "
+            "must be of integer (or boolean) type. Reuse InputData(idx, features, "
+            "target, task, data_type=DataTypesEnum.table, categorical_idx="
+            "np.array([0, 1])) for two binary string columns. Do not pass "
+            "features_types. Assert the fitted categorical_idx has an integer dtype."
+        ).strip()
+    if _subset_index_unproved(row) and "boostings_implementations" not in why:
+        why = (
+            f"{why} Import convert_to_dataframe from "
+            "fedot.core.operations.evaluation.operation_implementations.models."
+            "boostings_implementations. Build InputData with categorical_idx "
+            "[0, 1] and numerical_idx [2, 3, 4]. Call "
+            "subset_features(np.array([0, 1])), then "
+            "convert_to_dataframe(subset, identify_cats=True). Assert "
+            "IndexError: index 2 is out of bounds. Reject only after that call."
+        ).strip()
+    if _choice_coerced_mixed_unique(row) and "stores the int as the string" not in why:
+        why = (
+            f"{why} np.random.choice on a list that mixes strings and an int "
+            "stores the int as the string '1'. fit() then never sees a mixed "
+            "column, so a completed fit does not disprove np.unique. Build an "
+            "object array and assign each cell: strings in one column and both "
+            "str and Python int in the other. Assert that "
+            "BinaryCategoricalPreprocessor.fit raises TypeError. Do not assert "
+            "that categorical_idx stays a list: fit assigns np.array."
+        ).strip()
+    if _string_domain_upcast_unproved(row) and "object array" not in why:
+        why = (
+            f"{why} np.column_stack of an int column and a float column promotes "
+            "the ints to float64 before fit, so both sets print '0.0'. Build "
+            "features as an object array. Put Python ints 0, 1, 2, 3 in the "
+            "categorical column and a float in the other. Predict the same "
+            "categorical values as Python floats. Print both string sets. Reject "
+            "only when that object-array fit set equals the predict set."
+        ).strip()
+    if _string_domain_unproved(row) and "Reshape the target to (-1, 1)" not in why:
+        why = (
+            f"{why} The previous probe died on a 1-D target in "
+            "_check_columns_vs_types_number before any string set was printed. "
+            "Reshape the target to (-1, 1). Fit TableTypesCorrector on an int "
+            "column with values 0, 1, 2, 3, then predict the same values as "
+            "floats. Print both string sets. Reject only after those sets match."
+        ).strip()
+    if _discarded_callback_unproved(row) and "passes that list as callbacks=" not in why:
+        why = (
+            f"{why} The returned list is the contract. fit passes that list as "
+            "callbacks=. lgbm_early_stopping's result is discarded, so the list "
+            "stays empty. Assert that update_callbacks returns a non-empty list "
+            "when early_stopping_rounds is an int. Do not require the fitted "
+            "tree count to change."
+        ).strip()
+    if (
+        "'list' object has no attribute 'size'" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "must be numpy arrays" not in why
+    ):
+        why = (
+            f"{why} categorical_idx and numerical_idx must be numpy arrays. "
+            "A Python list has no size attribute and crashes in fit before the union."
+        ).strip()
+    if (
+        "add_operation" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "has no add_operation" not in why
+    ):
+        why = (
+            f"{why} PipelineBuilder has no add_operation. Do not build a pipeline. "
+            "Construct ImputationImplementation() and call fit and transform on one "
+            "table with a numeric all-NaN column and a categorical column."
+        ).strip()
+    if (
+        "symbol and source line disagree" in observed
+        and "_categorical_numerical_union" in (why + str(lead.get("mechanism") or ""))
+        and "columns=self.non_categorical_ids" not in why
+    ):
+        why = (
+            f"{why} The previous probe named a symbol that does not contain the "
+            "source line. Use symbol _categorical_numerical_union and the DataFrame "
+            "line that passes columns=self.non_categorical_ids."
+        ).strip()
+    if _all_nan_union_unproved(row) and "indices imply" not in why:
+        why = (
+            f"{why} SimpleImputer drops an all-NaN column. A numerical-only "
+            "transform can return a narrower array without raising, and that "
+            "does not disprove the union. Construct ImputationImplementation(), "
+            "fit and transform one table with a numeric all-NaN column and a "
+            "categorical column, and assert the ValueError whose message contains "
+            "indices imply."
+        ).strip()
+    if _stale_binary_key_unproved(row) and "does not delete a key" not in why:
+        why = (
+            f"{why} dict.update does not delete a key from an earlier transform. "
+            "fit does not call _find_binary_features. A column with more than two "
+            "unique values keeps the old key, and _correct_binary_ids_features still "
+            "snaps it. The next reproduction must import fedot, fit once, transform "
+            "a two-value column, then transform that same object when the column has "
+            "more than two unique values, and assert the second result was not snapped "
+            "to the first min and max."
+        ).strip()
+    return MatchSite(
+        channel=str(lead.get("channel") or "llm"),
+        file_path=key[0],
+        line=key[1],
+        why=why,
+        evidence=tuple(str(item) for item in evidence),
+        signals=tuple(str(item) for item in signals),
+        mechanism=str(lead.get("mechanism") or ""),
+        proposed_change=str(lead.get("proposed_change") or ""),
+        expected_metric_effect=str(lead.get("expected_metric_effect") or ""),
+        hypothesis_kind="correctness",
+    )
+
+
+def _supersedes_proven_patch(row: dict[str, Any]) -> bool:
+    """A later decisive result replaces a patch that was only dropped on a crash."""
+
+    reproduction = row.get("reproduction") or {}
+    if reproduction.get("status") == "rejected":
+        return True
+    outcome = str(row.get("outcome") or "")
+    if outcome in {
+        "rejected",
+        "correctness_keep",
+        "correctness_keep_with_metric_signal",
+    }:
+        return True
+    tests = row.get("tests") or {}
+    return isinstance(tests, dict) and tests.get("status") not in {None, "", "passed"}
+
+
+_MISSED_TARGET_MARKERS = (
+    "did not execute the claimed target method",
+    "without executing the claimed target method",
+    "probe syntax error",
+    "crashed before its contract assertion",
+)
+# Four misses stay open. The 05:19 Moscow attempt still died on an import
+# the feedback described as a private entry point, so one more try remains.
+# The fifth miss closes the line.
+_MAX_OPEN_MISSED_TARGET_ATTEMPTS = 4
+
+
+_REPLAY_MARKER = "replayed stored reaching assertion"
+
+
+def _row_blob(row: dict[str, Any]) -> str:
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        reproduction = {}
+    return "\n".join(
+        str(reproduction.get(key) or "") for key in ("detail", "observed", "claim")
+    ) + "\n" + str(row.get("feedback") or "")
+
+
+def _reaching_probe_payload(
+    code: str,
+    stderr: str,
+    *,
+    reached: bool,
+    claim: str,
+    expected: str,
+) -> dict[str, str] | None:
+    if not code or reached is not True or "AssertionError" not in stderr:
+        return None
+    return {
+        "code": code,
+        "stderr": stderr[-1_500:],
+        "claim": claim,
+        "expected": expected,
+    }
+
+
+def _reaching_probe_from_row(row: dict[str, Any]) -> dict[str, str] | None:
+    """A stock run that executed the target and failed its assertion.
+
+    The finding often drops the probe. The run workspace still has
+    ``verifications/<stem>-<line>/verification.json``.
+    """
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return None
+    claim = str(reproduction.get("claim") or "")
+    expected = str(reproduction.get("expected") or "")
+    direct = _reaching_probe_payload(
+        str(reproduction.get("code") or ""),
+        str(reproduction.get("stock_stderr") or ""),
+        reached=reproduction.get("target_reached") is True,
+        claim=claim,
+        expected=expected,
+    )
+    if direct is not None:
+        return direct
+    lead = row.get("lead") or {}
+    if not isinstance(lead, dict):
+        return None
+    workspace = str(row.get("workspace") or "")
+    file_path = str(lead.get("file_path") or "")
+    if not workspace or not file_path:
+        return None
+    try:
+        line = int(lead.get("line") or 0)
+    except (TypeError, ValueError):
+        return None
+    path = (
+        Path(workspace)
+        / "verifications"
+        / f"{Path(file_path).stem}-{line}"
+        / "verification.json"
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    probe = payload.get("stock_probe") or {}
+    if not isinstance(probe, dict):
+        probe = {}
+    return _reaching_probe_payload(
+        str(payload.get("reproduction_code") or probe.get("code") or ""),
+        str(probe.get("stderr") or ""),
+        reached=probe.get("target_reached") is True,
+        claim=claim or str(payload.get("claim") or ""),
+        expected=expected or str(payload.get("expected") or ""),
+    )
+
+
+def _latest_denies_reaching_assertion(row: dict[str, Any]) -> bool:
+    """The latest reject says no probe ever reached the asserted edge."""
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict) or reproduction.get("status") != "rejected":
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return any(
+        marker in text
+        for marker in (
+            "never demonstrated",
+            "could not produce",
+            "omits lines",
+        )
+    )
+
+
+def _site_reaching_probe(rows: list[dict[str, Any]]) -> dict[str, str] | None:
+    """Return a stored reaching assertion that has not been replayed."""
+
+    if any(_REPLAY_MARKER in _row_blob(row) for row in rows):
+        return None
+    if any(str(row.get("outcome") or "").startswith("correctness_keep") for row in rows):
+        return None
+    latest = rows[-1]
+    reproduction = latest.get("reproduction") or {}
+    if (
+        isinstance(reproduction, dict)
+        and reproduction.get("status") == "rejected"
+        and str(reproduction.get("detail") or "").startswith(
+            "stock satisfied the proposed healthy contract"
+        )
+        and reproduction.get("target_reached") is True
+    ):
+        return None
+    found = None
+    for row in rows:
+        probe = _reaching_probe_from_row(row)
+        if probe is not None:
+            found = probe
+    if found is None:
+        return None
+    # Only a rejection that claims the assertion never ran should spend the
+    # stored probe. An open inconclusive lead keeps its own verifier retry.
+    if not _latest_denies_reaching_assertion(latest):
+        return None
+    return found
+
+
+def reaching_assertion_replays(
+    findings_path: Path | None,
+) -> dict[tuple[str, int], dict[str, str]]:
+    """Probes to rerun before another verifier budget.
+
+    The 11:25 Europe/Moscow simple_imputation probe already asserted
+    ``[0.0, 0.5, 1.0]``. The finding dropped that code. The 11:38 resume
+    invented three probes, none of which reached the midpoint, and rejected
+    the line.
+    """
+
+    if findings_path is None or not findings_path.is_file():
+        return {}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or lead.get("hypothesis_kind") != "correctness":
+            continue
+        if not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    replayed: dict[tuple[str, int], dict[str, str]] = {}
+    for key, rows in grouped.items():
+        probe = _site_reaching_probe(rows)
+        if probe is not None:
+            replayed[key] = probe
+    return replayed
+
+
+def _probe_missed_target(row: dict[str, Any]) -> bool:
+    """A probe that never executed the claimed method is not a finished test."""
+
+    reproduction = row.get("reproduction") or {}
+    if not isinstance(reproduction, dict):
+        return False
+    if reproduction.get("status") != "inconclusive":
+        return False
+    if reproduction.get("target_reached") is True:
+        return False
+    text = f"{reproduction.get('detail') or ''}\n{reproduction.get('observed') or ''}"
+    return any(marker in text for marker in _MISSED_TARGET_MARKERS)
+
+
+def _correctness_resume_plan(
+    findings_path: Path | None,
+) -> list[tuple[MatchSite, dict[str, Any] | None]]:
+    """Proven shared-crash patches first, then still-open inconclusive probes."""
+
+    if findings_path is None or not findings_path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("record_type") == "finding":
+            rows.append(row)
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    inconclusive_counts: dict[tuple[str, int], int] = {}
+    missed_counts: dict[tuple[str, int], int] = {}
+    shared_crash_counts: dict[tuple[str, int], int] = {}
+    proven_rows: dict[tuple[str, int], dict[str, Any]] = {}
+    superseded: set[tuple[str, int]] = set()
+    for row in rows:
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        if lead.get("hypothesis_kind") != "correctness":
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+        grouped.setdefault(key, []).append(row)
+        reproduction = row.get("reproduction") or {}
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+        ):
+            if _probe_missed_target(row):
+                missed_counts[key] = missed_counts.get(key, 0) + 1
+            else:
+                inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+        if _shared_protect_crash(row):
+            shared_crash_counts[key] = shared_crash_counts.get(key, 0) + 1
+            proven_rows[key] = row
+            superseded.discard(key)
+        elif key in proven_rows and _supersedes_proven_patch(row):
+            superseded.add(key)
+    proven: list[tuple[MatchSite, dict[str, Any]]] = []
+    open_probes: list[tuple[MatchSite, None]] = []
+    for key, row in reversed(list(latest.items())):
+        proven_row = proven_rows.get(key)
+        if (
+            proven_row is not None
+            and shared_crash_counts.get(key) == 1
+            and key not in superseded
+        ):
+            proven.append((_correctness_site(key, proven_row), proven_row))
+            continue
+        reproduction = row.get("reproduction") or {}
+        if _categorical_most_frequent_is_the_guard(row):
+            continue
+        if _numerical_min_uniques_is_docs_only(row):
+            continue
+        if (
+            _stale_binary_key_unproved(row)
+            or _all_nan_union_unproved(row)
+            or _union_symbol_unresolved(row)
+            or _discarded_callback_unproved(row)
+            or             _string_domain_unproved(row)
+            or _string_domain_upcast_unproved(row)
+            or _choice_coerced_mixed_unique(row)
+            or _subset_index_unproved(row)
+        ):
+            open_probes.append((_correctness_site(key, row), None))
+            continue
+        stored_probe = _site_reaching_probe(grouped.get(key, [row]))
+        if stored_probe is not None:
+            site = _correctness_site(key, row)
+            if "stored reaching assertion" not in site.why:
+                site = replace(
+                    site,
+                    why=(
+                        f"{site.why} A stored probe already reached this target "
+                        "and failed its assertion. Replay that probe. Do not "
+                        "write a new one."
+                    ).strip(),
+                )
+            open_probes.append((site, None))
+            continue
+        if reproduction.get("status") == "rejected":
+            continue
+        if _probe_missed_target(row):
+            # An older real inconclusive must not resume a line whose latest
+            # probe still missed the method after the open-attempt cap.
+            if 1 <= missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS:
+                open_probes.append((_correctness_site(key, row), None))
+            continue
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+            and 1 <= inconclusive_counts.get(key, 0) <= 2
+        ):
+            open_probes.append((_correctness_site(key, row), None))
+    return [*proven, *open_probes]
+
+
+def subset_index_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a queued ``cat_idx_`` print as a correctness IndexError.
+
+    ``subset_features`` of the categorical columns leaves ``numerical_idx``
+    outside the subset width. ``convert_to_dataframe`` raises ``IndexError``.
+    One correctness attempt is enough; a later correctness row closes it.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import subset_index_print
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any(
+            (row.get("lead") or {}).get("hypothesis_kind") == "correctness"
+            for row in rows
+            if isinstance(row.get("lead"), dict)
+        ):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason not in {"queued_for_fedot_quality", "subset_index_out_of_range"}:
+            continue
+        edits = latest.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "")
+            for item in edits
+            if isinstance(item, dict)
+        )
+        note = subset_index_print(latest.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = latest["lead"]
+        why = f"{lead.get('why') or ''} {note}".strip()
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=why,
+            mechanism=str(lead.get("mechanism") or ""),
+            proposed_change=str(lead.get("proposed_change") or ""),
+            hypothesis_kind="correctness",
+        )
+        return site, note
+    return None
+
+
+def scored_day_count_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a queued day-count edit whose probe never scored a model.
+
+    Stop once any finding for the line already asks for that score.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import mechanism_only_day_count
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any(
+            "does not show a model improved" in str(row.get("feedback") or "")
+            for row in rows
+        ):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason != "queued_for_fedot_quality":
+            continue
+        edits = latest.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "")
+            for item in edits
+            if isinstance(item, dict)
+        )
+        note = mechanism_only_day_count(latest.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = latest["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
+def whole_scale_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """Resume a site whose patch divided every converted column.
+
+    The dividing edit can sit on an earlier finding. The latest row is often
+    ``no_patch`` with empty edits. Resume once, until some finding already
+    records the column-wise instruction.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import (
+        divides_whole_conversion,
+        whole_conversion_scale_revision,
+    )
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        grouped.setdefault(key, []).append(row)
+    for key, rows in reversed(list(grouped.items())):
+        if any("only datetime columns" in str(row.get("feedback") or "") for row in rows):
+            continue
+        latest = rows[-1]
+        reason = str((latest.get("dev") or {}).get("reason") or "")
+        if reason != "no_patch" and not reason.startswith("fedot_tests_regressed"):
+            continue
+        dividing = None
+        for row in reversed(rows):
+            edits = row.get("edits") or []
+            patch_text = "\n".join(
+                str(item.get("new_code") or "")
+                for item in edits
+                if isinstance(item, dict)
+            )
+            if divides_whole_conversion(patch_text):
+                dividing = row
+                break
+        if dividing is None:
+            continue
+        note = whole_conversion_scale_revision(
+            dividing.get("behavior_probe") or {},
+            "\n".join(
+                str(item.get("new_code") or "")
+                for item in (dividing.get("edits") or [])
+                if isinstance(item, dict)
+            ),
+        )
+        if not note:
+            continue
+        lead = latest["lead"] if isinstance(latest.get("lead"), dict) else dividing["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
+def narrow_datetime_resume(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> tuple[MatchSite, str] | None:
+    """One more fixer pass for a queued pure-datetime dtype branch.
+
+    The 05:47 Moscow logit probe moved from 0.000 to 0.958 on a single
+    datetime64 column. A mixed table never enters that branch. Resume once,
+    with feedback that asks for a column-wise conversion.
+    """
+
+    from fedotllm.agents.evolve.controller.probes import narrow_datetime_revision
+
+    if findings_path is None or not findings_path.is_file():
+        return None
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+    for key, row in reversed(list(latest.items())):
+        reason = str((row.get("dev") or {}).get("reason") or "")
+        if reason != "queued_for_fedot_quality":
+            continue
+        if "single datetime64 column" in str(row.get("feedback") or ""):
+            continue
+        edits = row.get("edits") or []
+        patch_text = "\n".join(
+            str(item.get("new_code") or "") for item in edits if isinstance(item, dict)
+        )
+        note = narrow_datetime_revision(row.get("behavior_probe") or {}, patch_text)
+        if not note:
+            continue
+        lead = row["lead"]
+        site = MatchSite(
+            channel=str(lead.get("channel") or "llm"),
+            file_path=key[0],
+            line=key[1],
+            why=str(lead.get("why") or note),
+            hypothesis_kind="quality",
+        )
+        return site, note
+    return None
+
+
+def unfinished_correctness_leads(
+    findings_path: Path | None,
+    *,
+    limit: int = 2,
+) -> list[MatchSite]:
+    """Return correctness leads that still deserve a patch attempt.
+
+    A verified patch dropped on one shared protect crash is resumed first,
+    even when a later inconclusive probe was recorded for the same line.
+    A second drop of the same kind is not resumed. One or two inconclusive
+    attempts follow, behind that proven patch. A verifier rejection is
+    finished even when the outcome field is still ``unverified_no_patch``.
+    A third inconclusive attempt for the same line is not resumed.
+    Probes that never executed the claimed method stay open through four
+    misses, then close.
+    """
+
+    if limit <= 0:
+        return []
+    return [site for site, _row in _correctness_resume_plan(findings_path)[:limit]]
+
+
+def _replay_pair(
+    row: dict[str, Any],
+) -> tuple[VerificationResult, PatchCandidate] | None:
+    edits: list[PatchEdit] = []
+    for item in row.get("edits") or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("file_path") or "")
+        old_code = str(item.get("old_code") or "")
+        new_code = str(item.get("new_code") or "")
+        if file_path and old_code and new_code and old_code != new_code:
+            edits.append(PatchEdit(file_path, old_code, new_code))
+    reproduction = row.get("reproduction") or {}
+    code = str(reproduction.get("code") or "")
+    if not edits or not code:
+        return None
+    alternatives = reproduction.get("alternatives_considered") or ()
+    risks = reproduction.get("risks") or ()
+    verification = VerificationResult(
+        "verified_bug",
+        claim=str(reproduction.get("claim") or ""),
+        expected=str(reproduction.get("expected") or ""),
+        observed=str(reproduction.get("observed") or ""),
+        reproduction_code=code,
+        detail="replayed a verified patch dropped on a shared protect crash",
+        current_approach=str(reproduction.get("current_approach") or ""),
+        proposed_approach=str(reproduction.get("proposed_approach") or ""),
+        alternatives_considered=tuple(str(item) for item in alternatives),
+        generality=str(reproduction.get("generality") or ""),
+        risks=tuple(str(item) for item in risks),
+    )
+    candidate = PatchCandidate(
+        candidate_id=str(row.get("candidate_id") or "replayed-correctness"),
+        edits=edits,
+        rationale=(
+            "Replay the verified patch. The previous drop was a protect crash "
+            "that stock already had."
+        ),
+    )
+    return verification, candidate
+
+
+def proven_correctness_replay(
+    findings_path: Path | None,
+) -> dict[tuple[str, int], tuple[VerificationResult, PatchCandidate]]:
+    """Reapply a verified patch instead of spending another verifier budget.
+
+    The returned candidate is the exact edit from the finding. The verifier
+    result carries the probe that already showed stock failing and the patch
+    resolving it, so the campaign can rerun that probe on the replayed edit.
+    """
+
+    replayed: dict[tuple[str, int], tuple[VerificationResult, PatchCandidate]] = {}
+    for site, row in _correctness_resume_plan(findings_path):
+        if row is None:
+            continue
+        pair = _replay_pair(row)
+        if pair is not None:
+            replayed[(site.file_path, site.line)] = pair
+    return replayed
+
+
+def closed_correctness_sites(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> set[tuple[str, int]]:
+    """Sites a new catalog must not pick again on this source.
+
+    A rejected reproduction, a kept correctness patch, and a third inconclusive
+    attempt are finished. One or two inconclusive attempts stay available.
+    """
+
+    if findings_path is None or not findings_path.is_file():
+        return set()
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    inconclusive_counts: dict[tuple[str, int], int] = {}
+    missed_counts: dict[tuple[str, int], int] = {}
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or lead.get("hypothesis_kind") != "correctness":
+            continue
+        if not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        latest[key] = row
+        grouped.setdefault(key, []).append(row)
+        reproduction = row.get("reproduction") or {}
+        if (
+            row.get("outcome") == "unverified_no_patch"
+            and reproduction.get("status") == "inconclusive"
+        ):
+            if _probe_missed_target(row):
+                missed_counts[key] = missed_counts.get(key, 0) + 1
+            else:
+                inconclusive_counts[key] = inconclusive_counts.get(key, 0) + 1
+    closed: set[tuple[str, int]] = set()
+    for key, row in latest.items():
+        outcome = str(row.get("outcome") or "")
+        reproduction = str((row.get("reproduction") or {}).get("status") or "")
+        healthy_without_target = (
+            reproduction == "rejected"
+            and str((row.get("reproduction") or {}).get("detail") or "").startswith(
+                "stock satisfied the proposed healthy contract"
+            )
+            and (row.get("reproduction") or {}).get("target_reached") is not True
+        )
+        if healthy_without_target:
+            continue
+        if _categorical_most_frequent_is_the_guard(row):
+            closed.add(key)
+            continue
+        if _numerical_min_uniques_is_docs_only(row):
+            closed.add(key)
+            continue
+        if (
+            _stale_binary_key_unproved(row)
+            or _all_nan_union_unproved(row)
+            or _union_symbol_unresolved(row)
+            or _discarded_callback_unproved(row)
+            or             _string_domain_unproved(row)
+            or _string_domain_upcast_unproved(row)
+            or _choice_coerced_mixed_unique(row)
+            or _subset_index_unproved(row)
+        ):
+            continue
+        if _site_reaching_probe(grouped.get(key, [row])) is not None:
+            continue
+        if (
+            _probe_missed_target(row)
+            and missed_counts.get(key, 0) <= _MAX_OPEN_MISSED_TARGET_ATTEMPTS
+        ):
+            continue
+        if outcome in {
+            "correctness_keep",
+            "correctness_keep_with_metric_signal",
+            "rejected",
+        } or reproduction == "rejected":
+            closed.add(key)
+        elif missed_counts.get(key, 0) >= _MAX_OPEN_MISSED_TARGET_ATTEMPTS + 1:
+            closed.add(key)
+        elif (
+            outcome == "unverified_no_patch"
+            and reproduction == "inconclusive"
+            and inconclusive_counts.get(key, 0) >= 3
+        ):
+            closed.add(key)
+    return closed
+
+
+def closed_hunt_sites(
+    findings_path: Path | None,
+    *,
+    source_hash: str = "",
+) -> set[tuple[str, int]]:
+    """Sites already judged on this source, including failed quality patches.
+
+    A line whose patch failed the unit tests, or that the fixer refused, is
+    not offered to the next catalog. Correctness keeps and exhausted probes
+    stay closed as well.
+    """
+
+    closed = set(closed_correctness_sites(findings_path, source_hash=source_hash))
+    if findings_path is None or not findings_path.is_file():
+        return closed
+    for raw in findings_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("record_type") != "finding":
+            continue
+        if source_hash and row.get("source_hash") != source_hash:
+            continue
+        lead = row.get("lead")
+        if not isinstance(lead, dict) or not lead.get("file_path"):
+            continue
+        try:
+            key = (str(lead["file_path"]), int(lead.get("line") or 0))
+        except (TypeError, ValueError):
+            continue
+        tests = (row.get("tests") or {}).get("status")
+        outcome = str(row.get("outcome") or "")
+        reason = str((row.get("dev") or {}).get("reason") or "")
+        if (
+            tests == "test_failures"
+            or outcome == "rejected_tests"
+            or reason.startswith(("fedot_tests_regressed", "duplicate_patch", "cannot_fix"))
+            or reason == "cannot_fix"
+        ):
+            closed.add(key)
+    return closed
+
+
 def recent_completed_sites_from_findings(
     findings_path: Path | None, **filters
 ) -> set[tuple[str, int]]:
@@ -689,7 +1968,11 @@ def tried_patch_hashes_from_findings(
             source_hash=source_hash,
             evaluation_protocol_hash=evaluation_protocol_hash,
         )
-        if not _probe_only_rejection(row) and not _cheap_screen_not_quality_verdict(row)
+        if (
+            not _probe_only_rejection(row)
+            and not _cheap_screen_not_quality_verdict(row)
+            and not _shared_protect_crash(row)
+        )
     }
 
 

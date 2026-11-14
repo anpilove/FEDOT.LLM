@@ -712,6 +712,20 @@ def test_repo_map_ranks_symbol_and_field(tmp_path: Path):
     callers = search_callers(tmp_path, "get_not_encoded_data")
     assert callers
     assert callers[0].file_path == "fedot/core/operations/pca.py"
+    pipeline = tmp_path / "fedot" / "core" / "pipeline.py"
+    pipeline.write_text(
+        "class Other:\n"
+        "    def replace_n_jobs_in_nodes(self, n_jobs):\n"
+        "        self.replace_n_jobs_in_nodes(n_jobs)\n"
+        "class Pipeline:\n"
+        "    def fit(self, n_jobs):\n"
+        "        self.replace_n_jobs_in_nodes(n_jobs)\n",
+        encoding="utf-8",
+    )
+    qualified = search_callers(tmp_path, "Pipeline.replace_n_jobs_in_nodes")
+    assert [(item.file_path, item.line) for item in qualified] == [
+        ("fedot/core/pipeline.py", 6)
+    ]
     fields = search_field_usage(tmp_path, "categorical_idx")
     assert fields
     assert fields[0].file_path == "fedot/core/data.py"

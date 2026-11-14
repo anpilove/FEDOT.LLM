@@ -1,3 +1,5 @@
+import pytest
+
 from fedotllm.agents.evolve.evaluation.affected_eval import _normalized_delta
 from fedotllm.agents.evolve.evaluation.compare import compare_pack, patched_broke
 from fedotllm.agents.evolve.types import ScoreResult
@@ -39,6 +41,32 @@ def test_return_best_mismatch_stays_infrastructure():
     assert patched_broke(stock, patched) is False
     assert decision.infrastructure_error is True
     assert decision.reason == "timeout_or_invalid"
+
+
+def test_shared_protect_crash_does_not_block_a_neutral_patch():
+    stock = {
+        "catboost": _row("catboost", "ok", 0.80),
+        "pca->catboost": ScoreResult(
+            "pca->catboost", "crash", 0.5, detail="IndexError: index 1 is out of bounds"
+        ),
+    }
+    patched = {
+        "catboost": _row("catboost", "ok", 0.80),
+        "pca->catboost": ScoreResult(
+            "pca->catboost", "crash", 0.5, detail="IndexError: index 1 is out of bounds"
+        ),
+    }
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("catboost",),
+        protect_ids=("catboost", "pca->catboost"),
+    )
+
+    assert decision.infrastructure_error is False
+    assert "timeout_or_invalid" not in decision.reason
+    assert decision.reason.startswith("target_delta")
 
 
 def test_protect_invalid_fit_is_a_regression_not_infrastructure():
@@ -106,6 +134,62 @@ def test_evidence_signal_does_not_keep_when_another_lift_is_invalid():
     assert decision.keep is False
     assert decision.reason == "timeout_or_invalid"
     assert decision.infrastructure_error is True
+
+
+def test_missing_requested_lift_refuses_keep_without_raising():
+    stock = {"catboost": _row("catboost", "ok", 0.80)}
+    patched = {"catboost": _row("catboost", "ok", 0.95)}
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("catboost", "rf"),
+        protect_ids=("catboost",),
+    )
+
+    assert decision.keep is False
+    assert decision.infrastructure_error is True
+    assert decision.reason == "missing_measurement rf"
+    assert decision.regression_deltas["rf"] is None
+
+
+def test_missing_requested_protect_refuses_keep_without_raising():
+    stock = {"catboost": _row("catboost", "ok", 0.80)}
+    patched = {
+        "catboost": _row("catboost", "ok", 0.95),
+        "rf": _row("rf", "ok", 0.70),
+    }
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("catboost",),
+        protect_ids=("catboost", "rf"),
+    )
+
+    assert decision.keep is False
+    assert decision.infrastructure_error is True
+    assert decision.reason == "missing_measurement rf"
+    assert decision.target_delta == pytest.approx(0.15)
+
+
+def test_gain_beside_a_patch_map_gap_does_not_keep():
+    stock = {
+        "catboost": _row("catboost", "ok", 0.80),
+        "rf": _row("rf", "ok", 0.70),
+    }
+    patched = {"catboost": _row("catboost", "ok", 0.95)}
+
+    decision = compare_pack(
+        stock,
+        patched,
+        lift_ids=("catboost", "rf"),
+        protect_ids=("catboost", "rf"),
+    )
+
+    assert decision.keep is False
+    assert decision.infrastructure_error is True
+    assert decision.reason == "missing_measurement rf"
 
 
 def test_stock_crash_is_not_a_measured_baseline():

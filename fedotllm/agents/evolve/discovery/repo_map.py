@@ -105,30 +105,59 @@ def repo_map(
     return _spread(visible, limit)
 
 
+def _call_matches(node: ast.Call, name: str, class_stack: list[str]) -> bool:
+    called = _call_name(node)
+    if not called:
+        return False
+    if called == name:
+        return True
+    if "." not in name:
+        return False
+    owner, tail = name.rsplit(".", 1)
+    if called != tail or not isinstance(node.func, ast.Attribute):
+        return False
+    receiver = node.func.value
+    if isinstance(receiver, ast.Name) and receiver.id == owner:
+        return True
+    return (
+        isinstance(receiver, ast.Name)
+        and receiver.id == "self"
+        and owner in class_stack
+    )
+
+
 def search_callers(checkout: Path, name: str, *, limit: int = 12) -> list[Symbol]:
     if not name:
         return []
     hits: list[Symbol] = []
     seen: set[tuple[str, int]] = set()
+
+    class _Calls(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.class_stack: list[str] = []
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self.class_stack.append(node.name)
+            self.generic_visit(node)
+            self.class_stack.pop()
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if len(hits) < limit and _call_matches(node, name, self.class_stack):
+                key = (rel, getattr(node, "lineno", 1))
+                if key not in seen:
+                    seen.add(key)
+                    hits.append(Symbol(rel, name, "call", node.lineno))
+            self.generic_visit(node)
+
     for path in _py_files(checkout):
         rel = path.relative_to(checkout).as_posix()
         try:
             tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
         except (OSError, SyntaxError, ValueError):
             continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            called = _call_name(node)
-            if called != name:
-                continue
-            key = (rel, getattr(node, "lineno", 1))
-            if key in seen:
-                continue
-            seen.add(key)
-            hits.append(Symbol(rel, name, "call", node.lineno))
-            if len(hits) >= limit:
-                return hits
+        _Calls().visit(tree)
+        if len(hits) >= limit:
+            return hits
     return hits
 
 

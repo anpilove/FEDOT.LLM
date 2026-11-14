@@ -19,6 +19,35 @@ from fedotllm.log import logger
 from fedotllm.utils.parsers import parse_json
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def validate_structured_payload(json_obj: Any, response_model: Type[T]) -> T:
+    """Validate one structured response, including a list of JSON objects.
+
+    A model sometimes emits two objects back to back. ``json_repair`` turns
+    that text into a list, and ``model_validate`` then rejects the whole
+    call. The first object that matches the schema is the response.
+    """
+
+    if isinstance(json_obj, list):
+        first_error: ValidationError | None = None
+        saw_dict = False
+        for item in json_obj:
+            if not isinstance(item, dict):
+                continue
+            saw_dict = True
+            try:
+                return response_model.model_validate(item)
+            except ValidationError as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+        if not saw_dict:
+            return response_model.model_validate(json_obj)
+    return response_model.model_validate(json_obj)
+
+
 LLM_TIMEOUT_SECONDS = float(os.getenv("FEDOTLLM_LLM_TIMEOUT", "120"))
 # One initial provider request plus at most one transient retry. Clamp the
 # legacy environment override so higher layers cannot multiply requests.
@@ -187,12 +216,12 @@ class AIInference:
             raise EmptyLLMResponse("LLM returned no structured response")
         json_obj = parse_json(response)
         try:
-            return response_model.model_validate(json_obj)
+            return validate_structured_payload(json_obj, response_model)
         except ValidationError as exc_info:
             messages = f"{prompts.utils.fix_structured_response(json_obj, str(exc_info), response_model)}"
             response = self.query(messages)
             json_obj = parse_json(response) if response else None
-            return response_model.model_validate(json_obj)
+            return validate_structured_payload(json_obj, response_model)
 
     @retry(
         stop=stop_after_attempt(LLM_RETRY_ATTEMPTS),
@@ -219,6 +248,11 @@ class AIInference:
                 try:
                     return self._complete(messages)
                 except LLMRequestTimeout as exc:
+                    # A stage reserve inherits the timeout type so provider
+                    # retries stay suppressed, but it is not a model failure
+                    # and must not walk the fallback chain.
+                    if type(exc).__name__ == "EvolveBudgetExhausted":
+                        raise
                     last = exc
                     logger.warning("LLM timeout on %s, trying fallback", model)
                     continue

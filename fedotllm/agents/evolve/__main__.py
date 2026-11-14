@@ -95,6 +95,31 @@ def _print_json(payload: Any) -> None:
     print(json.dumps(payload, indent=2, default=str), flush=True)
 
 
+def _run_trial_rows(result: dict) -> list[dict]:
+    """Short trial rows for the command output."""
+
+    rows = []
+    for row in result.get("trials") or []:
+        if not isinstance(row, dict) or row.get("stage") == "dedup":
+            continue
+        variant = row.get("variant") if isinstance(row.get("variant"), dict) else {}
+        nested = None
+        for key in ("final_decision", "shadow_decision", "full_decision", "quick_decision"):
+            if isinstance(row.get(key), dict):
+                nested = row[key]
+                break
+        rows.append(
+            {
+                "operation": variant.get("operation"),
+                "parameter": variant.get("parameter"),
+                "value": variant.get("value"),
+                "stage": row.get("stage"),
+                "reason": row.get("reason") or (nested or {}).get("reason"),
+            }
+        )
+    return rows
+
+
 def _decision_exit_code(decision) -> int:
     if decision.infrastructure_error:
         return EXIT_INFRASTRUCTURE
@@ -109,14 +134,35 @@ def _decision_exit_code(decision) -> int:
     return 0 if decision.dev_keep else 1
 
 
+# Catalog turn plus the five-step file decision (four evidence turns and one
+# pick/skip turn). A tighter cap must not reserve these calls away: the live
+# GLM pick stopped at zero sites after the catalog request because nine of ten
+# queries were held for verifier and fixer.
+DISCOVERY_QUERY_FLOOR = 6
+# Catalog plan plus two full file decisions. The 07:17 Moscow walk finished
+# preprocessing.py without a site and died on the second file.
+SECOND_FILE_DISCOVERY_FLOOR = 11
+
+
+def _discovery_floor(max_queries: int | None) -> int:
+    """Leave one file on a small cap, and a second file when the cap can hold it."""
+
+    if (
+        max_queries is not None
+        and max_queries >= 3 + 8 + SECOND_FILE_DISCOVERY_FLOOR
+    ):
+        return SECOND_FILE_DISCOVERY_FLOOR
+    return DISCOVERY_QUERY_FLOOR
+
+
 def _bounded_fixer_reserve(max_queries: int | None, requested: int) -> int:
-    """Keep repair/probe capacity while always leaving discovery one request."""
+    """Keep repair/probe capacity while leaving discovery a full file decision."""
 
     if requested < 0:
         raise ValueError("--llm-reserve-fixer-queries must be non-negative")
     if max_queries is None:
         return requested
-    return min(requested, max(0, max_queries - 1))
+    return min(requested, max(0, max_queries - DISCOVERY_QUERY_FLOOR))
 
 
 def _campaign_reserves(
@@ -130,7 +176,7 @@ def _campaign_reserves(
 
     if fixer_requested < 0:
         raise ValueError("--llm-reserve-fixer-queries must be non-negative")
-    available = None if max_queries is None else max(0, max_queries - 1)
+    available = None if max_queries is None else max(0, max_queries - _discovery_floor(max_queries))
     verifier = 3 if has_verifier else 0
     if available is not None:
         verifier = min(verifier, available)
@@ -858,6 +904,198 @@ def _resume_branch(
     return branch, feedback
 
 
+def _cmd_keyless_configuration(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> int:
+    """Propose and apply a measured default when no model key is available."""
+
+    from fedotllm.agents.evolve.benchmark.runner import benchmark_configuration_search
+    from fedotllm.agents.evolve.commands.configuration_search import (
+        KEPT_CONFIGURATION_PATCH,
+        remember_configuration_trials,
+        remembered_configuration_trials,
+        proposal_checkout,
+        remembered_patch_hashes,
+        hunt_surface,
+        materialize_improved_fedot,
+        measure_discarded_early_stopping,
+        strongest_remembered_final,
+    )
+    from fedotllm.agents.evolve.execution.checkout import resolve_fedot_src
+    from fedotllm.agents.evolve.types import Decision
+
+    _validate_campaign_args(args, parser)
+    try:
+        requested = _task_ids(args.lift_tasks)
+    except ValueError as exc:
+        parser.error(str(exc))
+    surface = hunt_surface(args.workspace.resolve(), requested)
+    tasks = tuple(dict.fromkeys((*surface["lift"], *surface["protect"])))
+    print(
+        f"hunting FEDOT operation {surface['operation']}",
+        file=sys.stderr,
+    )
+    prior_trials = remembered_configuration_trials(args.workspace.resolve())
+    skipped = remembered_patch_hashes(prior_trials)
+    checkout = resolve_fedot_src()
+    run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    workspace_root = args.workspace.resolve()
+    run_workspace = workspace_root / "runs" / run_id
+    run_workspace.mkdir(parents=True, exist_ok=False)
+    _write_json(
+        workspace_root / "latest_run.json",
+        {"run_id": run_id, "workspace": str(run_workspace), "mode": "keyless_configuration"},
+    )
+    remembered = strongest_remembered_final(workspace_root)
+    proposal_source = None
+    remembered_patch = Path(str((remembered or {}).get("patch") or ""))
+    if remembered_patch.is_file():
+        try:
+            proposal_source = proposal_checkout(
+                checkout, run_workspace, remembered_patch
+            )
+        except (OSError, RuntimeError, ValueError):
+            proposal_source = None
+    result = measure_discarded_early_stopping(
+        checkout,
+        run_workspace,
+        tasks=tasks,
+        lift_ids=surface["lift"],
+        protect_ids=surface["protect"],
+        proposal_source=proposal_source,
+        skip_patch_hashes=skipped,
+    )
+    if result is None:
+        result = benchmark_configuration_search(
+            checkout,
+            run_workspace,
+            tasks=tasks,
+            skip_patch_hashes=skipped,
+            prior_trials=prior_trials,
+            proposal_source=proposal_source,
+            lift_ids=surface["lift"],
+            protect_ids=surface["protect"],
+        )
+    remember_configuration_trials(workspace_root, run_workspace)
+    summary = result.get("summary") or {}
+    checks = result.get("checks") or {}
+    if "final" in result:
+        final = result["final"]
+        decision = Decision(
+            keep=bool(final.get("keep")),
+            reason=str(final.get("reason") or "no_configuration_keep"),
+            target_delta=final.get("target_delta"),
+            regression_deltas=final.get("regression_deltas") or {},
+            dev_keep=bool(checks.get("full_dev_keep")),
+            final_keep=bool(summary.get("final_keep")),
+            stage="final",
+        )
+    else:
+        raw = result.get("decision") or {}
+        decision = Decision(
+            keep=bool(raw.get("keep")),
+            reason=str(raw.get("reason") or "no_configuration_keep"),
+            target_delta=raw.get("target_delta"),
+            regression_deltas=raw.get("regression_deltas") or {},
+            dev_keep=bool(raw.get("dev_keep")),
+            final_keep=bool(raw.get("final_keep")),
+            stage=str(raw.get("stage") or "dev"),
+            infrastructure_error=bool(raw.get("infrastructure_error")),
+        )
+    historical = strongest_remembered_final(workspace_root)
+    new_delta = summary.get("final_target_delta") if summary.get("final_keep") else None
+    reported_operation = str(surface["operation"])
+    _write_json(run_workspace / "keyless_configuration.json", result)
+    if historical is not None and isinstance(historical.get("final_target_delta"), (int, float)):
+        old_delta = float(historical["final_target_delta"])
+        old_operation = str(historical.get("change") or "").split()[:1]
+        new_operation = str(summary.get("change") or "").split()[:1]
+        same_operation = bool(old_operation) and old_operation == new_operation
+        weaker = not isinstance(new_delta, (int, float)) or float(new_delta) <= old_delta
+        # A smaller lift on a new FEDOT operation is an additional improvement.
+        # Only the same operation has to beat the remembered FINAL delta.
+        # A run that keeps nothing must not report the older patch as its own keep.
+        if not summary.get("final_keep"):
+            reported_patch = run_workspace / KEPT_CONFIGURATION_PATCH
+            reported_patch.write_text(
+                Path(str(historical["patch"])).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            summary = {
+                **summary,
+                "measured_change": summary.get("change") or decision.reason,
+                "published_change": historical.get("change"),
+                "published_patch": str(reported_patch),
+                "patch": str(reported_patch),
+                "selection": "this run did not keep; the published patch remains",
+            }
+        elif same_operation and weaker:
+            reported_patch = run_workspace / KEPT_CONFIGURATION_PATCH
+            reported_patch.write_text(
+                Path(str(historical["patch"])).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            summary = {
+                **summary,
+                "measured_change": summary.get("change") or decision.reason,
+                "change": historical.get("change"),
+                "final_target_delta": old_delta,
+                "final_task_deltas": historical.get("final_task_deltas") or {},
+                "dev_target_delta": historical.get("dev_target_delta"),
+                "dev_task_deltas": historical.get("dev_task_deltas") or {},
+                "final_keep": True,
+                "patch": str(reported_patch),
+                "selection": "previous FINAL keep remains stronger",
+            }
+            decision = Decision(
+                keep=True,
+                reason="keep",
+                target_delta=old_delta,
+                regression_deltas=dict(historical.get("final_task_deltas") or {}),
+                dev_keep=True,
+                final_keep=True,
+                stage="final",
+            )
+            reported_operation = old_operation[0] if old_operation else reported_operation
+    improved_fedot = ""
+    patch_path = Path(str(summary.get("patch") or ""))
+    if patch_path.is_file():
+        try:
+            improved_fedot = str(
+                materialize_improved_fedot(
+                    checkout,
+                    workspace_root / "improved_fedot",
+                    patch_path,
+                )
+            )
+        except (OSError, RuntimeError, ValueError):
+            improved_fedot = ""
+    _print_json(
+        {
+            "keep_dev": decision.dev_keep,
+            "keep_final": decision.final_keep,
+            "keep_correctness": decision.correctness_keep,
+            "stage": decision.stage,
+            "reason": decision.reason,
+            "target_delta": decision.target_delta,
+            "regression_deltas": decision.regression_deltas,
+            "workspace": str(run_workspace),
+            "change": summary.get("change"),
+            "measured_change": summary.get("measured_change"),
+            "published_change": summary.get("published_change"),
+            "published_patch": summary.get("published_patch") or "",
+            "selection": summary.get("selection"),
+            "patch": summary.get("patch") or "",
+            "fedot": improved_fedot,
+            "tasks": list(tasks),
+            "trials": _run_trial_rows(result),
+            "fedot_operation": reported_operation,
+            "skipped_previously_measured": len(skipped),
+        }
+    )
+    return _decision_exit_code(decision)
+
+
 def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     """``run`` and ``continue``: one hunt campaign, optionally resuming a branch."""
     from fedotllm.agents.evolve.controller.campaign import run_once
@@ -875,6 +1113,12 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         os.environ["EVOLVE_AGENT_COVERAGE_TASKS"] = str(args.coverage_tasks)
 
     scout, verifier, fixer = _stage_inferences(args.presets)
+    if args.cmd == "run" and (scout is None or fixer is None):
+        print(
+            "FEDOTLLM_LLM_API_KEY is not set; proposing measured configuration defaults",
+            file=sys.stderr,
+        )
+        return _cmd_keyless_configuration(args, parser)
     if scout is None or fixer is None:
         print("FEDOTLLM_LLM_API_KEY is not set; propose_patch will no-op", file=sys.stderr)
     checkout = resolve_fedot_src()
@@ -962,6 +1206,8 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         if isinstance(summary, dict):
             summary["run_budget"] = budget_payload
             _write_json(summary_path, summary)
+    from fedotllm.agents.evolve.controller.session import kept_patch_report
+
     _print_json(
         {
             "keep_dev": decision.dev_keep,
@@ -972,6 +1218,7 @@ def _cmd_campaign(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "target_delta": decision.target_delta,
             "regression_deltas": decision.regression_deltas,
             "workspace": str(run_workspace),
+            "change": kept_patch_report(run_workspace, summary),
             "run_budget": budget_payload,
             "quality_queue": (summary or {}).get("quality_queue"),
         }

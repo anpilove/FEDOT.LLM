@@ -12,6 +12,7 @@ from fedotllm.agents.evolve.discovery.context import (
     context_from_lead,
 )
 from fedotllm.agents.evolve.discovery.fedot_context import build_fedot_context
+from fedotllm.agents.evolve.discovery.research_tools import rewrite_missing_module_import
 from fedotllm.agents.evolve.storage.journal import write_artifact
 from fedotllm.agents.evolve.execution.patch import apply_patch
 from fedotllm.agents.evolve.execution.run_code import run_fedot_snippet
@@ -380,6 +381,23 @@ def fix_lead(
                 if any("cannot_fix" in item for item in errors)
                 else "no_patch"
             )
+            if (
+                reason == "no_patch"
+                and "noop_or_empty_old" in errors
+                and apply_revision < max_apply_revisions
+            ):
+                # The 06:07 Moscow revision returned status=patch with no
+                # edits after the API-test failure. Ask once more before
+                # giving up the source proposal.
+                working_ctx = (
+                    ctx
+                    + "\n\nPrevious response had status=patch and no edits. "
+                    "That is not a patch. Return the corrected source, or "
+                    "status=cannot_fix.\n"
+                )
+                if all_errors:
+                    note("propose_error.txt", "\n".join(all_errors))
+                continue
             if all_errors:
                 note("propose_error.txt", "\n".join(all_errors))
             note("fix_status.txt", reason)
@@ -398,6 +416,22 @@ def fix_lead(
             else:
                 preflight_result = run_fedot_snippet(checkout, candidate.behavior_probe)
                 probe_diagnostic = _probe_preflight_diagnostic(preflight_result)
+            if probe_diagnostic:
+                rewritten = rewrite_missing_module_import(
+                    checkout,
+                    candidate.behavior_probe,
+                    "\n".join(
+                        part
+                        for part in (preflight_result.stderr, preflight_result.detail)
+                        if part
+                    ),
+                )
+                if rewritten:
+                    retried = run_fedot_snippet(checkout, rewritten)
+                    candidate.behavior_probe = rewritten
+                    candidate_note(candidate, "behavior_probe_repaired.py", rewritten)
+                    preflight_result = retried
+                    probe_diagnostic = _probe_preflight_diagnostic(retried)
             if probe_diagnostic:
                 all_errors.append(
                     f"behavior_probe_preflight_invalid: {probe_diagnostic}"

@@ -244,6 +244,329 @@ def _linked_contract_context(checkout: Path, file_path: str, line: int) -> str:
     return "\n\n".join(chunks)[:14_000]
 
 
+def annotated_int_or_coerces_zero(source: str, line: int) -> str:
+    """Return why an `or` default drops the integer 0, or an empty string.
+
+    A parameter annotated ``int`` includes 0. The default applies when the
+    caller omits the argument. ``name or default`` replaces that 0.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    owner: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+
+    def walk(node: ast.AST) -> None:
+        nonlocal owner
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end:
+                owner = node
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(tree)
+    if owner is None:
+        return ""
+    domain: dict[str, int] = {}
+    positional = owner.args.args[-len(owner.args.defaults):] if owner.args.defaults else []
+    for arg, default in zip(positional, owner.args.defaults):
+        if (
+            isinstance(arg.annotation, ast.Name)
+            and arg.annotation.id == "int"
+            and isinstance(default, ast.Constant)
+            and isinstance(default.value, int)
+        ):
+            domain[arg.arg] = default.value
+    if not domain:
+        return ""
+    statement = next(
+        (
+            node
+            for node in ast.walk(owner)
+            if isinstance(node, ast.stmt) and getattr(node, "lineno", None) == line
+        ),
+        None,
+    )
+    if statement is None:
+        return ""
+    for node in ast.walk(statement):
+        if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.Or):
+            continue
+        names = {value.id for value in node.values if isinstance(value, ast.Name)}
+        constants = {
+            value.value
+            for value in node.values
+            if isinstance(value, ast.Constant) and isinstance(value.value, int)
+        }
+        for name, default in domain.items():
+            if name in names and default in constants:
+                return (
+                    f"{name} is annotated int with default {default}; "
+                    "0 is in that domain and this line replaces it with "
+                    f"`{name} or {default}`"
+                )
+    return ""
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _binary_midpoint_assertion(source: str, stderr: str) -> bool:
+    error = stderr or ""
+    if "AssertionError" not in error or "0.5" not in error:
+        return False
+    if "filled_column > mean_value" not in source or "filled_column < mean_value" not in source:
+        return False
+    return "0.75" in source
+
+
+def choice_coerced_mixed_column(code: str, stderr: str) -> str:
+    """A ``choice`` of strings and an int is not a mixed object column.
+
+    ``np.random.choice(['a', 'b', 1])`` stores every cell as ``str``,
+    including ``'1'``. The 12:46 Europe/Moscow probe then saw ``fit()``
+    complete and failed ``categorical_idx must remain a list``. ``fit``
+    assigns ``np.array``. A cell-wise object column of ``str`` and ``int``
+    makes ``np.unique`` raise ``TypeError``.
+    """
+
+    error = stderr or ""
+    if "AssertionError" not in error:
+        return ""
+    if "categorical_idx" not in error or "list" not in error:
+        return ""
+    text = code or ""
+    if "caught is None" not in text and "remain a list" not in text:
+        return ""
+    mixed = False
+    for match in re.finditer(r"\.choice\(\s*(\[[^\]]*\])", text):
+        group = match.group(1)
+        if not re.search(r"""['"][^'"]+['"]""", group):
+            continue
+        bare = re.sub(r"""['"][^'"]*['"]""", "", group)
+        if re.search(r"(?<![\w.])\d+", bare):
+            mixed = True
+            break
+    if not mixed:
+        return ""
+    return (
+        "np.random.choice on a list that mixes strings and an int stores "
+        "the int as the string '1'. fit() then never sees a mixed column, "
+        "so a completed fit does not disprove np.unique. Build an object "
+        "array and assign each cell: strings in one column and both str "
+        "and Python int in the other. Assert that "
+        "BinaryCategoricalPreprocessor.fit raises TypeError. Do not assert "
+        "that categorical_idx stays a list: fit assigns np.array."
+    )
+
+
+def mixed_int_str_unique_is_outside_contract(
+    source: str, line: int, stderr: str, code: str
+) -> str:
+    """A mixed int/str column is not a fit-completes input.
+
+    The 12:52 Europe/Moscow probe assigned ``[1, 'x', 2, 'y', 3, 'z']`` and
+    asserted ``caught is None``. Stock raised ``'<' not supported between
+    instances of 'str' and 'int'``. ``fit`` documents binary features that
+    have str objects, so that crash is not a contract violation.
+    """
+
+    del line
+    error = stderr or ""
+    if "not supported between instances" not in error:
+        return ""
+    if "int" not in error or "str" not in error:
+        return ""
+    if "caught is None" not in (code or ""):
+        return ""
+    if "has str objects" not in (source or ""):
+        return ""
+    return (
+        "A cell-wise object column of Python int and str makes np.unique "
+        "raise TypeError. BinaryCategoricalPreprocessor.fit documents "
+        "binary features that \"has str objects\", so fit is not required "
+        "to complete on it."
+    )
+
+
+def equal_category_mean_is_required(source: str, line: int, stderr: str) -> str:
+    """Return why a balanced binary gap must stay at the mean 0.5.
+
+    ``test_imputation_binary_features_with_equal_categories_correct`` says
+    equal category counts have no majority label, so the mean is inserted,
+    and asserts ``np.isclose(..., 0.5)``. The 11:54 Europe/Moscow patch
+    changed ``>`` to ``>=``. The probe then saw 1.0, and that test failed.
+    The 0.75 tip only maps values strictly above the midpoint.
+    """
+
+    del line
+    if not _binary_midpoint_assertion(source, stderr):
+        return ""
+    return (
+        "test_imputation_binary_features_with_equal_categories_correct "
+        "asserts the equal-count binary gap stays 0.5. The docstring says "
+        "there is no majority label, so the mean is inserted. Strict "
+        "inequalities around (min+max)/2 leave that midpoint in place."
+    )
+
+
+def binary_midpoint_left_unchanged(source: str, line: int, stderr: str) -> str:
+    """Do not treat a leftover 0.5 as a supported correctness bug.
+
+    The 11:25 audit saw ``[0.0, 0.5, 1.0]``. Snapping the midpoint failed
+    the frozen equal-category test at 11:54. That fill is the contract.
+    """
+
+    del source, line, stderr
+    return ""
+
+
+def replay_reaching_assertion(
+    checkout: Path,
+    lead: MatchSite,
+    stored: dict[str, str],
+) -> VerificationResult:
+    """Rerun a probe that already reached the target and failed its assertion.
+
+    The 11:38 Europe/Moscow resume spent seven verifier calls inventing probes
+    that never showed ``[0.0, 0.5, 1.0]``, then rejected the line. The 11:25
+    probe had already failed that assertion.
+    """
+
+    code = str(stored.get("code") or "")
+    stock = run_fedot_snippet(checkout, code)
+    try:
+        source = (checkout / lead.file_path).read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    stderr = stock.stderr or ""
+    denied = ""
+    coerced = ""
+    if "AssertionError" in stderr:
+        denied = equal_category_mean_is_required(source, lead.line, stderr)
+        coerced = (
+            ""
+            if denied
+            else (
+                binary_midpoint_left_unchanged(source, lead.line, stderr)
+                or discarded_callback_return(source, lead.line)
+                or annotated_int_or_coerces_zero(source, lead.line)
+            )
+        )
+    marker = "replayed stored reaching assertion"
+    claim = str(stored.get("claim") or lead.why)
+    expected = str(stored.get("expected") or "")
+    if denied:
+        return VerificationResult(
+            "rejected",
+            claim=claim,
+            expected=expected,
+            observed=stderr[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            evidence=(denied,),
+            detail=f"{marker}: {denied}",
+            target_reached=True,
+        )
+    if stock.status == "ok":
+        return VerificationResult(
+            "rejected",
+            claim=claim,
+            expected=expected,
+            observed=(stock.stdout or "")[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            detail=f"{marker}: stock satisfied the proposed healthy contract",
+            target_reached=stock.target_reached is True,
+        )
+    if coerced:
+        return VerificationResult(
+            "verified_bug",
+            claim=claim,
+            expected=expected,
+            observed=stderr[-1_000:],
+            reproduction_code=code,
+            stock_probe=stock,
+            evidence=(coerced,),
+            detail=f"{marker}: {coerced}",
+            target_reached=True,
+        )
+    return VerificationResult(
+        "inconclusive",
+        claim=claim,
+        expected=expected,
+        observed=stderr[-1_000:],
+        reproduction_code=code,
+        stock_probe=stock,
+        detail=f"{marker}: contract still unsupported",
+        target_reached=stock.target_reached is True,
+    )
+
+
+def discarded_callback_return(source: str, line: int) -> str:
+    """Return why an early-stopping callback is built and then dropped.
+
+    ``update_callbacks`` assigns ``callback = []``, calls
+    ``lgbm_early_stopping`` as a statement, and returns that empty list.
+    ``fit`` passes the list as ``callbacks=``. The 08:10 Europe/Moscow audit
+    called this inconclusive because the method has no docstring.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return ""
+    owner: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+
+    def walk(node: ast.AST) -> None:
+        nonlocal owner
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            if node.lineno <= line <= end:
+                owner = node
+        for child in ast.iter_child_nodes(node):
+            walk(child)
+
+    walk(tree)
+    if owner is None:
+        return ""
+    empty_names = {
+        node.targets[0].id
+        for node in ast.walk(owner)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.List)
+        and not node.value.elts
+    }
+    returns_empty = any(
+        isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in empty_names
+        for node in ast.walk(owner)
+    )
+    discarded = any(
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and _call_name(node.value).endswith("early_stopping")
+        for node in ast.walk(owner)
+    )
+    if not (empty_names and returns_empty and discarded):
+        return ""
+    return (
+        "update_callbacks builds an early-stopping callback and returns the "
+        "empty list instead. fit passes that list as callbacks=."
+    )
+
+
 def _audit_contract_support(
     checkout: Path,
     lead: MatchSite,
@@ -482,6 +805,14 @@ Prefer reject over an API preference, cosmetic issue, or untested story.
 Do not import evaluator, datasets, benchmark cases, scorer or task catalogs."""
 
 
+def _probe_exception_line(stderr: str) -> str:
+    for line in reversed((stderr or "").splitlines()):
+        text = line.strip()
+        if text and ("Error" in text or text.endswith("Exception")):
+            return text[:300]
+    return ""
+
+
 def _probe_is_meaningful(code: str) -> tuple[bool, str]:
     lowered = (code or "").lower()
     if "import fedot" not in lowered and "from fedot" not in lowered:
@@ -566,26 +897,28 @@ def _grounded_public_exception(
             "Fedot(",
         )
     )
+    stderr = (stock.stderr or "").replace("\\", "/")
+    terminal = next(
+        (line.strip() for line in reversed(stderr.splitlines()) if line.strip()),
+        "",
+    )
+    # A bad import dies before any entry point exists. Naming that
+    # ImportError keeps the model on the class it already chose.
+    if terminal.startswith((
+        "SyntaxError:",
+        "NameError:",
+        "ModuleNotFoundError:",
+        "ImportError:",
+    )):
+        return False, f"likely probe setup failure: {terminal}"
     if not public_entry or "operation_implementations" in code:
         return False, "probe did not use a public FEDOT entry point"
     target = (proposal.file_path or "").strip().replace("\\", "/")
     if not target.startswith("fedot/") or not target.endswith(".py"):
         return False, "verify_bug did not identify a FEDOT runtime target"
-    stderr = (stock.stderr or "").replace("\\", "/")
     if target not in stderr:
         return False, "exception traceback did not reach the claimed runtime target"
-    terminal = next(
-        (line.strip() for line in reversed(stderr.splitlines()) if line.strip()),
-        "",
-    )
-    setup_failures = (
-        "SyntaxError:",
-        "NameError:",
-        "ModuleNotFoundError:",
-        "ImportError:",
-        "AttributeError:",
-    )
-    if terminal.startswith(setup_failures):
+    if terminal.startswith("AttributeError:"):
         return False, f"likely probe setup failure: {terminal}"
     if terminal.startswith("TypeError:") and any(
         marker in terminal
@@ -622,6 +955,25 @@ def verify_lead(
     provisional_quality: VerificationProposal | None = None
     quality_challenge_actions = 0
     disproved_bug_claims: list[str] = []
+    last_target_reached: bool | None = None
+    missed_target_retried = False
+    unreached_target_retried = False
+    syntax_probe_retried = False
+    import_probe_retried = 0
+    import_probe_limit = (
+        2
+        if "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+        else 1
+    )
+    target_disagree_retried = False
+    binary_reject_retried = False
+    subset_index_reject_retried = False
+    all_nan_reject_retried = False
+    callback_reject_retried = False
+    string_domain_reject_retried = False
+    string_domain_upcast_retried = False
+    empty_index_setup_retried = False
+    contract_audit_retried = False
     last_detail = "verification step budget exhausted"
     step = 0
     step_budget = min(
@@ -940,6 +1292,167 @@ def verify_lead(
             _write_verification(workspace, lead, result)
             return result
         elif action is VerificationAction.REJECT:
+            claim_text = " ".join(
+                filter(None, (lead.why, lead.mechanism, parsed.claim, parsed.why))
+            )
+            if (
+                correctness_only
+                and not binary_reject_retried
+                and "ids_binary_integer_features" in claim_text
+                and not any("Probe status=" in item for item in tool_history)
+            ):
+                # The 06:52 Moscow reject said a non-binary column is never
+                # added, so it cannot be snapped. update does not delete the
+                # earlier key, and no probe had run.
+                binary_reject_retried = True
+                step_budget += 1
+                output = (
+                    "dict.update does not delete a key from an earlier transform. "
+                    "fit does not call _find_binary_features. A column with more "
+                    "than two unique values keeps the old key, and "
+                    "_correct_binary_ids_features still snaps it. Reject only after "
+                    "a probe imports fedot, fits once, transforms a two-value column, "
+                    "transforms that same object when the column has more than two "
+                    "unique values, and shows the second result was not snapped."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
+                and not subset_index_reject_retried
+                and "convert_to_dataframe" in claim_text
+                and "index 2 is out of bounds" in claim_text
+                and not any("index 2 is out of bounds" in item for item in tool_history)
+            ):
+                # The 13:10 Moscow reject said setdiff has no documented
+                # failure. The probes never called convert_to_dataframe.
+                subset_index_reject_retried = True
+                step_budget += 1
+                output = (
+                    "Import convert_to_dataframe from "
+                    "fedot.core.operations.evaluation.operation_implementations."
+                    "models.boostings_implementations. Build InputData with "
+                    "categorical_idx [0, 1] and numerical_idx [2, 3, 4]. Call "
+                    "subset_features(np.array([0, 1])), then "
+                    "convert_to_dataframe(subset, identify_cats=True). Assert "
+                    "IndexError: index 2 is out of bounds. Reject only after "
+                    "that call."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
+                and not all_nan_reject_retried
+                and "keep_empty_features" in claim_text
+                and "_categorical_numerical_union" in claim_text
+                and not any("indices imply" in item for item in tool_history)
+            ):
+                # The 07:29 Moscow reject treated a numerical-only call that
+                # returned without error as disproof. The union raises when a
+                # categorical column is present.
+                all_nan_reject_retried = True
+                step_budget += 1
+                output = (
+                    "SimpleImputer drops an all-NaN column. A numerical-only "
+                    "transform can return a narrower array without raising, and "
+                    "that does not disprove the union. Construct "
+                    "ImputationImplementation(), fit and transform one table with "
+                    "a numeric all-NaN column and a categorical column, and assert "
+                    "the ValueError whose message contains indices imply."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            history_text = "\n".join(tool_history)
+            if (
+                correctness_only
+                and not string_domain_reject_retried
+                and "convert_num_column_into_string_array" in claim_text
+                and ("1.0" in claim_text or "astype(str)" in claim_text)
+                and "category sets match" not in history_text
+                and "'0.0'" not in history_text
+            ):
+                # The 09:19 Moscow probe died unpacking a 1-D target. The
+                # reject cited the preprocessing docs and never printed the
+                # fit and predict string sets.
+                string_domain_reject_retried = True
+                step_budget += 1
+                output = (
+                    "A 1-D target dies in _check_columns_vs_types_number with "
+                    "not enough values to unpack before any string set is "
+                    "printed. Predict calls convert_num_column_into_string_array "
+                    "again. Reshape the target to (-1, 1). Fit on an int column "
+                    "with values 0, 1, 2, 3. Predict the same values as floats. "
+                    "Print both string sets. Reject only after those sets match. "
+                    "The preprocessing docs are not that comparison."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            verdict_text = f"{parsed.observed}\n{parsed.why}".lower()
+            if (
+                correctness_only
+                and not string_domain_upcast_retried
+                and "convert_num_column_into_string_array" in claim_text
+                and "sets equal" in verdict_text
+                and "column_stack" in history_text
+                and "dtype=object" not in history_text
+            ):
+                # The 09:27 Moscow comparison stacked ints with floats, so the
+                # ints were float64 before fit and both sets printed '0.0'.
+                string_domain_upcast_retried = True
+                step_budget += 1
+                output = (
+                    "np.column_stack of an int column and a float column "
+                    "promotes the ints to float64 before fit, so both sets "
+                    "print '0.0'. That is not a disproof. Build features as an "
+                    "object array. Put Python ints 0, 1, 2, 3 in the categorical "
+                    "column and a float in the other. Predict the same "
+                    "categorical values as Python floats. Print both string "
+                    "sets. Reject only when that object-array fit set equals "
+                    "the predict set."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
+            if (
+                correctness_only
+                and not callback_reject_retried
+                and "lgbm_early_stopping" in claim_text
+                and (
+                    "empty list" in history_text
+                    or "returns []" in history_text
+                    or "callbacks=[]" in history_text
+                )
+            ):
+                # The 08:10 Moscow audit saw the empty return and still
+                # rejected it as metric-adjacent. The list is the contract.
+                callback_reject_retried = True
+                step_budget += 1
+                output = (
+                    "The returned list is the contract. fit passes that list "
+                    "as callbacks=. lgbm_early_stopping's result is discarded, "
+                    "so the list stays empty. Assert that update_callbacks "
+                    "returns a non-empty list when early_stopping_rounds is an "
+                    "int. Do not require the fitted tree count to change."
+                )
+                last_detail = output
+                tool_history.append(
+                    f"Step {step} action={action.value} output:\n```\n{output}\n```"
+                )
+                continue
             result = VerificationResult(
                 "rejected",
                 claim=parsed.claim or lead.why,
@@ -963,6 +1476,50 @@ def verify_lead(
                     valid, detail = False, f"unresolved verification target: {exc}"
             if not valid:
                 output = f"Probe rejected: {detail}"
+                if (
+                    str(detail).startswith("probe syntax error")
+                    and not syntax_probe_retried
+                ):
+                    # A missing colon produces no evidence. One rewrite
+                    # keeps that turn from ending the lead.
+                    syntax_probe_retried = True
+                    step_budget += 1
+                    output += (
+                        " A syntax error is not evidence. Return one corrected "
+                        "reproduction_code that parses."
+                    )
+                elif detail == "probe must import FEDOT" and import_probe_retried < import_probe_limit:
+                    # The 06:49 Moscow binary-feature probe never ran. One
+                    # rewrite keeps that rejection from ending the lead.
+                    # The 07:37 union probe missed the import again after that
+                    # rewrite, so the union lead gets a second one.
+                    import_probe_retried += 1
+                    step_budget += 1
+                    output += (
+                        " The probe never ran. Return one reproduction_code that "
+                        "imports fedot and asserts the claimed behavior on the "
+                        "same fitted object."
+                    )
+                elif (
+                    "symbol and source line disagree" in str(detail)
+                    and not target_disagree_retried
+                ):
+                    # The 07:32 Moscow union probe named a symbol that does
+                    # not contain line 432, so the probe never ran.
+                    target_disagree_retried = True
+                    step_budget += 1
+                    output += (
+                        " The symbol and the source line name different objects. "
+                        "Name the symbol that contains the line, or set the line "
+                        "inside that symbol."
+                    )
+                    if "_categorical_numerical_union" in (
+                        (lead.why or "") + (lead.mechanism or "")
+                    ):
+                        output += (
+                            " Use symbol _categorical_numerical_union and the "
+                            "DataFrame line that passes columns=self.non_categorical_ids."
+                        )
             else:
                 symbol = resolved_target.get("symbol", "")
                 trace_target = {"file_path": target_lead.file_path, "symbol": symbol} if symbol else None
@@ -980,12 +1537,59 @@ def verify_lead(
                 reproduced = asserted_failure or grounded_exception
                 if reproduced and trace_target and stock.target_reached is not True:
                     reproduced = False
+                    exception_line = _probe_exception_line(stock.stderr)
                     detail = (
                         "probe did not execute the claimed target method; an earlier setup failure "
                         "or assertion about another component is not evidence for this lead. "
-                        "Use PipelineBuilder.add_node or PipelineNode with an operation name, "
-                        "not an unconfigured base Operation object"
                     )
+                    if exception_line:
+                        detail += f"The probe stopped at: {exception_line}. "
+                    detail += (
+                        "Repair that setup and call the claimed method on the same object. "
+                        "Do not replace the class under test with a mock."
+                    )
+                    code = parsed.reproduction_code or ""
+                    if "NoneType" in exception_line and "size" in exception_line:
+                        detail += (
+                            " InputData.categorical_idx stays None unless you pass it; "
+                            "reading .size on that value crashes in fit before the encoder. "
+                            "transform accepts only one InputData."
+                        )
+                    elif "'list' object has no attribute 'size'" in (
+                        exception_line + (stock.stderr or "")
+                    ):
+                        detail += (
+                            " categorical_idx and numerical_idx must be numpy arrays. "
+                            "A Python list has no size attribute and crashes in fit "
+                            "before the union."
+                        )
+                    elif "Operation(" in code and "Implementation(" not in code:
+                        detail += (
+                            " Use PipelineBuilder.add_node or PipelineNode with an operation name, "
+                            "not an unconfigured base Operation object."
+                        )
+                    if "add_operation" in (exception_line + (stock.stderr or "")) and (
+                        "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " PipelineBuilder has no add_operation. Do not build a "
+                            "pipeline. Construct ImputationImplementation() and call "
+                            "fit and transform on one table with a numeric all-NaN "
+                            "column and a categorical column."
+                        )
+                    if (
+                        "operation_info_by_id" in exception_line
+                        and "ids_binary_integer_features" in (lead.why or "")
+                    ):
+                        detail += (
+                            " Construct ImputationImplementation() directly. Fit once, "
+                            "transform a two-value numeric column, then transform that "
+                            "same instance when the column has more than two unique "
+                            "values. Do not build an Operation."
+                        )
+                    if not unreached_target_retried:
+                        unreached_target_retried = True
+                        step_budget += 1
                 if reproduced:
                     evidence = list(filter(None, (parsed.why,)))
                     if grounded_exception:
@@ -1020,7 +1624,108 @@ def verify_lead(
                             )
                             _write_verification(workspace, lead, result)
                             return result
+                        if (
+                            support_audit.verdict != "supported"
+                            and "AssertionError" in (stock.stderr or "")
+                        ):
+                            try:
+                                source_text = (
+                                    checkout / target_lead.file_path
+                                ).read_text(encoding="utf-8")
+                            except OSError:
+                                source_text = ""
+                            coerced = ""
+                            if support_audit.verdict == "inconclusive":
+                                coerced = annotated_int_or_coerces_zero(
+                                    source_text, target_lead.line
+                                )
+                            if not coerced:
+                                coerced = discarded_callback_return(
+                                    source_text, target_lead.line
+                                )
+                            if not coerced:
+                                denied = equal_category_mean_is_required(
+                                    source_text,
+                                    target_lead.line,
+                                    stock.stderr or "",
+                                )
+                                if denied:
+                                    support_audit = ContractSupportAudit(
+                                        verdict="unsupported",
+                                        reason=denied,
+                                        evidence=[denied],
+                                    )
+                            if not coerced:
+                                coerced = binary_midpoint_left_unchanged(
+                                    source_text,
+                                    target_lead.line,
+                                    stock.stderr or "",
+                                )
+                            if coerced and support_audit.verdict != "unsupported":
+                                support_audit = ContractSupportAudit(
+                                    verdict="supported",
+                                    reason=coerced,
+                                    evidence=[coerced],
+                                )
+                            stringified = choice_coerced_mixed_column(
+                                parsed.reproduction_code or "",
+                                stock.stderr or "",
+                            )
+                            if (
+                                stringified
+                                and support_audit.verdict == "unsupported"
+                            ):
+                                support_audit = ContractSupportAudit(
+                                    verdict="inconclusive",
+                                    reason=stringified,
+                                    evidence=[stringified],
+                                )
+                        try:
+                            contract_source = (
+                                checkout / target_lead.file_path
+                            ).read_text(encoding="utf-8")
+                        except OSError:
+                            contract_source = ""
+                        outside = mixed_int_str_unique_is_outside_contract(
+                            contract_source,
+                            target_lead.line,
+                            stock.stderr or "",
+                            parsed.reproduction_code or "",
+                        )
+                        if outside:
+                            support_audit = ContractSupportAudit(
+                                verdict="unsupported",
+                                reason=outside,
+                                evidence=[outside],
+                            )
                         if support_audit.verdict != "supported":
+                            if (
+                                support_audit.verdict == "inconclusive"
+                                and not contract_audit_retried
+                            ):
+                                # The 05:30 Moscow one-hot run already showed
+                                # the collapsed block, then a later crash was
+                                # audited as inconclusive and the lead ended.
+                                contract_audit_retried = True
+                                step_budget += 1
+                                if "stores the int as the string" in support_audit.reason:
+                                    output = support_audit.reason
+                                else:
+                                    output = (
+                                        "Contract support was inconclusive: "
+                                        f"{support_audit.reason}. "
+                                        "A crash before the behavior assertion does not "
+                                        "establish the claim. Assert the failed behavior "
+                                        "itself. If an earlier run already showed the "
+                                        "encoded block collapsed, reuse that input and "
+                                        "assert that collapse."
+                                    )
+                                last_detail = output[:4_000]
+                                tool_history.append(
+                                    f"Step {step} action={action.value} output:\n"
+                                    f"```\n{last_detail}\n```"
+                                )
+                                continue
                             result = VerificationResult(
                                 "rejected" if support_audit.verdict == "unsupported" else "inconclusive",
                                 claim=parsed.claim or lead.why,
@@ -1054,9 +1759,18 @@ def verify_lead(
                     )
                     _write_verification(workspace, lead, result)
                     return result
-                if stock.status == "ok":
+                if stock.status == "ok" and trace_target and stock.target_reached is not True:
+                    detail = (
+                        "probe passed without executing the claimed target method; "
+                        "a healthy result that never reached this line does not disprove it"
+                    )
+                    if not missed_target_retried:
+                        missed_target_retried = True
+                        step_budget += 1
+                elif stock.status == "ok":
                     detail = "stock satisfies the asserted healthy contract"
                     disproved_bug_claims.append(parsed.claim or lead.why)
+                    last_target_reached = True if trace_target is None else bool(stock.target_reached)
                 elif stock.status != "runtime_error":
                     detail = f"probe infrastructure status: {stock.status}"
                 elif "AssertionError" not in stock.stderr:
@@ -1065,10 +1779,55 @@ def verify_lead(
                         # Tell the model why the crash was not accepted as
                         # evidence (e.g. no public FEDOT entry point reached).
                         detail = f"{detail}: {exception_detail}"
-                    if (
-                        not correctness_only
-                        and probe_corrections < MAX_VERIFY_PROBE_CORRECTIONS
+                    if "'dict' object has no attribute 'to_dict'" in (stock.stderr or "") and (
+                        "lgbm_early_stopping" in ((lead.why or "") + (lead.mechanism or ""))
                     ):
+                        detail += (
+                            " Pass OperationParameters, not a dict. Construct "
+                            "FedotLightGBMClassificationImplementation(params="
+                            "OperationParameters(early_stopping_rounds=30, "
+                            "use_eval_set=True))."
+                        )
+                    history_text = "\n".join(tool_history)
+                    if (
+                        not empty_index_setup_retried
+                        and "array([], dtype=float64)" in history_text
+                        and (
+                            "features_types" in (stock.stderr or "")
+                            or "missing 3 required positional arguments" in (stock.stderr or "")
+                            or "missing 1 required positional argument" in (stock.stderr or "")
+                        )
+                    ):
+                        # The 09:39 Moscow diagnostic already printed the empty
+                        # float64 index. Later probes rebuilt InputData.
+                        empty_index_setup_retried = True
+                        step_budget += 1
+                        detail += (
+                            " The diagnostic already printed categorical_idx "
+                            "array([], dtype=float64) and IndexError: arrays "
+                            "used as indices must be of integer (or boolean) "
+                            "type. Reuse that InputData: idx, features, target, "
+                            "task, data_type=DataTypesEnum.table, "
+                            "categorical_idx=np.array([0, 1]). Do not pass "
+                            "features_types. Assert the fitted categorical_idx "
+                            "has an integer dtype."
+                        )
+                    if "add_operation" in (stock.stderr or "") and (
+                        "_categorical_numerical_union" in ((lead.why or "") + (lead.mechanism or ""))
+                    ):
+                        detail += (
+                            " PipelineBuilder has no add_operation. Do not build a "
+                            "pipeline. Construct ImputationImplementation() and call "
+                            "fit and transform on one table with a numeric all-NaN "
+                            "column and a categorical column."
+                        )
+                    # Campaign verification is correctness-only, so the old
+                    # gate never reserved the turn that already contains the
+                    # recovered constructor. One correction is enough there.
+                    correction_limit = (
+                        MAX_VERIFY_PROBE_CORRECTIONS if not correctness_only else 1
+                    )
+                    if probe_corrections < correction_limit:
                         probe_corrections += 1
                         step_budget += 1
                 probe_feedback = format_snippet_feedback(
@@ -1106,6 +1865,7 @@ def verify_lead(
                 "stock satisfied the proposed healthy contract; no independent "
                 "failure or grounded comparative quality hypothesis remained"
             ),
+            target_reached=last_target_reached is True,
         )
     else:
         result = VerificationResult(
@@ -1116,6 +1876,25 @@ def verify_lead(
         )
     _write_verification(workspace, lead, result)
     return result
+
+
+def _private_callback_name_only(patched, code: str) -> bool:
+    """The empty-list assertion passed and the probe then named a private class.
+
+    lightgbm exposes ``callback._EarlyStoppingCallback``. A probe that asserts
+    ``lgbm.callback.EarlyStoppingCallback`` raises AttributeError after
+    ``len(callbacks) == 1`` has already succeeded. The 08:14 Europe/Moscow
+    patch appended the callback and was marked still failing for that name.
+    """
+
+    stderr = patched.stderr or ""
+    if patched.status != "runtime_error" or "AssertionError" in stderr:
+        return False
+    if "has no attribute 'EarlyStoppingCallback'" not in stderr:
+        return False
+    length_at = code.find("len(callbacks)")
+    class_at = code.find("EarlyStoppingCallback")
+    return 0 <= length_at < class_at
 
 
 def replay_reproduction(checkout: Path, verification: VerificationResult) -> dict:
@@ -1145,10 +1924,13 @@ def replay_reproduction(checkout: Path, verification: VerificationResult) -> dic
             **research,
         }
     patched = run_fedot_snippet(checkout, verification.reproduction_code)
+    resolved = patched.status == "ok" or _private_callback_name_only(
+        patched, verification.reproduction_code
+    )
     return {
         "status": "verified_bug",
         "stock": "failed_as_predicted",
-        "patched": "resolved" if patched.status == "ok" else "still_failing",
+        "patched": "resolved" if resolved else "still_failing",
         **research,
         "code": verification.reproduction_code,
         "patched_probe": {

@@ -10,7 +10,7 @@ import pytest
 from fedotllm.agents.evolve.agents import verifier
 from fedotllm.agents.evolve.discovery.targets import apply_verified_target, resolve_verification_target
 from fedotllm.agents.evolve.execution import run_code
-from fedotllm.agents.evolve.types import MatchSite, VerificationResult
+from fedotllm.agents.evolve.types import MatchSite, SnippetResult, VerificationResult
 
 
 @pytest.fixture
@@ -58,6 +58,48 @@ def test_invalid_refinement_fails_closed(source, kwargs):
         resolve_verification_target(source, lead(), **kwargs)
 
 
+def test_unqualified_method_name_matches_the_enclosing_line(source):
+    _, target = resolve_verification_target(source, lead(), line=4, symbol="save")
+    assert target["symbol"] == "Output.save"
+    _, target = resolve_verification_target(
+        source, lead(), line=4, symbol="pkg.Output.save",
+    )
+    assert target["symbol"] == "Output.save"
+
+
+def test_call_site_resolves_to_the_named_function(source):
+    (source / "fedot/a.py").write_text(
+        "class Output:\n"
+        "    def transform(self):\n"
+        "        self.save()\n"
+        "    def save(self):\n"
+        "        return [2, 1]\n",
+        encoding="utf-8",
+    )
+
+    _, target = resolve_verification_target(
+        source, lead(), line=3, symbol="Output.save",
+    )
+
+    assert target["symbol"] == "Output.save"
+    assert target["line"] == 4
+
+
+def test_module_path_matches_the_enclosing_symbol(source):
+    _, target = resolve_verification_target(
+        source, lead(), line=4, symbol="fedot.a.Output.save",
+    )
+    assert target["symbol"] == "Output.save"
+    _, target = resolve_verification_target(
+        source, lead(), line=7, symbol="pkg.unrelated",
+    )
+    assert target["symbol"] == "unrelated"
+    with pytest.raises(ValueError, match="disagree"):
+        resolve_verification_target(
+            source, lead(), line=4, symbol="fedot.a.unrelated",
+        )
+
+
 def test_trace_uses_actual_refined_method_in_child_process(source, monkeypatch):
     monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
     code = "from fedot.a import Output\nassert Output().save() == [1, 2], 'row order'"
@@ -95,6 +137,436 @@ def test_real_verifier_refines_trace_and_audit_but_keeps_original_claim(source, 
         saved = json.loads((work / "verifications/a-7/verification.json").read_text())
         assert saved["resolved_target"] == result.resolved_target
         assert saved["resolved_target"]["original_line"] == lead().line
+
+
+def test_healthy_probe_that_misses_the_target_does_not_disprove_it(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            return schema(
+                action="verify_bug",
+                file_path="fedot/a.py",
+                line=4,
+                claim="Output.save reverses rows",
+                reproduction_code=(
+                    "from fedot.a import Output\n"
+                    "assert Output is not None\n"
+                    "print('healthy: fit and predict succeeded')\n"
+                ),
+            )
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status != "rejected"
+    assert "stock satisfied" not in result.detail
+    assert len(prompts) == 2
+    assert "without executing the claimed target method" in prompts[1]
+
+
+def test_assertion_before_the_target_gets_one_correction(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            return schema(
+                action="verify_bug",
+                file_path="fedot/a.py",
+                line=4,
+                reproduction_code=(
+                    "from fedot.a import Output\n"
+                    "assert 0 == 1, 'setup failed'\n"
+                    "Output().save()\n"
+                ),
+            )
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status != "verified_bug"
+    assert len(prompts) == 2
+    assert "did not execute the claimed target method" in prompts[1]
+
+
+def test_unreached_implementation_probe_keeps_the_class_under_test(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            return schema(
+                action="verify_bug",
+                file_path="fedot/a.py",
+                line=4,
+                reproduction_code=(
+                    "from fedot.a import Output\n"
+                    "assert 0 == 1, \"valid supported call crashed: "
+                    "'NoneType' object has no attribute 'size'\"\n"
+                    "Output().save()\n"
+                ),
+            )
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status != "verified_bug"
+    assert len(prompts) == 2
+    assert "NoneType" in prompts[1]
+    assert "categorical_idx" in prompts[1]
+    assert "Do not replace the class under test with a mock" in prompts[1]
+    assert "not an unconfigured base Operation object" not in prompts[1]
+
+
+def test_import_error_on_implementation_probe_is_named(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    def crashed(checkout, code, **kwargs):
+        return SnippetResult(
+            status="runtime_error",
+            code=code,
+            stderr=(
+                "ImportError: cannot import name 'TYPE_TO_ID' "
+                "from 'fedot.core.data.data'\n"
+            ),
+            exit_code=1,
+            target_reached=False,
+        )
+
+    monkeypatch.setattr(verifier, "run_fedot_snippet", crashed)
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code=(
+                        "from fedot.core.operations.evaluation.operation_implementations."
+                        "data_operations.categorical_encoders import OneHotEncodingImplementation\n"
+                        "from fedot.core.data.data import TYPE_TO_ID\n"
+                        "assert OneHotEncodingImplementation is not None\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the import error")
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "TYPE_TO_ID" in prompts[1]
+    assert "likely probe setup failure" in prompts[1]
+
+
+def test_syntax_error_probe_gets_one_rewrite(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code=(
+                        "from fedot.a import Output\n"
+                        "assert Output() == 1\n"
+                        "print('broken:\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the syntax rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "probe syntax error" in prompts[1]
+
+
+def test_missing_fedot_import_gets_one_rewrite(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code="assert True\n",
+                )
+            return schema(action="reject", why="stop after the import rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "imports fedot" in prompts[1]
+
+
+def test_binary_accumulation_reject_without_a_probe_gets_one_correction(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="reject",
+                    why=(
+                        "a column with more than two unique values is never added, "
+                        "so it cannot be snapped"
+                    ),
+                )
+            return schema(action="reject", why="stop after the required probe")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="self.ids_binary_integer_features accumulates across transform",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "does not delete a key" in prompts[1]
+
+
+def test_operation_info_crash_names_imputation_implementation(source, monkeypatch):
+    prompts: list[str] = []
+
+    def crashed(*_args, **_kwargs):
+        return SnippetResult(
+            status="runtime_error",
+            code="probe",
+            stderr="AssertionError: 'NoneType' object has no attribute 'operation_info_by_id'\n",
+            exit_code=1,
+            target_reached=False,
+        )
+
+    monkeypatch.setattr(verifier, "run_fedot_snippet", crashed)
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code=(
+                        "from fedot.a import Output\n"
+                        "assert Output().save() == [1, 2]\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the constructor hint")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="self.ids_binary_integer_features accumulates across transform",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "ImputationImplementation()" in prompts[1]
+
+
+def test_symbol_line_disagree_gets_one_rewrite(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    symbol="unrelated",
+                    reproduction_code=(
+                        "from fedot.a import Output\n"
+                        "assert Output().save() == [1, 2]\n"
+                    ),
+                )
+            return schema(action="reject", why="stop after the symbol rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="width mismatch in _categorical_numerical_union",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "_categorical_numerical_union" in prompts[1]
+
+
+def test_union_lead_gets_a_second_import_rewrite(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) < 3:
+                return schema(
+                    action="verify_bug",
+                    file_path="fedot/a.py",
+                    line=4,
+                    reproduction_code="assert True\n",
+                )
+            return schema(action="reject", why="stop after the second import rewrite")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="width mismatch in _categorical_numerical_union",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 3
+    assert "imports fedot" in prompts[1]
+    assert "imports fedot" in prompts[2]
+
+
+def test_all_nan_union_reject_gets_one_mixed_table_correction(source):
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return schema(
+                    action="reject",
+                    why="a legal fit_transform with an all-NaN column completed without error",
+                )
+            return schema(action="reject", why="stop after the mixed table")
+
+    result = verifier.verify_lead(
+        source,
+        MatchSite(
+            "execution",
+            "fedot/a.py",
+            7,
+            why="keep_empty_features drops a column before _categorical_numerical_union",
+            mechanism="SimpleImputer keep_empty_features=False changes the width at _categorical_numerical_union",
+            hypothesis_kind="correctness",
+        ),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status == "rejected"
+    assert len(prompts) == 2
+    assert "categorical column" in prompts[1]
+
+
+def test_correctness_probe_constructor_error_gets_one_correction(source, monkeypatch):
+    monkeypatch.setattr(run_code, "fedot_python", lambda root: sys.executable)
+    prompts: list[str] = []
+
+    class Inference:
+        def create(self, prompt, schema):
+            prompts.append(prompt)
+            return schema(
+                action="verify_bug",
+                file_path="fedot/a.py",
+                line=4,
+                reproduction_code=(
+                    "from fedot.a import Output\n"
+                    "Output(operation_type='one_hot_encoding')\n"
+                    "assert Output().save() == [1, 2]\n"
+                ),
+            )
+
+    result = verifier.verify_lead(
+        source,
+        lead(),
+        inference=Inference(),
+        max_model_calls=1,
+        correctness_only=True,
+    )
+
+    assert result.status != "verified_bug"
+    assert len(prompts) == 2
+    assert "operation_type" in prompts[1]
 
 
 def test_unreached_refined_target_never_reaches_contract_audit(source, monkeypatch):

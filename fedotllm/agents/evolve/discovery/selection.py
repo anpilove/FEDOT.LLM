@@ -742,6 +742,494 @@ def _matches_confirmed_defect_proposal(
 
 
 _DEFAULTS_GATE_STATUSES = {"unexecuted_operation_default", "inert_operation_default"}
+_INTEGER_HOLDS_INF = re.compile(
+    r"integer(?:-dtype)?\s+columns?\s+containing\s+[+\-/]*inf|"
+    r"integer(?:\s+|-)?dtype[^\n]{0,400}(?:\+/- ?inf|\binf(?:inities|inity)?\b)",
+    re.IGNORECASE,
+)
+
+
+def _impossible_integer_nonfinite(parsed: SiteProposal) -> bool:
+    """An integer array cannot store inf, so that input class is unreachable.
+
+    The 06:40 Moscow catalog claimed integer-dtype columns containing
+    infinities. The verifier then spent the campaign rejecting it.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _INTEGER_HOLDS_INF.search(text) is not None
+
+
+_ADVANCED_INDEX_VIEW = re.compile(
+    r"features\s*\[\s*:?\s*,\s*[^\]]+\]\s*\.T[^\n]{0,60}\bis a view\b|"
+    r"transposed view[^\n]{0,180}caller",
+    re.IGNORECASE,
+)
+
+
+def _advanced_index_claimed_as_view(parsed: SiteProposal) -> bool:
+    """NumPy advanced indexing returns a copy, so the slice cannot write back.
+
+    The 06:44 Moscow catalog claimed ``features[:, categorical_idx].T`` is a
+    view that writes ``FEDOT_STR_NAN`` into the caller's array. The verifier
+    then spent the campaign on that false premise.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _ADVANCED_INDEX_VIEW.search(text) is not None
+
+
+def _sentinel_assignment_stays_on_the_copy(parsed: SiteProposal) -> bool:
+    """The NaN substitution at line 41 writes the advanced-index copy.
+
+    The 11:07 Europe/Moscow catalog picked ``categorical.py:41`` and said the
+    sentinel is stored permanently in ``input_data.features``. ``features[:,
+    categorical_idx].T`` is a copy. A four-level column with one missing value
+    still has zero ``FEDOT_STR_NAN`` cells after ``fit``, and ``categorical_idx``
+    stays ``[1]``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "FEDOT_STR_NAN" not in text and re.search(r"sentinel", text, re.IGNORECASE) is None:
+        return False
+    if re.search(r"in-place|permanently|input_data\.features|write-back", text, re.IGNORECASE) is None:
+        return False
+    return re.search(r"non-binary|categorical_idx|line 41", text, re.IGNORECASE) is not None
+
+
+_CONSTRUCTOR_OMITS_CATEGORICAL = re.compile(
+    r"(?:from_numpy|array_to_input_data).{0,220}without populating categorical_features",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+_ADD_INDICATOR_DROP_IN = re.compile(
+    r"add_indicator.{0,180}drop-in|drop-in.{0,180}add_indicator",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _add_indicator_claimed_as_drop_in(parsed: SiteProposal) -> bool:
+    """Indicator columns are not in ``col_type_ids['features']``.
+
+    The 08:32 Europe/Moscow catalog called ``add_indicator`` a drop-in.
+    ``reduce_mem_usage`` then raised ``IndexError: list index out of range``,
+    and the repair still failed the preprocessing column-count tests.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _ADD_INDICATOR_DROP_IN.search(text) is not None
+
+
+_DATETIME_NAT_AS_NAN = re.compile(
+    r"(?:NaT|missing timestamp).{0,240}NaN|NaN.{0,240}(?:NaT|missing timestamp)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+_INTEGRAL_CATEGORICAL_GATE = re.compile(
+    r"(?:integer-valued|integrality).{0,240}(?:categorical|nunique|unique values)"
+    r"|(?:continuous float).{0,180}remain numeric",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _string_columns_stay_categorical(parsed: SiteProposal) -> bool:
+    """Originally-string columns stay categorical without a unique-count cap.
+
+    The 13:29 Europe/Moscow catalog applied ``categorical_max_uniques_th`` to
+    string columns. The threshold converts int or float columns with fewer
+    than 13 values into strings. Pytest then failed
+    ``test_complicated_table_types_processed_correctly``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(
+        r"string[- ]typed|originally[- ]string|string columns",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    if re.search(
+        r"categorical_max_uniques|nunique|cardinality",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    return (
+        re.search(
+            r"unconditionally|unique-value cap|same (?:unique|cardinality)|nunique\s*<",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _integrality_gate_on_categorical_heuristic(parsed: SiteProposal) -> bool:
+    """Low-cardinality numeric columns become strings, including non-integers.
+
+    The 08:56 Europe/Moscow catalog wanted an integrality gate so continuous
+    floats with few unique values stay numeric. ``test_column_types_converting_correctly``
+    requires those columns to become ``str``, and the mixed-type pipeline
+    expects seven importances.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _INTEGRAL_CATEGORICAL_GATE.search(text) is not None
+
+
+def _categorical_most_frequent_guards_strings(parsed: SiteProposal) -> bool:
+    """Categorical imputation stays on ``most_frequent``.
+
+    The 10:32 Europe/Moscow catalog picked ``sklearn_transformations.py:315``
+    and asked the user strategy to win. The merge puts
+    ``{'strategy': 'most_frequent'}`` last. ``SimpleImputer(strategy='mean')``
+    on a string column raises ``ValueError: Cannot use mean strategy with
+    non-numeric data``. With ``strategy='mean'`` on a mixed table, the numeric
+    NaN became 3.0 and the categorical NaN became ``'a'``.
+    ``test_imputation_with_binary_correct`` expects that category fill.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "most_frequent" not in text:
+        return False
+    if re.search(r"categorical", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"override|silently|user-supplied|user strategy|reverse the merge",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _n_jobs_rewrite_is_the_contract(parsed: SiteProposal) -> bool:
+    """``fit`` writes ``n_jobs`` because that argument is the job count.
+
+    The 10:25 Europe/Moscow catalog picked ``pipeline.py:196`` and asked
+    ``fit`` to restore the previous ``n_jobs`` so ``descriptive_id`` stays
+    put. ``replace_n_jobs_in_nodes`` documents that it changes the job count.
+    An rf fit with ``n_jobs=2`` leaves ``{'n_jobs': 2}`` and
+    ``/n_rf_{'n_jobs': 2}``. Predict still returns labels. A later fit with
+    the default writes 1 again.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"replace_n_jobs_in_nodes|node\.content\['params'\]", text) is None:
+        return False
+    if "n_jobs" not in text and "num_threads" not in text:
+        return False
+    return (
+        re.search(r"restore|descriptive_id|never restores", text, re.IGNORECASE)
+        is not None
+    )
+
+
+def _numerical_min_uniques_is_docs_only(parsed: SiteProposal) -> bool:
+    """``numerical_min_uniques`` is a documentation name, not a parameter.
+
+    The 10:14 Europe/Moscow catalog picked ``data_types.py:44`` and said
+    ``TableTypesCorrector`` silently drops that public setting. The name
+    appears in ``data_preprocessing.rst``. The runnable helper is the test
+    function ``correct_preprocessing_params``, whose parameter is
+    ``categorical_max_uniques_th``. Passing ``numerical_min_uniques`` raises
+    ``TypeError``. A fresh corrector always starts at 13.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "numerical_min_uniques" not in text:
+        return False
+    return (
+        re.search(r"silently|never reads|hardcod", text, re.IGNORECASE) is not None
+    )
+
+
+def _nan_scan_counts_dropped_target_rows(parsed: SiteProposal) -> bool:
+    """NaNs on rows with a missing target change which columns survive.
+
+    The 10:02 Europe/Moscow catalog picked ``preprocessing.py:212``.
+    ``_find_features_lacking_nans`` counts the full matrix before
+    ``_drop_rows_with_nan_in_target``. A logit fit on 100 rows, with the
+    second column NaN only on 91 NaN-target rows, stored ``ids`` ``[0]``
+    even though the nine retained rows were fully observed. Predict still
+    returned labels, and the stored list is applied at both stages.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(
+        r"_find_features_lacking_nans|feature-validity|ALLOWED_NAN_PERCENT",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    if re.search(
+        r"_drop_rows_with_nan_in_target|NaN-target|soon-to-be-dropped|target is missing",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    return (
+        re.search(
+            r"reorder|removed|discard|fully observed|incorrect",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _one_hot_frame_branch_unexecuted(parsed: SiteProposal) -> bool:
+    """The one-hot DataFrame branch has no measured hits.
+
+    The 09:54 Europe/Moscow catalog picked ``categorical_encoders.py:102`` and
+    described the ``iloc`` branch at lines 105-106. That branch has zero hits.
+    The ndarray branch receives columns that preprocessing already cast to
+    strings, and unseen categories become zero rows under
+    ``handle_unknown='ignore'``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"DataFrame branch", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(r"all-zero|astype\(str\)|numeric categorical", text, re.IGNORECASE)
+        is not None
+    )
+
+
+def _one_hot_float32_follows_memory_downcast(parsed: SiteProposal) -> bool:
+    """Line 109 is not the public float32 quantizer.
+
+    The 10:57 Europe/Moscow catalog picked ``categorical_encoders.py:109``.
+    A direct ``OneHotEncodingImplementation`` call on float64 timestamps
+    collapsed them. A pipeline of ``one_hot_encoding`` on 20 distinct values
+    around 1.7e12 plus a binary category reaches ``transform`` with that
+    column already float32 and one unique value. ``categorical_ids`` is empty,
+    so line 109 does not run. ``reduce_memory_size`` already called
+    ``reduce_mem_usage``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"float32", text, re.IGNORECASE) is None:
+        return False
+    if re.search(r"non[-_ ]categorical", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"quantiz|timestamp|wide-range|float64|already floating|precision",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _subset_features_docstring_is_the_subset(parsed: SiteProposal) -> bool:
+    """``subset_features`` documents a feature subset, not local type indices.
+
+    The 13:14 Europe/Moscow audit saw ``convert_to_dataframe`` raise after
+    the categorical subset. The docstring only promises a subset of features
+    based on ``feature_ids``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "subset_features" not in text and "setdiff" not in text:
+        return False
+    if re.search(
+        r"re-?bas|local (?:subset )?coord|local subset|convert_to_dataframe",
+        text,
+        re.IGNORECASE,
+    ) is None:
+        return False
+    return "categorical_idx" in text or "IndexError" in text
+
+
+def _mixed_unique_outside_string_contract(parsed: SiteProposal) -> bool:
+    """A mixed int/str column is outside the binary-string contract.
+
+    ``BinaryCategoricalPreprocessor.fit`` documents binary features that
+    have str objects. The 12:52 Europe/Moscow probe assigned Python ints
+    and strings into one object column. ``np.unique`` raised ``TypeError``.
+    The contract audit called that input out of contract: fit is not
+    required to finish on it.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "np.unique" not in text or "TypeError" not in text:
+        return False
+    return re.search(r"mixed[- ]type|mixed int|int and str|ints and str", text, re.IGNORECASE) is not None
+
+
+def _empty_categorical_index_is_replaced(parsed: SiteProposal) -> bool:
+    """Obligatory preprocessing replaces the empty binary index.
+
+    The 09:45 Europe/Moscow resume saw ``BinaryCategoricalPreprocessor.fit``
+    store ``np.array([])`` as float64. The next preprocessing step assigns
+    ``categorical_idx`` from ``np.flatnonzero`` of the string type ids. A
+    random-forest fit and predict on two binary string columns returned
+    labels. The IndexError came from the probe slicing that array itself.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "categorical_idx" not in text or "float64" not in text.lower():
+        return False
+    return re.search(r"empty|np\.array\(\s*\[\]\s*\)", text, re.IGNORECASE) is not None
+
+
+def _binary_nan_encoder_already_substitutes(parsed: SiteProposal) -> bool:
+    """``_apply_encoder`` already replaces raw NaN with the fitted sentinel.
+
+    The 09:11 Europe/Moscow catalog said a prediction row with a raw NaN raises
+    ``y contains previously unseen labels``. ``_apply_encoder`` writes
+    ``FEDOT_STR_NAN`` at those indices and maps the encoded sentinel back to
+    ``np.nan``. A logit pipeline fit and predict on that table returned labels.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if not re.search(
+        r"FEDOT_STR_NAN|BinaryCategorical|binary categorical",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    return (
+        re.search(
+            r"unseen labels|without (?:any )?substitution|does not substitute",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
+
+
+def _datetime_integer_contract_forbids_nan(parsed: SiteProposal) -> bool:
+    """``np_datetime_to_numeric`` documents an integer millisecond conversion.
+
+    The 08:48 Europe/Moscow catalog asked that function to emit NaN for NaT.
+    The result dtype is int64, so NaN is not representable, and the docstring
+    says datetimes are converted to integer. The verifier then rejected the
+    claim as an unsupported contract.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if "np_datetime_to_numeric" not in text:
+        return False
+    return _DATETIME_NAT_AS_NAN.search(text) is not None
+
+
+def _constructor_omits_categorical_features(parsed: SiteProposal) -> bool:
+    """``array_to_input_data`` copies the categorical block when the index is set.
+
+    The 07:24 Moscow catalog claimed ``from_numpy`` leaves
+    ``categorical_features`` empty. The constructor assigns
+    ``features[:, categorical_idx]`` when that index is non-empty, and the
+    verifier then spent the campaign rejecting the claim.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    return _CONSTRUCTOR_OMITS_CATEGORICAL.search(text) is not None
+
+
+def _equal_category_mean_stays(parsed: SiteProposal) -> bool:
+    """A balanced binary gap is filled with the mean on purpose.
+
+    ``test_imputation_binary_features_with_equal_categories_correct`` asserts
+    ``0.5`` when the two categories are equally common. The 11:54
+    Europe/Moscow patch changed ``>`` to ``>=`` and that test saw ``1.0``.
+    """
+
+    text = " ".join(
+        part
+        for part in (parsed.why, parsed.mechanism, parsed.proposed_change)
+        if part
+    )
+    if re.search(r"midpoint|0\.5", text) is None:
+        return False
+    if re.search(r"binary", text, re.IGNORECASE) is None:
+        return False
+    return (
+        re.search(
+            r"uncorrected|snap|strict|mean_value|out-of-domain|mean-imputed|mean fill",
+            text,
+            re.IGNORECASE,
+        )
+        is not None
+    )
 
 
 def _first_pick_rejection(
@@ -760,6 +1248,172 @@ def _first_pick_rejection(
     semantic-site cooldowns.
     """
 
+    if _impossible_integer_nonfinite(parsed):
+        return (
+            "impossible_integer_nonfinite",
+            "an integer dtype cannot store inf, so that input class is unreachable; "
+            "pick a different executed line or skip",
+        )
+    if _advanced_index_claimed_as_view(parsed):
+        return (
+            "advanced_index_is_copy",
+            "NumPy advanced indexing already returns a copy, so that slice does not "
+            "write back into the caller; pick a different executed line or skip",
+        )
+    if _sentinel_assignment_stays_on_the_copy(parsed):
+        return (
+            "sentinel_assignment_stays_on_copy",
+            "features[:, categorical_idx].T is a copy, so the FEDOT_STR_NAN "
+            "assignment at line 41 does not reach input_data.features. A "
+            "four-level column with one missing value still has 0 sentinel "
+            "cells after fit, the raw NaN remains, and categorical_idx stays "
+            "[1]. Pick a different executed line or skip",
+        )
+    if _constructor_omits_categorical_features(parsed):
+        return (
+            "constructor_fills_categorical_features",
+            "array_to_input_data copies features[:, categorical_idx] into "
+            "categorical_features when the index is non-empty; pick a different "
+            "executed line or skip",
+        )
+    if _add_indicator_claimed_as_drop_in(parsed):
+        return (
+            "indicator_columns_break_ids",
+            "SimpleImputer add_indicator appends columns that are not in "
+            "col_type_ids['features']; reduce_mem_usage then raises IndexError, "
+            "and the preprocessing tests require the original width. Pick a "
+            "different executed line or skip",
+        )
+    if _string_columns_stay_categorical(parsed):
+        return (
+            "string_columns_stay_categorical",
+            "The unique-count threshold converts int or float columns with "
+            "fewer than 13 values into strings. Originally-string columns stay "
+            "categorical. Capping them failed "
+            "test_complicated_table_types_processed_correctly. Pick a different "
+            "executed line or skip",
+        )
+    if _integrality_gate_on_categorical_heuristic(parsed):
+        return (
+            "low_cardinality_floats_stay_categorical",
+            "test_column_types_converting_correctly requires the low-cardinality "
+            "numeric columns to become str, and "
+            "test_data_with_mixed_types_per_column_processed_correctly expects "
+            "7 importances. Do not gate that heuristic on integrality. Pick a "
+            "different executed line or skip",
+        )
+    if _one_hot_frame_branch_unexecuted(parsed):
+        return (
+            "one_hot_frame_branch_unexecuted",
+            "The measured trace executes the ndarray branch of "
+            "_apply_one_hot_encoding. The DataFrame iloc branch has no hits. "
+            "Categorical columns are already strings before that encoder, and "
+            "unseen categories become zero rows under handle_unknown='ignore' "
+            "(test_one_hot_encoding_new_category_in_test). Pick a different "
+            "executed line or skip",
+        )
+    if _one_hot_float32_follows_memory_downcast(parsed):
+        return (
+            "one_hot_float32_follows_memory_downcast",
+            "A one_hot_encoding pipeline on 20 distinct timestamps around "
+            "1.7e12 plus a binary category reaches "
+            "OneHotEncodingImplementation.transform with that numeric column "
+            "already float32 and unique count 1. categorical_ids is empty, so "
+            "line 109 does not run. reduce_memory_size calls reduce_mem_usage, "
+            "which stores floats that fit in float32 as float32. Skipping the "
+            "line 109 cast when the block is already floating leaves that "
+            "column in place. Pick a different executed line or skip",
+        )
+    if _equal_category_mean_stays(parsed):
+        return (
+            "equal_category_mean_stays",
+            "test_imputation_binary_features_with_equal_categories_correct "
+            "asserts the equal-count binary gap stays 0.5. The docstring says "
+            "there is no majority label, so the mean is inserted. Changing "
+            "the strict midpoint comparison to >= snaps that cell to 1.0 and "
+            "fails the test. Pick a different executed line or skip",
+        )
+    if _categorical_most_frequent_guards_strings(parsed):
+        return (
+            "categorical_most_frequent_guards_strings",
+            "The categorical imputer merge keeps strategy most_frequent after "
+            "the user dict. SimpleImputer(strategy='mean') on a string column "
+            "raises ValueError: Cannot use mean strategy with non-numeric data. "
+            "With strategy=mean, a mixed table fills the numeric NaN with 3.0 "
+            "and the categorical NaN with 'a'. "
+            "test_imputation_with_binary_correct expects that category fill. "
+            "Pick a different executed line or skip",
+        )
+    if _n_jobs_rewrite_is_the_contract(parsed):
+        return (
+            "n_jobs_rewrite_is_contract",
+            "Pipeline.fit documents n_jobs as the number of threads for nodes "
+            "fitting. replace_n_jobs_in_nodes writes that value into n_jobs and "
+            "num_threads. An rf fit with n_jobs=2 leaves params {'n_jobs': 2} "
+            "and descriptive_id /n_rf_{'n_jobs': 2}; predict still returns "
+            "labels. A later fit with the default writes 1 again. Pick a "
+            "different executed line or skip",
+        )
+    if _numerical_min_uniques_is_docs_only(parsed):
+        return (
+            "numerical_min_uniques_is_docs_only",
+            "numerical_min_uniques appears only in data_preprocessing.rst. "
+            "The runnable helper is the test function "
+            "correct_preprocessing_params, and its parameter is "
+            "categorical_max_uniques_th. Passing numerical_min_uniques raises "
+            "TypeError. TableTypesCorrector() always starts at 13. Pick a "
+            "different executed line or skip",
+        )
+    if _nan_scan_counts_dropped_target_rows(parsed):
+        return (
+            "nan_target_rows_change_width",
+            "A logit fit drops a column whose NaNs sit only on NaN-target rows "
+            "(ids [0] when 91 of 100 targets are missing and the retained rows "
+            "are fully observed). Predict still returns labels, and the stored "
+            "feature list is applied at fit and predict. That changes which "
+            "columns survive. Pick a different executed line or skip",
+        )
+    if _subset_features_docstring_is_the_subset(parsed):
+        return (
+            "subset_features_docstring_is_the_subset",
+            "subset_features documents a subset of features based on "
+            "feature_ids. It does not require categorical_idx or "
+            "numerical_idx to be re-based to local coordinates. "
+            "convert_to_dataframe on that subset can raise IndexError: "
+            "index 2 is out of bounds, and that call is not the method's "
+            "contract. Pick a different executed line or skip",
+        )
+    if _mixed_unique_outside_string_contract(parsed):
+        return (
+            "mixed_unique_outside_string_contract",
+            "A cell-wise object column of Python int and str makes np.unique "
+            "raise TypeError. BinaryCategoricalPreprocessor.fit documents "
+            "binary features that \"has str objects\", so fit is not required "
+            "to complete on it. Pick a different executed line or skip",
+        )
+    if _empty_categorical_index_is_replaced(parsed):
+        return (
+            "empty_categorical_index_replaced",
+            "After BinaryCategoricalPreprocessor.fit_transform, obligatory "
+            "preprocessing assigns categorical_idx from np.flatnonzero of the "
+            "string type ids. The empty float64 array does not reach a model. "
+            "A direct features[:, idx] in the probe is not a repository consumer. "
+            "Pick a different executed line or skip",
+        )
+    if _binary_nan_encoder_already_substitutes(parsed):
+        return (
+            "binary_nan_already_substituted",
+            "_apply_encoder already writes FEDOT_STR_NAN at NaN indices and maps "
+            "the encoded sentinel back to np.nan. A predict row with a raw NaN "
+            "does not raise unseen labels. Pick a different executed line or skip",
+        )
+    if _datetime_integer_contract_forbids_nan(parsed):
+        return (
+            "datetime_contract_is_integer",
+            "np_datetime_to_numeric documents conversion to integer milliseconds. "
+            "An int64 result cannot hold NaN, and NaT stays the integer sentinel. "
+            "Pick a different executed line or skip",
+        )
     is_defaults = picked.file_path.endswith("/default_operation_params.json")
     if is_defaults and not _default_pick_matches_executed_operation(parsed, picked, checkout):
         return (
@@ -1131,7 +1785,12 @@ def _llm_pick(
         shown = {lead.file_path}
         picked: MatchSite | None = None
         runs = 0
-        for step in range(1, per_file_steps + 1):
+        # A closed catalog line already has a judgment. One decision turn can
+        # name a different line or skip. A run on that line spent the 06:34
+        # Moscow budget and the walk stopped at 2 of 190 files.
+        closed_catalog_line = (lead.file_path, lead.line) in excluded_exact
+        file_steps = 1 if closed_catalog_line else per_file_steps
+        for step in range(1, file_steps + 1):
             if actions >= action_limit:
                 budget_exhausted = True
                 rounds.append({"file_path": lead.file_path, "status": "action_limit"})
@@ -1140,7 +1799,7 @@ def _llm_pick(
             architecture_block = f"\n\n{architecture}" if architecture else ""
             prompt = (
                 f"{_LOCATE}\n\n"
-                f"Step {step}/{per_file_steps}; campaign actions "
+                f"Step {step}/{file_steps}; campaign actions "
                 f"{actions}/{action_limit}.\n"
                 f"Catalog site: {lead.file_path}:{lead.line} {lead.why}\n\n"
                 f"File:\n{text}"
@@ -1198,7 +1857,7 @@ def _llm_pick(
                         for file_path, line in sorted(excluded_exact)
                     )
                 )
-            if step == per_file_steps:
+            if step == file_steps:
                 prompt += (
                     "\n\nFinal decision turn for this catalog file. "
                     "Return status=pick (the current file_path may be omitted) "
@@ -1272,7 +1931,23 @@ def _llm_pick(
             if raw:
                 raws.append(raw)
             status = (parsed.status or "pick").strip().lower()
-            if step == per_file_steps and status not in {"pick", "skip"}:
+            if closed_catalog_line and status == "run":
+                rounds.append(
+                    {
+                        "file_path": lead.file_path,
+                        "status": "closed_catalog_no_run",
+                        "line": lead.line,
+                    }
+                )
+                logger.info(
+                    "evolve pick %s/%s closed no-run %s:%s",
+                    walked,
+                    n_files,
+                    lead.file_path,
+                    lead.line,
+                )
+                break
+            if step == file_steps and status not in {"pick", "skip"}:
                 rounds.append(
                     {
                         "file_path": lead.file_path,
@@ -1423,14 +2098,14 @@ def _llm_pick(
                     rejection,
                     parsed.file_path or lead.file_path,
                 )
-                if step < per_file_steps:
+                if step < file_steps:
                     continue
                 break
             requested_target = parsed.file_path or lead.file_path
             if (
                 status == "pick"
                 and requested_target not in shown
-                and step < per_file_steps
+                and step < file_steps
                 and actions < action_limit
             ):
                 rel, opened, _ = _open_requested_runtime(
@@ -1545,7 +2220,7 @@ def _llm_pick(
                     picked.line,
                 )
                 picked = None
-                if step < per_file_steps:
+                if step < file_steps:
                     continue
                 break
             if (

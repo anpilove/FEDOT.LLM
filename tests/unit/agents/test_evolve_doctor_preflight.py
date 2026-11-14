@@ -1,11 +1,16 @@
 """Doctor fails before a quality fit when the FEDOT pin cannot run return_best."""
 
+import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from fedotllm.agents.evolve.commands.doctor import run_doctor
 from fedotllm.agents.evolve.commands.preflight import (
+    PREFLIGHT_SNIPPET,
     analyze_checkout,
     dependency_checks,
     parse_preflight_stdout,
@@ -146,6 +151,60 @@ def test_dask_import_in_the_pin_requires_the_worker_interpreter(tmp_path: Path):
     assert present["dask"]["ok"] is True
 
 
+def test_preflight_snippet_reports_dask_when_package_import_fails(tmp_path: Path):
+    package = tmp_path / "fedot"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        "raise ImportError(\"cannot import name 'get_tags'\")\n",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", PREFLIGHT_SNIPPET],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = parse_preflight_stdout(completed.stdout)
+
+    assert payload is not None, completed.stderr
+    assert payload["dask"] is (importlib.util.find_spec("dask") is not None)
+    assert "get_tags" in payload["import_error"]
+    assert "fedot_file" not in payload
+
+
+def test_unmeasured_dask_names_the_probe_failure(tmp_path: Path):
+    source = _package(tmp_path / "FEDOT", API, extra="import dask.array\n")
+
+    checks = dependency_checks(
+        source, None, probe_error="ImportError: cannot import name 'get_tags'"
+    )
+
+    assert checks["dask"]["ok"] is False
+    assert checks["dask"]["importable"] is False
+    assert "get_tags" in checks["dask"]["detail"]
+    assert "cannot import it" not in checks["dask"]["detail"]
+
+
+def test_import_error_with_dask_present_stays_on_the_path_check(tmp_path: Path):
+    source = _package(tmp_path / "FEDOT", API, extra="import dask.array\n")
+    checks = dependency_checks(
+        source,
+        {
+            "dask": True,
+            "import_error": "ImportError: cannot import name 'get_tags'",
+            "parameters": [],
+        },
+    )
+
+    assert checks["dask"]["ok"] is True
+    assert checks["dask"]["importable"] is True
+    assert checks["path"]["ok"] is False
+    assert "get_tags" in checks["path"]["detail"]
+
+
 def test_preflight_marker_parses_the_last_payload():
     raw = 'noise\nEVOLVE_PREFLIGHT {"fedot_file": "/tmp/fedot/__init__.py", "dask": false}\n'
     assert parse_preflight_stdout(raw)["fedot_file"].endswith("__init__.py")
@@ -201,11 +260,46 @@ def test_doctor_accepts_a_return_best_pin_without_running_the_evaluator(
     assert payload["ok"] is True
 
 
-def test_doctor_rejects_a_dask_pin_when_dask_is_not_installed(
+def test_doctor_names_the_checkout_import_error(tmp_path: Path, monkeypatch):
+    source = _package(tmp_path / "FEDOT", API)
+    (source / "fedot" / "__init__.py").write_text(
+        "raise ImportError(\"cannot import name 'get_tags'\")\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.verify_manifest",
+        lambda _source: [],
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.run_stock",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("evaluator ran")),
+    )
+
+    payload = run_doctor(source, tmp_path / "work", evaluator=True)
+    checks = payload["checks"]
+
+    assert checks["path"]["ok"] is False
+    assert "get_tags" in checks["path"]["detail"]
+    assert "process exited" not in checks["dask"]["detail"]
+    assert checks["dask"]["importable"] is (importlib.util.find_spec("dask") is not None)
+    assert checks["evaluator"]["reason"] == "preflight_failed"
+
+
+def test_doctor_rejects_a_dask_pin_when_the_worker_cannot_import_dask(
     tmp_path: Path, monkeypatch
 ):
     pytest.importorskip("importlib")
     source = _package(tmp_path / "FEDOT", API, extra="import dask\n")
+    hidden = (
+        "import sys\n"
+        "from pathlib import Path as _Path\n"
+        "sys.path[:] = [item for item in sys.path "
+        "if not (_Path(item) / 'dask').exists()]\n"
+    )
+    monkeypatch.setattr(
+        "fedotllm.agents.evolve.commands.doctor.PREFLIGHT_SNIPPET",
+        hidden + PREFLIGHT_SNIPPET,
+    )
     monkeypatch.setattr(
         "fedotllm.agents.evolve.commands.doctor.run_stock",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("evaluator ran")),

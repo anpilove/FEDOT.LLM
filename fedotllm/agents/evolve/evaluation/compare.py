@@ -42,6 +42,15 @@ def patched_broke(stock: ScoreResult, patched: ScoreResult) -> bool:
     return stock.status == "ok" and candidate_failed(patched)
 
 
+def same_preexisting_failure(stock: ScoreResult, patched: ScoreResult) -> bool:
+    """Both sides failed the same way before this patch changed anything."""
+
+    if stock.status == "ok" or patched.status != stock.status:
+        return False
+    detail = stock.detail or ""
+    return bool(detail) and detail == (patched.detail or "")
+
+
 def _spec(
     task_id: str,
     *,
@@ -60,6 +69,35 @@ def _threshold(stock_value: float, min_delta: float, mode: str) -> float:
     if mode == "relative":
         return min_delta * max(abs(stock_value), 1e-12)
     return min_delta
+
+
+def _absent(task_id: str, stock: dict[str, ScoreResult], patched: dict[str, ScoreResult]) -> bool:
+    return task_id not in stock or task_id not in patched
+
+
+def _missing_measurement(
+    task_id: str,
+    *,
+    target_delta: float | None,
+    regressions: dict[str, float | None],
+) -> Decision:
+    """Refuse KEEP when a requested dataset was never measured.
+
+    GOLEM ``GraphVerifier`` rejects a graph on ``False`` or ``ValueError`` and
+    lets any other exception escape. A missing stock or patch row used to do
+    the same: ``KeyError`` aborted the campaign before the next hypothesis.
+    The gap is an unresolved measurement, so this pack cannot KEEP.
+    """
+
+    recorded = dict(regressions)
+    recorded[task_id] = None
+    return Decision(
+        keep=False,
+        reason=f"missing_measurement {task_id}",
+        target_delta=target_delta,
+        regression_deltas=recorded,
+        infrastructure_error=True,
+    )
 
 
 def _signal_threshold(stock_value: float) -> float:
@@ -100,8 +138,14 @@ def compare_pack(
         hib, floor, _sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
+        if _absent(task_id, stock, patched):
+            return _missing_measurement(
+                task_id, target_delta=best, regressions=lift_deltas
+            )
         if patched_broke(stock[task_id], patched[task_id]):
             lift_deltas[task_id] = None
+            continue
+        if same_preexisting_failure(stock[task_id], patched[task_id]):
             continue
         a = _numeric(stock[task_id])
         b = _numeric(patched[task_id])
@@ -142,6 +186,10 @@ def compare_pack(
         hib, floor, _sent, mode = _spec(
             task_id, higher_is_better=higher_is_better, min_delta=min_delta, sentinel=sentinel
         )
+        if _absent(task_id, stock, patched):
+            return _missing_measurement(
+                task_id, target_delta=best, regressions=regressions
+            )
         if patched_broke(stock[task_id], patched[task_id]):
             regressions[task_id] = None
             return Decision(
@@ -150,6 +198,8 @@ def compare_pack(
                 target_delta=best,
                 regression_deltas=regressions,
             )
+        if same_preexisting_failure(stock[task_id], patched[task_id]):
+            continue
         a = _numeric(stock[task_id])
         b = _numeric(patched[task_id])
         if a is None or b is None:

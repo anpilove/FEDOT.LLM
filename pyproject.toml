@@ -9,6 +9,8 @@ requires-python = ">=3.10, <3.12"
 dependencies = [
     "beautifulsoup4>=4.13.3",
     "chromadb>=0.6.3",
+    # Pinned FEDOT 8990f28 imports dask_ml. 2025.1.0 needs scikit-learn>=1.6.1.
+    "dask-ml==2024.4.4",
     "diskcache>=5.6.3",
     "dynaconf>=3.2.10",
     "fedot>=0.7.5",
