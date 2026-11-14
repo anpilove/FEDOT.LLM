@@ -142,11 +142,20 @@ DISCOVERY_QUERY_FLOOR = 6
 # Catalog plan plus two full file decisions. The 07:17 Moscow walk finished
 # preprocessing.py without a site and died on the second file.
 SECOND_FILE_DISCOVERY_FLOOR = 11
+# The 18:09 Moscow walk skipped three files and died on step 2 of the fourth
+# while the repair reserve was still unused. A 24-query hunt keeps three more
+# scout calls so that file can finish its decision.
+ABANDONED_FILE_DISCOVERY_FLOOR = 14
 
 
 def _discovery_floor(max_queries: int | None) -> int:
-    """Leave one file on a small cap, and a second file when the cap can hold it."""
+    """Leave one file on a small cap, and more files when the cap can hold them."""
 
+    if (
+        max_queries is not None
+        and max_queries >= 3 + 7 + ABANDONED_FILE_DISCOVERY_FLOOR
+    ):
+        return ABANDONED_FILE_DISCOVERY_FLOOR
     if (
         max_queries is not None
         and max_queries >= 3 + 8 + SECOND_FILE_DISCOVERY_FLOOR
