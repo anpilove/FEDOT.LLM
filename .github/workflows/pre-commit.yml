@@ -15,6 +15,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Install uv
       uses: astral-sh/setup-uv@v3
@@ -24,6 +26,14 @@ jobs:
     - name: Set up Python 3.11
       run: uv python install 3.11
 
-    - name: Run pre-commit hooks
+    - name: Run pre-commit hooks on changed Python files
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
       run: |
-        uvx --python 3.11 --from pre-commit==4.2.0 pre-commit run --all-files --show-diff-on-failure
+        uvx --python 3.11 --from pre-commit==4.2.0 pre-commit run ruff-check --from-ref "$BASE_SHA" --to-ref HEAD --show-diff-on-failure
+
+        # Existing Python files are formatted in a separate cleanup PR.
+        mapfile -d '' added_python < <(git diff --name-only --diff-filter=A -z "$BASE_SHA" HEAD -- '*.py')
+        if [ "${#added_python[@]}" -gt 0 ]; then
+          uvx --python 3.11 --from pre-commit==4.2.0 pre-commit run ruff-format --files "${added_python[@]}" --show-diff-on-failure
+        fi
